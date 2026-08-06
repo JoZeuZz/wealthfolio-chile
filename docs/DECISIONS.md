@@ -167,10 +167,29 @@ esa limitación bloquee.
 
 ## D13 — Sin licencia propia todavía
 
-**Decisión.** No se ha elegido licencia para este repositorio.
+**Decisión.** No se ha elegido licencia para este repositorio. Mientras eso siga
+así, el marcador en todas partes es `UNLICENSED`.
 
 **Por qué.** Es una decisión consciente que corresponde al autor, no un
 descuido. Nota relevante: el core de Wealthfolio es AGPL-3.0, pero los paquetes
 que consumimos (`@wealthfolio/addon-sdk`, `@wealthfolio/ui`) son MIT, y no
 copiamos código de upstream. Ver
 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
+**Corrección (2026-08-06).** `addon/package.json` y `addon/manifest.json`
+declaraban `MIT`, lo que contradecía esta decisión y el README. No existe en el
+repositorio ninguna decisión explícita de licenciar bajo MIT: D13 dice lo
+contrario. Se cambiaron ambos a `UNLICENSED` en vez de crear un `LICENSE`,
+porque elegir una licencia no es una corrección de consistencia — es una
+decisión del propietario del proyecto.
+
+**Pendiente para el propietario.** Elegir entre:
+
+| Opción | Consecuencia |
+| --- | --- |
+| MIT / Apache-2.0 | Cualquiera puede usar y redistribuir el addon |
+| AGPL-3.0 | Alineado con el core de Wealthfolio; obliga a compartir modificaciones |
+| Propietario / privado | Se queda como está: `UNLICENSED`, sin publicación |
+
+Hasta que se decida, el repositorio no debe publicarse: sin licencia, nadie
+—incluido el autor a futuro— tiene permisos claros sobre el código.

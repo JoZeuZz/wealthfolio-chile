@@ -4,11 +4,25 @@ Addon de [Wealthfolio](https://wealthfolio.app) para gestión financiera persona
 en Chile: importa cartolas de bancos chilenos, concilia transferencias entre tus
 cuentas, detecta compras en cuotas y responde en qué se te va el sueldo.
 
-> **Estado: 0.1.0 — funcional, con los formatos bancarios pendientes de
-> calibrar.** El motor está completo y cubierto por 185 tests. Los adaptadores
-> de Banco de Chile, BancoEstado y Falabella/CMR están implementados pero
-> derivados de documentación pública, no de cartolas reales. Ver
-> [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md).
+> **Estado: 0.1.1 — motor completo, todavía sin validar contra un Wealthfolio
+> real.** 280 tests cubren el motor y la capa de servicios. Los adaptadores de
+> Banco de Chile, BancoEstado y Falabella/CMR están implementados pero derivados
+> de documentación pública, no de cartolas reales. El addon compila a un bundle
+> cargable, pero **nunca se ha ejecutado dentro de Wealthfolio**. Ver la matriz
+> de estado en [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md).
+
+### Cómo leer los estados en esta documentación
+
+Cuatro niveles, y no se mezclan:
+
+| Nivel | Qué significa |
+| --- | --- |
+| **implementado** | El código existe y sus tests unitarios pasan |
+| **integrado** | Está enganchado al flujo real del addon, no sólo disponible |
+| **validado en host** | Se ejecutó contra un Wealthfolio v3.6.2 corriendo |
+| **validado con banco real** | Se ejecutó contra una cartola real de ese banco |
+
+Hoy nada del proyecto pasa de **integrado**.
 
 ---
 
@@ -17,8 +31,9 @@ cuentas, detecta compras en cuotas y responde en qué se te va el sueldo.
 Le das una cartola y obtienes:
 
 - Movimientos normalizados, con comercio y categoría
-- Ingresos y egresos reales, **sin contar dos veces** las transferencias entre
-  tus propias cuentas ni los pagos de tarjeta
+- Ingresos y egresos que **no cuentan dos veces** una transferencia o un pago de
+  tarjeta *dentro de la misma cartola* (ver la nota de abajo sobre el caso
+  multi-cuenta, que todavía no está enganchado)
 - Compras en cuotas reconstruidas: cuánto llevas, cuánto queda, hasta cuándo
 - Flujo de caja mensual, gasto por categoría, comercios principales
 - Gastos recurrentes y suscripciones detectados
@@ -37,6 +52,16 @@ Esa distinción está en el centro del modelo, no parchada encima: las
 transferencias internas y los pagos de tarjeta se mapean a `TRANSFER_IN`/
 `TRANSFER_OUT` de Wealthfolio, que netean a cero a nivel de portafolio, y están
 excluidas por construcción de todo agregado de ingreso y gasto.
+
+**Qué funciona hoy y qué no.** Cuando la glosa identifica el movimiento como
+transferencia o pago de tarjeta, la clasificación ocurre al importar y los
+totales ya lo respetan — eso está *integrado*. Emparejar las **dos patas** de
+una transferencia que vive en dos cuentas distintas requiere leer movimientos de
+otras cuentas, y ese motor (`core/reconcile`, `services/reconciliation.ts`) está
+*implementado y testeado pero todavía no integrado*: no hay pantalla para
+confirmar o rechazar una sugerencia. Hasta entonces, una transferencia que
+ninguna de las dos glosas nombra como tal se cuenta como gasto en una cuenta e
+ingreso en la otra.
 
 ---
 
@@ -205,6 +230,8 @@ aguas arriba. Ver [ADR 0001](docs/adr/0001-addon-sobre-fork.md).
 
 ## Licencia
 
-Sin definir todavía. Es una decisión pendiente y consciente; ver D13 en
-[DECISIONS.md](docs/DECISIONS.md). Dependencias de terceros en
+Sin definir todavía. `addon/package.json` y `addon/manifest.json` declaran
+`UNLICENSED`, que es exactamente eso: no se ha concedido ninguna licencia y el
+proyecto no está listo para publicarse. Es una decisión pendiente y consciente;
+ver D13 en [DECISIONS.md](docs/DECISIONS.md). Dependencias de terceros en
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

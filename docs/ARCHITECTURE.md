@@ -106,14 +106,56 @@ Detalle completo en [IMPORT_PIPELINE.md](IMPORT_PIPELINE.md).
 | --- | --- |
 | `storage.ts` | Persistencia tipada sobre `ctx.api.storage`, con listas particionadas |
 | `activity-index.ts` | Reconstruye el índice de duplicados desde las actividades del host |
+| `imported-transactions.ts` | Relee como transacciones canónicas lo que el addon escribió |
+| `import-preparation.ts` | Une host y pipeline puro; decide si importar es seguro |
 | `import-history.ts` | Registro de importaciones |
 | `import-runner.ts` | **Lo único que escribe** en el ledger del usuario |
+| `reconciliation.ts` | Fachada de orquestación para la conciliación multi-cuenta |
 | `settings.ts` | Preferencias y conjunto efectivo de reglas |
 
 ### `ui/` — React
 
 Páginas: panel (`/addons/wealthfolio-chile`), wizard (`…/importar`), historial
 (`…/importaciones`). Componentes de `@wealthfolio/ui`, provistos por el host.
+
+---
+
+## Conciliación multi-cuenta: dónde entra el host
+
+Los matchers de `core/reconcile/` son puros y están testeados, pero necesitan
+movimientos de **varias cuentas a la vez**. `prepareImport()` ve un archivo y una
+cuenta, así que meterle `ctx.api` no sólo rompería su pureza: seguiría sin tener
+los datos. La fachada existe precisamente para que esa tentación no aparezca.
+
+```
+actividades del host                    ctx.api.activities.search
+        │
+        ▼   services/imported-transactions.ts
+ScopedTransaction[]                     { accountId, transaction }
+        │
+        ▼   services/reconciliation.ts   ← la única capa impura
+matchTransfers() / matchCardPayments()  puros, sin host ni storage
+        │
+        ▼
+ReconciliationResult                    candidatos, nunca decisiones
+```
+
+Tres reglas que este diagrama fija:
+
+1. **`core/` no importa `AddonContext`.** La única excepción es
+   `core/mapping/activities.ts`, y sólo con `import type`, que desaparece al
+   compilar.
+2. **`prepareImport()` sigue siendo puro.** Recibe un índice de duplicados; no
+   sabe cómo obtenerlo.
+3. **La fachada no decide nada.** Aplicar un emparejamiento reclasifica ambas
+   patas, y eso es una acción del usuario. `reconcileWindow()` sólo calcula
+   candidatos, y marca `truncated` cuando la lectura quedó corta — una vista
+   parcial puede emparejar las dos patas equivocadas.
+
+**Lo que falta** es la pantalla de revisión y persistir las decisiones en
+`StorageKeys.transferDecisions`. Hasta entonces la conciliación multi-cuenta está
+*implementada* pero no *integrada*: al importar sólo se clasifica lo que la glosa
+identifica por sí sola.
 
 ---
 

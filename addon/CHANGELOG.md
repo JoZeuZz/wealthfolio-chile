@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.1.1 — 2026-08-06
+
+Estabilización de las fronteras con el host. Sin funcionalidad nueva de cara al
+usuario; tres correcciones que afectaban directamente la integridad de los datos.
+
+### Corregido
+
+- **El signo se perdía al releer una actividad.** Wealthfolio guarda un monto sin
+  signo y expresa la dirección en el `activityType`. Al reconstruir el índice de
+  duplicados el signo no se recuperaba, así que un gasto de `-85.400` se comparaba
+  contra `+85.400` y **ningún duplicado probable se detectaba**. La huella exacta
+  seguía funcionando, que es por qué el error no se notaba. La semántica de signos
+  vive ahora en una sola función (`activityDetailsToSignedMoney`) y ya no está
+  duplicada entre el panel y el índice.
+- **Filtro de fechas inexistente.** Se enviaban `startDate`/`endDate` a
+  `activities.search`; v3.6.2 lee `dateFrom`/`dateTo`. Los filtros se ignoraban en
+  silencio y toda consulta escaneaba la cuenta completa.
+- **El wizard quedaba en blanco si fallaba la lectura de duplicados.** Ahora el
+  parseo, el índice de duplicados y el permiso de importar son tres estados
+  distintos: la vista previa se muestra igual, **Confirmar queda deshabilitado** y
+  hay un botón Reintentar. Ya no existe respaldo silencioso a un índice vacío,
+  porque importar sin comprobar duplicados puede duplicar dinero.
+- **Una importación parcial se anunciaba como éxito.** `partial` y `failed` ya no
+  muestran el toast verde, y el resumen distingue creados, fallidos al escribir,
+  duplicados exactos, posibles duplicados, ignorados por regla y desmarcados por
+  el usuario — antes todo eso era «omitidos».
+- **Un fallo al guardar el historial anulaba una importación exitosa.** Ahora se
+  reporta aparte: los movimientos quedan escritos y el usuario ve que el historial
+  no se actualizó.
+- **El panel podía mostrar cifras incompletas en silencio** al superar su límite
+  de páginas. Ahora consulta sólo la ventana temporal que necesita y avisa cuando
+  no alcanzó a leerlo todo.
+- **Licencia inconsistente**: el README decía «sin definir» y los manifiestos
+  decían MIT. Ambos declaran `UNLICENSED`, coherente con la decisión D13. Elegir
+  licencia sigue pendiente y es del propietario.
+
+### Añadido
+
+- `services/reconciliation.ts`: fachada de orquestación para la conciliación
+  multi-cuenta. No añade funcionalidad — mantiene `prepareImport()` puro y deja
+  documentado dónde entra el host.
+- 95 tests nuevos (280 en total), los primeros sobre `services/` con un doble
+  mínimo del host: `activity-index`, `import-runner`, `import-preparation`,
+  `imported-transactions`, `storage` y el round-trip de signos.
+
 ## 0.1.0 — 2026-08-05
 
 Primera versión. Motor de importación completo; formatos bancarios pendientes de
@@ -21,8 +66,10 @@ calibrar con cartolas reales.
   columna de cuotas ⇒ tarjeta) además de la léxica.
 - **Idempotencia**: huella determinista guardada en la metadata de la actividad.
   Reimportar el mismo archivo produce cero movimientos nuevos.
-- **Conciliación** de transferencias entre cuentas propias y de pagos de
+- **Motor de conciliación** de transferencias entre cuentas propias y de pagos de
   tarjeta, con niveles de confianza y sin emparejar automáticamente lo dudoso.
+  Implementado y testeado; todavía **no integrado** al flujo de importación, que
+  ve una sola cuenta por vez.
 - **Normalización de comercios**: separa procesador de pago, verbo bancario,
   ruido de referencia y comuna.
 - **Motor de reglas** condición → acción, determinista y auditable, con 24

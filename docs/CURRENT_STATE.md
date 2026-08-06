@@ -2,37 +2,126 @@
 
 Qué funciona **hoy**, verificado, y qué no.
 
-Actualizado: 2026-08-05 · Wealthfolio v3.6.2 · addon v0.1.0
+Actualizado: 2026-08-06 · Wealthfolio v3.6.2 · addon v0.1.1
 
 ---
 
-## Verificación
+## Cómo leer los estados
+
+Cuatro niveles distintos, que esta documentación no mezcla:
+
+| Nivel | Qué significa |
+| --- | --- |
+| **implementado** | El código existe y sus tests unitarios pasan |
+| **integrado** | Está enganchado al flujo real del addon, no sólo disponible |
+| **validado en host** | Se ejecutó contra un Wealthfolio v3.6.2 corriendo |
+| **validado con banco real** | Se ejecutó contra una cartola real de ese banco |
+
+**Hoy nada del proyecto pasa de *integrado*.** No existe una sola línea de
+evidencia obtenida de un Wealthfolio en ejecución.
+
+---
+
+## Verificación automática
 
 ```
 typecheck   ✅  tsc --noEmit, strict + noUncheckedIndexedAccess
 lint        ✅  eslint, 0 errores, 0 warnings, sin `any`
-tests       ✅  185 pasando (9 archivos)
-build       ✅  dist/addon.js — 735 KB (192 KB gzip), un solo archivo
+tests       ✅  280 pasando (15 archivos)
+build       ✅  dist/addon.js — 745 KB (194 KB gzip), un solo archivo
 ```
 
 `./scripts/test.sh` corre las cuatro.
 
 ---
 
-## Funciona
+## Matriz de validación
+
+`Unit` = tests automatizados. `Host` = ejecutado contra Wealthfolio real.
+`Restart` = sobrevive a reiniciar el contenedor.
+
+| Componente | Unit | Host | Restart | Estado |
+| --- | --- | --- | --- | --- |
+| Parser (core) | PASS | NOT TESTED | n/a | Integrado; sin cartolas reales |
+| Money | PASS | n/a | n/a | Integrado |
+| Fechas | PASS | n/a | n/a | Integrado |
+| Perfil bancario sintético | PASS | NOT TESTED | n/a | 3 bancos `pending-real-sample` |
+| Carga del addon | n/a | BLOCKED | BLOCKED | Sin Docker en esta máquina |
+| Rutas / navegación | n/a | BLOCKED | BLOCKED | Sin Docker |
+| API `accounts` | PASS (doble) | BLOCKED | n/a | Contrato leído del SDK |
+| `activities.search` | PASS (doble) | BLOCKED | n/a | Nombres de filtro corregidos, sin verificar en runtime |
+| `activities.saveMany` | PASS (doble) | BLOCKED | n/a | Forma `{ creates }` confirmada por contrato |
+| Round-trip de metadata | PASS (doble) | BLOCKED | BLOCKED | El blob JSON existe en el modelo Rust |
+| Deduplicación exacta | PASS | BLOCKED | BLOCKED | 24 tests |
+| Deduplicación probable | PASS | BLOCKED | BLOCKED | **Estaba rota**; corregida y cubierta |
+| Historial de importaciones | PASS | BLOCKED | BLOCKED | Incl. 2.000 registros sin superar el límite |
+| Storage del addon | PASS | BLOCKED | BLOCKED | Particionado verificado por bytes |
+| Panel | PASS (agregados) | BLOCKED | BLOCKED | Ventana temporal, avisa si trunca |
+| Semántica de transferencia interna | PASS | BLOCKED | n/a | Mapeo `TRANSFER_IN`/`OUT` sin verificar en runtime |
+| Semántica de tarjeta de crédito | PASS | BLOCKED | n/a | **Hipótesis razonada**, no un hecho |
+| Backup / restore | NOT TESTED | BLOCKED | BLOCKED | Scripts escritos, nunca ejecutados |
+
+`BLOCKED` significa una sola cosa en toda esta tabla: **Docker no está instalado
+en esta máquina**, así que no hay ninguna instancia de Wealthfolio contra la cual
+ejecutar nada. No es un fallo del código y tampoco es un aprobado.
+
+---
+
+## Bloqueo de la Parte B
+
+```
+$ docker --version
+zsh: command not found: docker
+$ docker compose version
+zsh: command not found: docker
+```
+
+Ni `docker` ni `podman`. Todo lo que exige un host corriendo queda **BLOCKED**:
+carga del addon, contrato real de las APIs, importación end-to-end, idempotencia
+tras reinicio, semántica de caja / transferencia / tarjeta, y backup/restore.
+
+### Para desbloquearlo
+
+```bash
+# 1 · Instalar Docker Engine + plugin compose (Debian/Ubuntu)
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER"    # cerrar y reabrir sesión
+
+# 2 · Comprobar
+docker --version && docker compose version
+
+# 3 · Levantar el Wealthfolio fijado
+cd /home/proyectos/wealthfolio-chile
+cp infra/.env.example infra/.env   # revisar WF_VERSION=3.6.2
+./scripts/stack.sh start
+./scripts/stack.sh status          # healthcheck en verde
+
+# 4 · Desplegar el addon
+./scripts/deploy-addon.sh
+
+# 5 · Recién entonces, el guion de validación de docs/HOST_VALIDATION.md
+```
+
+Ver [HOST_VALIDATION.md](HOST_VALIDATION.md) para el guion completo: qué crear,
+qué observar y qué anotar en cada paso.
+
+---
+
+## Funciona (verificado por tests)
 
 ### Motor (`core/`)
 
 | Área | Estado |
 | --- | --- |
 | Aritmética exacta de dinero | ✅ 26 tests |
-| Fechas civiles sin zona horaria | ✅ 21 tests |
+| Fechas civiles sin zona horaria | ✅ 25 tests |
 | Lectura CSV / TXT / XLSX / XLS | ✅ 21 tests |
 | Detección de delimitador y codificación | ✅ incl. Windows-1252 |
 | Detección de cabecera y mapeo de columnas | ✅ |
 | Selección de parser por evidencia estructural | ✅ 23 tests, con regresión |
 | Modelo canónico | ✅ |
 | Huellas e idempotencia | ✅ 24 tests |
+| Traducción a actividades de Wealthfolio (ida y vuelta) | ✅ 24 tests |
 | Conciliación de transferencias internas | ✅ 11 tests |
 | Conciliación de pagos de tarjeta | ✅ |
 | Normalización de comercios | ✅ |
@@ -42,37 +131,33 @@ build       ✅  dist/addon.js — 735 KB (192 KB gzip), un solo archivo
 | Insights deterministas | ✅ |
 | Redacción y enmascarado | ✅ 15 tests |
 
+### Servicios (`services/`)
+
+| Área | Estado |
+| --- | --- |
+| Índice de duplicados desde el host | ✅ 13 tests, con doble mínimo |
+| Escritura por `saveMany` y desglose del resultado | ✅ 17 tests |
+| Preparación del preview y bloqueo de importación | ✅ 11 tests |
+| Relectura de movimientos importados | ✅ 9 tests |
+| Storage particionado e historial a volumen | ✅ 17 tests |
+
 ### Flujo de importación
 
-Funciona de punta a punta contra fixtures sintéticos:
+De punta a punta contra fixtures sintéticos:
 
 1. Archivo por drag & drop o selector, dentro del sandbox.
 2. Detección de banco con puntaje y razones visibles.
 3. Selección manual de banco si hace falta.
-4. Vista previa con totales, advertencias y por-fila.
-5. Marcado/desmarcado por fila, con totales recalculados.
-6. Escritura por `activities.saveMany({ creates })`.
-7. Registro en el historial de importaciones.
+4. Lectura de los movimientos ya registrados en la cuenta, acotada al período de
+   la cartola. **Si esa lectura falla, importar queda bloqueado.**
+5. Vista previa con totales, advertencias y por-fila.
+6. Marcado/desmarcado por fila, con totales recalculados.
+7. Escritura por `activities.saveMany({ creates })`.
+8. Resumen que distingue creados, fallidos, duplicados, ignorados y desmarcados.
+9. Registro en el historial de importaciones.
 
 **Reimportar el mismo archivo produce cero movimientos nuevos.** Verificado por
 test, incluyendo archivos con períodos solapados.
-
-### Interfaz
-
-- Panel Chile: flujo del mes, gastos por categoría, comercios principales,
-  cuotas comprometidas, movimientos que no son gasto, observaciones, recurrentes.
-- Wizard de importación en 4 pasos.
-- Historial de importaciones con hash, parser y versión.
-
-### Infraestructura
-
-- `infra/compose.yml` con versión fijada, healthcheck, `read_only`,
-  `no-new-privileges`, límites de memoria, logs rotados.
-- Overlay de desarrollo.
-- Scripts: `bootstrap`, `test`, `dev`, `stack`, `backup`, `restore`,
-  `deploy-addon`, `update-upstream`.
-- CI: typecheck, lint, test, build, verificación de privacidad, auditoría de
-  dependencias.
 
 ---
 
@@ -80,32 +165,32 @@ test, incluyendo archivos con períodos solapados.
 
 | Qué | Por qué |
 | --- | --- |
-| **Perfiles bancarios validados** | No hay cartolas reales. Los tres bancos tienen adaptador completo pero marcado `pending-real-sample`. Ver [BANK_FORMATS.md](BANK_FORMATS.md) |
-| **UI de conciliación** | El motor está listo y testeado, pero no hay pantalla para confirmar o rechazar sugerencias de transferencia |
+| **Cualquier validación en host** | Docker no está instalado aquí. Ver arriba |
+| **Perfiles bancarios validados** | No hay cartolas reales. Los tres bancos tienen adaptador completo, marcado `pending-real-sample`. Ver [BANK_FORMATS.md](BANK_FORMATS.md) |
+| **Conciliación multi-cuenta integrada** | El motor y la fachada de orquestación están listos y testeados; falta la pantalla de revisión. Ver [ARCHITECTURE.md](ARCHITECTURE.md) § Conciliación |
 | **UI de reglas** | Las reglas predefinidas se aplican; no hay editor. Se pueden escribir en `storage` a mano |
 | **Editor de categorías** | Mismo caso |
-| **Aplicar conciliación al importar** | `matchTransfers` no está enganchado a `prepareImport` — hace falta comparar contra movimientos de *otras* cuentas |
 | **Servicio importador** | Decisión D11: no aporta hasta que los perfiles estén validados |
 | **IA / MCP propio** | Decisión D10 y D12 |
 | **Fintoc** | Sin credenciales; solo existe la abstracción conceptual |
-| **Levantar Docker aquí** | Docker no está instalado en esta máquina. La infraestructura está escrita y revisada, pero no ejecutada |
+| **Licencia** | Decisión pendiente del propietario. Todo declara `UNLICENSED`. Ver D13 |
 
 ---
 
-## Verificado vs. no verificado
+## Errores encontrados en la auditoría 0.1.1
 
-Honestidad sobre qué se probó realmente:
+Cinco, todos en la frontera con el host y ninguno detectable por los tests que
+existían:
 
-| Afirmación | Cómo se verificó |
-| --- | --- |
-| El motor funciona | 185 tests contra fixtures sintéticos |
-| El addon compila a un bundle cargable | `pnpm build`, un solo `dist/addon.js` |
-| El manifiesto es válido | Generado por el CLI oficial, ajustado según `manifest.ts` del SDK |
-| El addon carga en Wealthfolio | **No verificado** — requiere una instancia corriendo |
-| Los parsers leen cartolas reales | **No verificado** — no hay archivos reales |
-| El compose levanta | **No verificado** — Docker no instalado |
+| # | Error | Consecuencia real |
+| --- | --- | --- |
+| 1 | El signo se perdía al releer una actividad | **Ningún duplicado probable se detectaba jamás.** La huella exacta seguía funcionando, que es por qué nadie lo notó |
+| 2 | `startDate`/`endDate` no existen en v3.6.2 | Los filtros de fecha se ignoraban en silencio; toda consulta escaneaba la cuenta completa |
+| 3 | El wizard quedaba en blanco si fallaba leer duplicados | Estado inconsistente, y el comentario del código prometía un respaldo que no ocurría |
+| 4 | Una importación parcial mostraba el toast verde | El usuario creía que se guardó todo |
+| 5 | Un fallo al guardar el historial anulaba la importación | Los movimientos ya estaban escritos; el error hacía pensar lo contrario |
 
-Las tres últimas son las que faltan para cerrar el MVP.
+Los cinco están corregidos y cubiertos por tests de regresión.
 
 ---
 
@@ -120,12 +205,12 @@ Las tres últimas son las que faltan para cerrar el MVP.
 | 5 | Se transforma al modelo canónico | ✅ |
 | 6 | Existe vista previa | ✅ |
 | 7 | Se calculan ingresos y egresos | ✅ |
-| 8 | Se detectan duplicados | ✅ |
+| 8 | Se detectan duplicados | ✅ exactos y probables |
 | 9 | El usuario confirma | ✅ |
-| 10 | Llega por APIs soportadas | ✅ `saveMany` |
+| 10 | Llega por APIs soportadas | ✅ `saveMany({ creates })` |
 | 11 | Reimportar no duplica | ✅ con test |
 | 12 | Hay historial | ✅ |
-| 13 | Hay tests | ✅ 185 |
+| 13 | Hay tests | ✅ 280 |
 | 14 | Hay documentación | ✅ |
 | 15 | No se filtran datos en logs | ✅ con test |
 
@@ -133,10 +218,8 @@ Las tres últimas son las que faltan para cerrar el MVP.
 
 ## Siguiente paso recomendado
 
-1. Instalar Docker y levantar `./scripts/stack.sh start`.
-2. `./scripts/deploy-addon.sh` y confirmar que "Chile" aparece en la barra
-   lateral.
-3. Importar `samples/synthetic/banco-chile-cuenta-corriente.csv` de punta a
-   punta, contra una instancia real.
-4. Recién entonces, calibrar con una cartola real siguiendo
+1. Instalar Docker en una máquina y ejecutar
+   [HOST_VALIDATION.md](HOST_VALIDATION.md) completo.
+2. Recién con esa matriz en verde, calibrar BancoEstado, Banco de Chile y
+   Falabella/CMR con cartolas reales privadas, siguiendo
    [BANK_FORMATS.md](BANK_FORMATS.md) § *Cómo calibrar un perfil*.
