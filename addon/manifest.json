@@ -1,0 +1,58 @@
+{
+  "id": "wealthfolio-chile",
+  "name": "Wealthfolio Chile",
+  "version": "0.1.0",
+  "description": "Importación de cartolas bancarias chilenas (Banco de Chile, BancoEstado, Falabella/CMR), conciliación de transferencias, detección de cuotas e insights de gasto.",
+  "author": "Jose Rodriguez",
+  "main": "dist/addon.js",
+  "sdkVersion": "3.6.2",
+  "minWealthfolioVersion": "3.6.2",
+  "enabled": true,
+  "license": "MIT",
+  "keywords": ["wealthfolio", "addon", "chile", "cartola", "finanzas-personales"],
+  "contributes": {
+    "routes": [
+      { "id": "wealthfolio-chile" },
+      { "id": "wealthfolio-chile-import", "path": "importar" },
+      { "id": "wealthfolio-chile-history", "path": "importaciones" }
+    ],
+    "links": {
+      "sidebar": [
+        {
+          "id": "wealthfolio-chile",
+          "route": "wealthfolio-chile",
+          "label": "Chile",
+          "icon": "chart-pie",
+          "order": 150
+        }
+      ]
+    }
+  },
+  "hostDependencies": {
+    "@tanstack/react-query": "^5.90.0",
+    "@wealthfolio/addon-sdk": "^3.6.2",
+    "@wealthfolio/ui": "^3.6.2",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^0.561.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "recharts": "^3.7.0"
+  },
+  "permissions": [
+    {
+      "category": "accounts",
+      "functions": ["getAll"],
+      "purpose": "Listar las cuentas para asociar cada cartola a la cuenta correcta"
+    },
+    {
+      "category": "activities",
+      "functions": ["search", "saveMany"],
+      "purpose": "Leer movimientos ya importados para detectar duplicados y escribir los movimientos confirmados por el usuario"
+    },
+    {
+      "category": "settings",
+      "functions": ["get"],
+      "purpose": "Leer la moneda base para los resúmenes de gasto"
+    }
+  ]
+}
