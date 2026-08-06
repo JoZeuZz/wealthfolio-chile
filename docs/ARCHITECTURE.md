@@ -1,0 +1,196 @@
+# Arquitectura
+
+## Idea central
+
+Wealthfolio Chile es un **addon** de Wealthfolio, no un fork. Todo lo específico
+de Chile vive en este repositorio y se comunica con el host solo por APIs
+soportadas.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Wealthfolio (host)                       │
+│   cuentas · actividades · patrimonio · inversiones          │
+└───────────────────────────┬─────────────────────────────────┘
+                            │  Addon SDK 3.6.2
+                            │  (iframe sandbox, allow-scripts)
+┌───────────────────────────▼─────────────────────────────────┐
+│                    Wealthfolio Chile                        │
+│                                                             │
+│   ui/         páginas React (panel · wizard · historial)    │
+│   services/   lo único que habla con ctx.api                │
+│   core/       motor determinista — TS puro, sin SDK ni DOM   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+La regla que ordena todo: **`core/` no importa nada del SDK ni toca el DOM.**
+Solo `core/mapping/activities.ts` importa tipos del SDK, y únicamente como
+`import type` (desaparece en compilación). Por eso el motor se testea en Node,
+sin navegador ni mocks, y puede reutilizarse tal cual desde un servicio externo
+el día que haga falta.
+
+---
+
+## El pipeline de importación
+
+```
+archivo (bytes)
+    │
+    ▼  core/parsing/workbook.ts
+detectar formato por magic bytes → decodificar (UTF-8 / Windows-1252)
+    │
+    ▼  core/parsing/tabular.ts
+Sheet: grilla rectangular de strings
+    │
+    ▼  core/parsing/columns.ts
+encontrar cabecera → mapear columnas a roles semánticos
+    │
+    ▼  core/providers/*.ts
+elegir parser (detección con evidencia estructural + léxica)
+    │
+    ▼  core/parsing/rows.ts
+NormalizedTransaction[]  ← el modelo canónico
+    │
+    ▼  core/dedupe/fingerprint.ts
+huella determinista por movimiento
+    │
+    ▼  core/rules/engine.ts
+normalizar comercio → aplicar reglas → categoría, tipo, tags
+    │
+    ▼  core/dedupe/classify.ts
+exacto / probable / nuevo
+    │
+    ▼  core/installments/plans.ts
+reconstruir compras en cuotas
+    │
+    ▼  VISTA PREVIA  ← el usuario decide, nada se ha escrito aún
+    │
+    ▼  core/mapping/activities.ts
+ActivityCreate[] con nuestra metadata
+    │
+    ▼  services/import-runner.ts
+ctx.api.activities.saveMany({ creates })
+```
+
+Detalle completo en [IMPORT_PIPELINE.md](IMPORT_PIPELINE.md).
+
+---
+
+## Módulos
+
+### `core/` — motor determinista
+
+| Módulo | Responsabilidad |
+| --- | --- |
+| `money.ts` | Aritmética exacta. Enteros de unidades menores + escala; nunca floats |
+| `dates.ts` | Fechas civiles sobre strings `YYYY-MM-DD`; nunca `Date` con zona horaria |
+| `text.ts` | Normalización de descripciones — la forma que comparan todos los matchers |
+| `hash.ts` | SHA-256 propio, síncrono, idéntico en navegador y Node |
+| `privacy.ts` | Enmascarado y redacción; envoltorio del logger |
+| `model/` | El modelo canónico: `TransactionKind`, `NormalizedTransaction`, `ParsedStatement`, `InstallmentPlan` |
+| `parsing/` | Lectores de archivo, detección de cabecera, mapeo de filas |
+| `providers/` | Un perfil declarativo por banco + el motor genérico que los ejecuta |
+| `dedupe/` | Huellas e idempotencia |
+| `reconcile/` | Transferencias internas y pagos de tarjeta |
+| `merchants/` | Extracción de comercio desde el ruido del adquirente |
+| `categories/` | Árbol de categorías por defecto |
+| `rules/` | Motor de reglas condición→acción + reglas predefinidas |
+| `installments/` | Detección de cuotas y reconstrucción de planes |
+| `metrics/` | Agregados mensuales, categorías, comercios, recurrentes |
+| `insights/` | Frases deterministas a partir de esos agregados |
+| `mapping/` | Traducción al modelo de actividades de Wealthfolio |
+| `pipeline.ts` | Orquestador puro de todo lo anterior |
+
+### `services/` — frontera con el host
+
+| Módulo | Responsabilidad |
+| --- | --- |
+| `storage.ts` | Persistencia tipada sobre `ctx.api.storage`, con listas particionadas |
+| `activity-index.ts` | Reconstruye el índice de duplicados desde las actividades del host |
+| `import-history.ts` | Registro de importaciones |
+| `import-runner.ts` | **Lo único que escribe** en el ledger del usuario |
+| `settings.ts` | Preferencias y conjunto efectivo de reglas |
+
+### `ui/` — React
+
+Páginas: panel (`/addons/wealthfolio-chile`), wizard (`…/importar`), historial
+(`…/importaciones`). Componentes de `@wealthfolio/ui`, provistos por el host.
+
+---
+
+## Decisiones que sostienen el diseño
+
+### 1. El dinero nunca es un float
+
+`Money = { minor, scale, currency }`. `$1.234,56` es
+`{ minor: 123456, scale: 2 }`. La escala se guarda **por valor**, no por moneda,
+porque los bancos chilenos exportan la misma cuenta CLP como `1.234` en un
+reporte y `1.234,00` en otro. Sumar valores de distinta escala los alinea al
+mayor; reducir escala perdiendo precisión lanza excepción en vez de redondear en
+silencio.
+
+### 2. Las fechas son días del calendario, no instantes
+
+Todo opera sobre `YYYY-MM-DD` y aritmética entera (algoritmo `days_from_civil`).
+Una compra del 03/02/2026 es ese día en Chile, corra la app donde corra. Con
+`new Date()` una máquina en UTC+13 movería movimientos al mes anterior.
+
+### 3. Un adaptador de banco es datos, no código
+
+Añadir un banco es escribir un `StatementProfile`: sinónimos de columnas,
+convención de signo, formato numérico, producto. El algoritmo es uno solo y está
+testeado. Por eso los tres bancos chilenos están implementados **antes** de
+tener una cartola real: calibrarlos es editar strings.
+
+### 4. Vista previa antes de escribir
+
+`prepareImport()` es puro y no escribe nada. `runImport()` es la única función
+que muta, y solo con las filas que el usuario dejó marcadas.
+
+### 5. La identidad vive en Wealthfolio, no en un registro paralelo
+
+La huella de cada movimiento se escribe en `metadata` de la actividad y se lee
+de vuelta al buscar. Un ledger paralelo en `storage` se desincronizaría en
+cuanto el usuario borrara una actividad a mano, y el addon se negaría a
+reimportar un movimiento que ya no existe.
+
+### 6. Nada infla ingresos ni gastos
+
+`internal_transfer` y `credit_card_payment` están excluidos por construcción de
+todo agregado de ingreso y gasto — en `core/metrics`, en los totales de la vista
+previa, y en el mapeo a Wealthfolio (van como `TRANSFER_*`, que netea a cero a
+nivel de portafolio).
+
+### 7. Determinista primero, IA después
+
+Reglas y parsers antes que modelos. Las frases del panel son aritmética con
+plantilla fija. Un número plausible pero incorrecto es peor que ninguna frase.
+
+---
+
+## Despliegue
+
+```
+Proxmox
+└── LXC / VM con Docker
+    └── docker compose (infra/compose.yml)
+        └── wealthfolio/wealthfolio:v3.6.2
+            ├── volumen wealthfolio-data → /data (SQLite)
+            └── bind mount              → /data/addons
+                └── wealthfolio-chile/
+                    ├── manifest.json
+                    └── dist/addon.js
+```
+
+- Versión de imagen **fijada**, nunca `latest`.
+- Escucha en loopback por defecto; TLS mediante proxy inverso.
+- Contenedor `read_only`, `no-new-privileges`, usuario no root (UID 1000).
+- Healthcheck contra `/api/v1/healthz`.
+- Respaldo y restauración documentados y con script.
+
+---
+
+## Qué haría falta para justificar un fork
+
+Nada de lo encontrado hasta ahora lo justifica. Los criterios están en
+[DECISIONS.md](DECISIONS.md) y cualquier cambio al core exige antes un ADR en
+`docs/adr/`.
