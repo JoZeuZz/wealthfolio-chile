@@ -1,0 +1,91 @@
+import { hashFields } from '../hash';
+import { toDecimalString } from '../money';
+import type { NormalizedTransaction } from '../model/transaction';
+import { descriptionKey } from '../text';
+
+/**
+ * Deterministic transaction identity.
+ *
+ * Importing the same cartola twice must produce zero new movements. Since most
+ * Chilean exports carry no transaction id, identity has to be derived from
+ * content — and derived the *same way every time*, including across app
+ * versions, machines and re-parses of the same file.
+ *
+ * The fingerprint therefore uses only fields a bank cannot change between two
+ * exports of the same period: account, date, exact amount, normalised
+ * description and the bank reference. Anything volatile (row number, file name,
+ * running balance, our own classification) is excluded on purpose — including
+ * them would make the same movement look new after a re-download.
+ */
+
+/** Bumped only when the fingerprint recipe changes; old rows keep their hash. */
+export const FINGERPRINT_VERSION = 'v1';
+
+export interface FingerprintScope {
+  /**
+   * Wealthfolio account id the row will be imported into.
+   *
+   * Identity is scoped to the account so the same $10.000 on the same day in
+   * two different accounts stays two movements.
+   */
+  accountId: string;
+}
+
+/**
+ * Content hash of a transaction, scoped to a target account.
+ *
+ * Stable across: re-downloading the file, re-running the parser, changing the
+ * category, or reordering rows.
+ */
+export function computeFingerprint(
+  transaction: NormalizedTransaction,
+  scope: FingerprintScope,
+): string {
+  return hashFields([
+    FINGERPRINT_VERSION,
+    scope.accountId,
+    transaction.date,
+    toDecimalString(transaction.amount),
+    transaction.amount.currency,
+    // The aggressive key absorbs the formatting drift banks introduce between
+    // exports (extra spaces, changing card tails) while keeping the merchant.
+    descriptionKey(transaction.description),
+    transaction.reference ?? '',
+  ]);
+}
+
+/**
+ * A weaker hash used to find *probable* duplicates.
+ *
+ * Drops the description entirely, so it groups movements that agree on account,
+ * day and amount. Two of those are usually the same movement described
+ * differently by two exports — but they are equally often two genuine identical
+ * charges, which is why this never auto-skips anything.
+ */
+export function computeWeakFingerprint(
+  transaction: NormalizedTransaction,
+  scope: FingerprintScope,
+): string {
+  return hashFields([
+    FINGERPRINT_VERSION,
+    'weak',
+    scope.accountId,
+    transaction.date,
+    toDecimalString(transaction.amount),
+    transaction.amount.currency,
+  ]);
+}
+
+/** Assign fingerprints to a batch of freshly parsed rows. */
+export function withFingerprints(
+  transactions: readonly NormalizedTransaction[],
+  scope: FingerprintScope,
+): NormalizedTransaction[] {
+  return transactions.map((transaction) => ({
+    ...transaction,
+    fingerprint: computeFingerprint(transaction, scope),
+  }));
+}
+
+/** SHA-256 of the source file, recorded in the import history. */
+export { sha256Hex as computeFileHash } from '../hash';
