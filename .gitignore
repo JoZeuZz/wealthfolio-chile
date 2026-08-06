@@ -1,0 +1,47 @@
+# ── Dependencies ──────────────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+
+# ── Build output ──────────────────────────────────────────────────────
+dist/
+build/
+*.tsbuildinfo
+coverage/
+
+# ── Upstream checkout (never vendored into this repo) ─────────────────
+.upstream/
+
+# ── Secrets and local configuration ───────────────────────────────────
+.env
+.env.*
+!.env.example
+*.local
+infra/secrets/
+infra/data/
+
+# ── PRIVATE FINANCIAL DATA — never commit ─────────────────────────────
+# Real bank statements live here. Everything below this line is ignored
+# on purpose; see docs/PRIVACY.md before changing any of it.
+samples/private/
+**/samples/private/
+*.cartola.*
+cartola-*.csv
+cartola-*.xlsx
+cartola-*.pdf
+
+# ── Editors / OS ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# ── Logs ──────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Local backups produced by scripts/backup.sh
+backups/
+infra/addons/
