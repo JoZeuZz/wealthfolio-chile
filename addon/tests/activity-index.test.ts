@@ -1,0 +1,302 @@
+import { describe, expect, it } from 'vitest';
+import { classifyDuplicate } from '../src/core/dedupe/classify';
+import { computeFingerprint, computeWeakFingerprint } from '../src/core/dedupe/fingerprint';
+import { money } from '../src/core/money';
+import { Direction, TransactionKind } from '../src/core/model/kinds';
+import {
+  activityDateFilters,
+  loadDuplicateIndex,
+  loadDuplicateIndexResult,
+} from '../src/services/activity-index';
+import { makeTransaction } from './fixtures';
+import { activityStub, fakeHost } from './host';
+
+/**
+ * The duplicate index, read back from a live host.
+ *
+ * These tests cover the seam where a wrong answer is invisible: the index looks
+ * fine, the import succeeds, and the user finds the same expense twice a month
+ * later.
+ */
+
+const ACCOUNT = 'acc-1';
+const SCOPE = { accountId: ACCOUNT };
+
+function ourMetadata(overrides: { fp: string; wfp?: string; kind?: TransactionKind }) {
+  return {
+    fp: overrides.fp,
+    ...(overrides.wfp ? { wfp: overrides.wfp } : {}),
+    inst: 'banco-chile',
+    parser: 'banco-chile.cartola-csv',
+    parserVersion: '1.0.0',
+    fileHash: 'file-hash',
+    runId: 'run-1',
+    kind: overrides.kind ?? TransactionKind.expense,
+  };
+}
+
+describe('loadDuplicateIndex', () => {
+  it('indexes exact and weak fingerprints from activity metadata', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '85400',
+          date: '2026-03-06',
+          comment: 'SUPERMERCADO',
+          metadata: ourMetadata({ fp: 'fp-exact', wfp: 'wfp-weak' }),
+        }),
+      ],
+    });
+
+    const result = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+
+    expect(result.scanned).toBe(1);
+    expect(result.truncated).toBe(false);
+    expect(result.index.byFingerprint.get('fp-exact')?.activityId).toBeDefined();
+    expect(result.index.byWeakFingerprint.get('wfp-weak')).toHaveLength(1);
+  });
+
+  it('reconstructs a signed amount from the activity type', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '85400',
+          date: '2026-03-06',
+          metadata: ourMetadata({ fp: 'out' }),
+        }),
+        activityStub({
+          activityType: 'DEPOSIT',
+          amount: '1000000',
+          date: '2026-03-05',
+          metadata: ourMetadata({ fp: 'in', kind: TransactionKind.income }),
+        }),
+        activityStub({
+          activityType: 'TRANSFER_OUT',
+          amount: '200000',
+          date: '2026-03-07',
+          metadata: ourMetadata({ fp: 'xfer-out', kind: TransactionKind.internal_transfer }),
+        }),
+        activityStub({
+          activityType: 'TRANSFER_IN',
+          amount: '200000',
+          date: '2026-03-07',
+          metadata: ourMetadata({ fp: 'xfer-in', kind: TransactionKind.internal_transfer }),
+        }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+
+    expect(index.byFingerprint.get('out')?.amount).toEqual(money(-85400, 0, 'CLP'));
+    expect(index.byFingerprint.get('in')?.amount).toEqual(money(1000000, 0, 'CLP'));
+    expect(index.byFingerprint.get('xfer-out')?.amount).toEqual(money(-200000, 0, 'CLP'));
+    expect(index.byFingerprint.get('xfer-in')?.amount).toEqual(money(200000, 0, 'CLP'));
+  });
+
+  it('reads a null amount as zero instead of failing the whole scan', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'UNKNOWN',
+          amount: null as unknown as string,
+          date: '2026-03-06',
+          metadata: ourMetadata({ fp: 'empty' }),
+        }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+    expect(index.byFingerprint.get('empty')?.amount).toEqual(money(0, 0, 'CLP'));
+  });
+
+  it('keeps activities that are not ours, so weak matching still sees them', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({ activityType: 'WITHDRAWAL', amount: '5000', date: '2026-03-06' }),
+      ],
+    });
+
+    const result = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+
+    expect(result.scanned).toBe(1);
+    expect(result.index.byFingerprint.size).toBe(0);
+    expect(result.index.byWeakFingerprint.size).toBe(0);
+  });
+});
+
+describe('pagination', () => {
+  it('walks every page until the host reports no more rows', async () => {
+    const activities = Array.from({ length: 1250 }, (_, i) =>
+      activityStub({
+        activityType: 'WITHDRAWAL',
+        amount: '1000',
+        date: '2026-03-06',
+        metadata: ourMetadata({ fp: `fp-${i}` }),
+      }),
+    );
+    const host = fakeHost({ activities });
+
+    const result = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+
+    expect(result.scanned).toBe(1250);
+    expect(result.totalRowCount).toBe(1250);
+    expect(result.truncated).toBe(false);
+    expect(host.searchCalls.map((call) => call.page)).toEqual([0, 1, 2]);
+  });
+
+  it('stops on the first short page without asking for another', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '1000',
+          date: '2026-03-06',
+          metadata: ourMetadata({ fp: 'only' }),
+        }),
+      ],
+    });
+
+    await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+    expect(host.searchCalls).toHaveLength(1);
+  });
+
+  it('reports truncation instead of silently returning a partial index', async () => {
+    // 40 pages of 500 is the cap; the host holds one row more than that.
+    const activities = Array.from({ length: 20_001 }, (_, i) =>
+      activityStub({
+        activityType: 'WITHDRAWAL',
+        amount: '1000',
+        date: '2026-03-06',
+        metadata: ourMetadata({ fp: `fp-${i}` }),
+      }),
+    );
+    const host = fakeHost({ activities });
+
+    const result = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+
+    expect(result.truncated).toBe(true);
+    expect(result.scanned).toBe(20_000);
+    expect(result.totalRowCount).toBe(20_001);
+  });
+});
+
+describe('filters sent to the host', () => {
+  it('uses the dateFrom/dateTo names v3.6.2 actually reads', () => {
+    expect(activityDateFilters({ accountId: ACCOUNT, fromDate: '2026-03-01', toDate: '2026-03-31' }))
+      .toEqual({ accountIds: ACCOUNT, dateFrom: '2026-03-01', dateTo: '2026-03-31' });
+  });
+
+  it('omits bounds that were not asked for', () => {
+    expect(activityDateFilters({ accountId: ACCOUNT })).toEqual({ accountIds: ACCOUNT });
+    expect(activityDateFilters({})).toEqual({});
+  });
+
+  it('narrows the scan to the requested window', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '1000',
+          date: '2026-01-15',
+          metadata: ourMetadata({ fp: 'january' }),
+        }),
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '2000',
+          date: '2026-03-15',
+          metadata: ourMetadata({ fp: 'march' }),
+        }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, {
+      accountId: ACCOUNT,
+      fromDate: '2026-03-01',
+      toDate: '2026-03-31',
+    });
+
+    expect(index.byFingerprint.has('march')).toBe(true);
+    expect(index.byFingerprint.has('january')).toBe(false);
+    expect(host.searchCalls[0]?.filters).toEqual({
+      accountIds: ACCOUNT,
+      dateFrom: '2026-03-01',
+      dateTo: '2026-03-31',
+    });
+  });
+
+  it('only reads the requested account', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          accountId: 'acc-2',
+          activityType: 'WITHDRAWAL',
+          amount: '1000',
+          date: '2026-03-15',
+          metadata: ourMetadata({ fp: 'other-account' }),
+        }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+    expect(index.byFingerprint.size).toBe(0);
+  });
+});
+
+describe('failure', () => {
+  it('propagates a host error rather than returning an empty index', async () => {
+    const host = fakeHost();
+    host.searchError = new Error('backend unavailable');
+
+    await expect(loadDuplicateIndex(host.ctx, { accountId: ACCOUNT })).rejects.toThrow(
+      'backend unavailable',
+    );
+  });
+});
+
+describe('end to end: index feeds classification', () => {
+  it('flags an exact re-import and a probable near-match from real host rows', async () => {
+    const original = makeTransaction({
+      date: '2026-03-06',
+      amount: -85_400,
+      description: 'SUPERMERCADO LIDER',
+      kind: TransactionKind.expense,
+      direction: Direction.out,
+    });
+    const fingerprint = computeFingerprint(original, SCOPE);
+    const weak = computeWeakFingerprint(original, SCOPE);
+
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '85400',
+          date: '2026-03-06',
+          comment: 'SUPERMERCADO LIDER',
+          metadata: ourMetadata({ fp: fingerprint, wfp: weak }),
+        }),
+      ],
+    });
+
+    const index = await loadDuplicateIndex(host.ctx, { accountId: ACCOUNT });
+
+    const exact = classifyDuplicate({ ...original, fingerprint }, index, SCOPE, new Map());
+    expect(exact.verdict).toBe('exact');
+
+    const drifted = makeTransaction({
+      date: '2026-03-06',
+      amount: -85_400,
+      description: 'SUPERMERCADO LIDER LOCAL 22',
+      kind: TransactionKind.expense,
+      direction: Direction.out,
+    });
+    const probable = classifyDuplicate(
+      { ...drifted, fingerprint: computeFingerprint(drifted, SCOPE) },
+      index,
+      SCOPE,
+      new Map(),
+    );
+    expect(probable.verdict).toBe('probable');
+  });
+});

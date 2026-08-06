@@ -9,8 +9,10 @@ import {
   formatMonthKey,
   fromDayNumber,
   isIsoDate,
+  monthEnd,
   monthKey,
   monthRange,
+  monthStart,
   parseStatementDate,
 } from '../src/core/dates';
 
@@ -124,5 +126,26 @@ describe('isIsoDate', () => {
     expect(isIsoDate('2026-02-03')).toBe(true);
     expect(isIsoDate('2026-02-30')).toBe(false);
     expect(isIsoDate('03/02/2026')).toBe(false);
+  });
+});
+
+describe('month bounds', () => {
+  it('returns the first and last day of a month', () => {
+    expect(monthStart('2026-03')).toBe('2026-03-01');
+    expect(monthEnd('2026-03')).toBe('2026-03-31');
+  });
+
+  it('handles the short months', () => {
+    expect(monthEnd('2026-04')).toBe('2026-04-30');
+    expect(monthEnd('2026-02')).toBe('2026-02-28');
+  });
+
+  it('handles a leap February', () => {
+    expect(monthEnd('2028-02')).toBe('2028-02-29');
+  });
+
+  it('bounds the window a dashboard asks the host for', () => {
+    expect(monthStart(addMonthsToKey('2026-03', -13))).toBe('2025-02-01');
+    expect(monthEnd('2026-03')).toBe('2026-03-31');
   });
 });

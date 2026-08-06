@@ -210,6 +210,18 @@ export function addMonthsToKey(key: MonthKey, months: number): MonthKey {
   return monthKeyOf(Math.floor(total / 12), (total % 12) + 1);
 }
 
+/** First calendar day of a `YYYY-MM` bucket. */
+export function monthStart(key: MonthKey): IsoDate {
+  const [y, m] = key.split('-').map(Number) as [number, number];
+  return toIsoDate(y, m, 1);
+}
+
+/** Last calendar day of a `YYYY-MM` bucket, leap years included. */
+export function monthEnd(key: MonthKey): IsoDate {
+  const [y, m] = key.split('-').map(Number) as [number, number];
+  return toIsoDate(y, m, daysInMonth(y, m));
+}
+
 export function monthRange(from: MonthKey, to: MonthKey): MonthKey[] {
   const out: MonthKey[] = [];
   let cursor = from;

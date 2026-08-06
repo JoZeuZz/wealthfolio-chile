@@ -12,10 +12,9 @@ import {
 } from '@wealthfolio/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { categoryPath } from '../../core/categories/defaults';
-import { addMonthsToKey, formatMonthKey, monthKey } from '../../core/dates';
+import { addMonthsToKey, formatMonthKey, monthEnd, monthKey, monthStart } from '../../core/dates';
 import { buildInsights, type Insight } from '../../core/insights/rules';
 import { buildInstallmentPlans, buildOutlook } from '../../core/installments/plans';
-import { readChileMetadata } from '../../core/mapping/activities';
 import {
   findRecurringCharges,
   summarizeMonth,
@@ -23,11 +22,10 @@ import {
   totalsByMerchant,
 } from '../../core/metrics/monthly';
 import { formatCLP } from '../../core/money';
-import { Confidence, Direction, TransactionKind } from '../../core/model/kinds';
+import { Confidence } from '../../core/model/kinds';
 import type { NormalizedTransaction } from '../../core/model/transaction';
-import { normalizeDescription } from '../../core/text';
-import { toMoney } from '../../services/activity-index';
 import { ImportHistory, type ImportRun } from '../../services/import-history';
+import { loadImportedTransactions } from '../../services/imported-transactions';
 import { useAddon } from '../context';
 import { Amount, Stat } from '../components/Money';
 
@@ -40,13 +38,23 @@ import { Amount, Stat } from '../components/Money';
  * time. Everything shown is arithmetic over that data — no estimates, no model.
  */
 
-const PAGE_SIZE = 500;
-const MAX_PAGES = 12;
+/**
+ * Months of history loaded behind the selected month.
+ *
+ * Everything the panel computes needs at most this much context: the month
+ * itself, the previous month for the comparisons, and a year of history for the
+ * recurring-charge and installment detection. Asking the host for exactly that
+ * window — rather than paging blindly through the whole activity table until an
+ * arbitrary cap — is what keeps the figures correct as an account grows.
+ */
+const HISTORY_MONTHS = 13;
 
 interface DashboardData {
   transactions: NormalizedTransaction[];
   runs: ImportRun[];
   currency: string;
+  /** True when the host held more rows in the window than we could read. */
+  truncated: boolean;
 }
 
 export function DashboardPage() {
@@ -61,16 +69,20 @@ export function DashboardPage() {
     void (async () => {
       setLoading(true);
       try {
-        const [transactions, runs, settings] = await Promise.all([
-          loadImportedTransactions(ctx),
+        const [loaded, runs, settings] = await Promise.all([
+          loadImportedTransactions(ctx, {
+            fromDate: monthStart(addMonthsToKey(month, -HISTORY_MONTHS)),
+            toDate: monthEnd(month),
+          }),
           ImportHistory.from(ctx).recent(10),
           ctx.api.settings.get().catch(() => undefined),
         ]);
         if (cancelled) return;
         setData({
-          transactions,
+          transactions: loaded.transactions,
           runs,
           currency: settings?.baseCurrency ?? 'CLP',
+          truncated: loaded.truncated,
         });
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -81,7 +93,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [ctx]);
+  }, [ctx, month]);
 
   const view = useMemo(() => {
     if (!data) return undefined;
@@ -115,6 +127,17 @@ export function DashboardPage() {
         <Alert variant="destructive">
           <AlertTitle>No se pudieron cargar los datos</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {data?.truncated ? (
+        <Alert variant="destructive">
+          <AlertTitle>Cifras incompletas</AlertTitle>
+          <AlertDescription>
+            Este período tiene más movimientos de los que se alcanzaron a leer, así que los totales
+            de abajo están por debajo del valor real. Reduce el rango o revisa los movimientos
+            directamente en Wealthfolio.
+          </AlertDescription>
         </Alert>
       ) : null}
 
@@ -426,85 +449,4 @@ function buildView(data: DashboardData, month: string): DashboardView {
   return { summary, categories, merchants, recurring, outlook, insights };
 }
 
-/**
- * Rebuild canonical transactions from the activities this addon imported.
- *
- * Everything needed is in the activity metadata written at import time, so the
- * dashboard reads Wealthfolio's own data rather than a parallel copy — an
- * activity the user deletes by hand disappears from here too, which is what a
- * person would expect.
- */
-async function loadImportedTransactions(
-  ctx: ReturnType<typeof useAddon>,
-): Promise<NormalizedTransaction[]> {
-  const out: NormalizedTransaction[] = [];
-
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const response = await ctx.api.activities.search(page, PAGE_SIZE, {}, '', {
-      id: 'date',
-      desc: true,
-    });
-
-    for (const activity of response.data) {
-      const metadata = readChileMetadata(activity.metadata);
-      if (!metadata) continue;
-
-      const amount = toMoney(activity.amount, activity.currency);
-      const outgoing = isOutgoing(activity.activityType);
-      const signed = outgoing
-        ? { ...amount, minor: -Math.abs(amount.minor) }
-        : { ...amount, minor: Math.abs(amount.minor) };
-      const description = activity.comment ?? '';
-
-      out.push({
-        sourceInstitution: metadata.inst,
-        sourceParser: metadata.parser,
-        sourceParserVersion: metadata.parserVersion,
-        sourceFileHash: metadata.fileHash,
-        fingerprint: metadata.fp,
-        date: civilDate(activity.date),
-        description,
-        normalizedDescription: normalizeDescription(description),
-        ...(metadata.merchant ? { merchant: metadata.merchant } : {}),
-        amount: signed,
-        direction: outgoing ? Direction.out : Direction.in,
-        kind: (metadata.kind ?? TransactionKind.unknown) as TransactionKind,
-        kindConfidence: Confidence.confirmed,
-        ...(metadata.cat ? { category: metadata.cat } : {}),
-        tags: metadata.tags ?? [],
-        ...(metadata.cuota
-          ? {
-              installment: {
-                current: metadata.cuota.n,
-                total: metadata.cuota.of,
-                confidence: Confidence.confirmed,
-                matchedText: `${metadata.cuota.n}/${metadata.cuota.of}`,
-              },
-            }
-          : {}),
-        warnings: [],
-        rawMetadata: {},
-      });
-    }
-
-    const seen = (page + 1) * PAGE_SIZE;
-    if (response.data.length < PAGE_SIZE || seen >= response.meta.totalRowCount) break;
-  }
-
-  return out;
-}
-
-/** Read the calendar day out of whatever shape the host returns. */
-function civilDate(value: Date | string): string {
-  return typeof value === 'string' ? value.slice(0, 10) : value.toISOString().slice(0, 10);
-}
-
-function isOutgoing(activityType: string): boolean {
-  return (
-    activityType === 'WITHDRAWAL' ||
-    activityType === 'TRANSFER_OUT' ||
-    activityType === 'FEE' ||
-    activityType === 'TAX'
-  );
-}
 

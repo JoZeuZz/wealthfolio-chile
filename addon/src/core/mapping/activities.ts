@@ -1,7 +1,8 @@
 import type { ActivityCreate, ActivityType } from '@wealthfolio/addon-sdk';
-import { abs, toDecimalString } from '../money';
-import { Direction, TransactionKind } from '../model/kinds';
+import { abs, money, negate, toDecimalString, type Money } from '../money';
+import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { EnrichedTransaction, NormalizedTransaction } from '../model/transaction';
+import { normalizeDescription } from '../text';
 
 /**
  * The boundary between our model and Wealthfolio's.
@@ -190,6 +191,105 @@ function buildComment(transaction: NormalizedTransaction): string {
   return parts.join(' ').slice(0, 500);
 }
 
+/**
+ * ── The inverse mapping ────────────────────────────────────────────────
+ *
+ * Wealthfolio stores `amount` as an unsigned magnitude and expresses direction
+ * through `activityType`. Our model does the opposite: the sign lives in the
+ * amount. Reading an activity back therefore has to reapply the sign, and it
+ * has to do it *once*, here — a second copy of this table in the dashboard or
+ * the dedupe index is how `+85400` ends up being compared against `-85400`.
+ */
+
+/** Cash direction a Wealthfolio activity type implies. `0` means "no direction". */
+export type ActivityFlowSign = -1 | 0 | 1;
+
+/**
+ * The subset of `ActivityDetails` the sign rules need.
+ *
+ * Declared structurally rather than importing `ActivityDetails` so a test can
+ * build one by hand, and so nothing outside this file has to know the shape.
+ */
+export interface HostActivityAmount {
+  activityType: string;
+  subtype?: string | null;
+  amount: string | number | null | undefined;
+  currency: string;
+}
+
+/**
+ * Cash-flow sign of a Wealthfolio activity type, from
+ * `docs/activities/activity-types.md` in upstream v3.6.2.
+ *
+ * `SPLIT`, `ADJUSTMENT` and `UNKNOWN` have no automatic cash impact, so they
+ * get `0`: guessing a direction for a row Wealthfolio itself refuses to
+ * classify would put an invented number into the user's totals.
+ */
+export function activityFlowSign(activityType: string): ActivityFlowSign {
+  switch (activityType) {
+    // `CREDIT` covers refunds, rebates and bonuses; all of them increase cash.
+    case 'DEPOSIT':
+    case 'TRANSFER_IN':
+    case 'INTEREST':
+    case 'DIVIDEND':
+    case 'CREDIT':
+    case 'SELL':
+      return 1;
+
+    case 'WITHDRAWAL':
+    case 'TRANSFER_OUT':
+    case 'FEE':
+    case 'TAX':
+    case 'BUY':
+      return -1;
+
+    case 'SPLIT':
+    case 'ADJUSTMENT':
+    case 'UNKNOWN':
+    default:
+      return 0;
+  }
+}
+
+/** `Direction` implied by an activity type, or `undefined` when it implies none. */
+export function activityDirection(activityType: string): Direction | undefined {
+  const flow = activityFlowSign(activityType);
+  if (flow === 0) return undefined;
+  return flow < 0 ? Direction.out : Direction.in;
+}
+
+/**
+ * Parse an amount Wealthfolio returns as a decimal string.
+ *
+ * The string form is authoritative — it is what the backend stores — so the
+ * scale is taken from the digits present rather than assumed per currency.
+ */
+export function parseHostAmount(amount: string | number | null | undefined, currency: string): Money {
+  const text = String(amount ?? '0').trim();
+  const negative = text.startsWith('-');
+  const digits = text.replace(/[^\d.]/g, '');
+  const [whole = '0', fraction = ''] = digits.split('.');
+  const scale = Math.min(6, fraction.length);
+  const minor = Number(`${whole}${fraction.slice(0, scale)}`);
+  if (!Number.isSafeInteger(minor)) return money(0, 0, currency || 'CLP');
+  return money(negative ? -minor : minor, scale, currency || 'CLP');
+}
+
+/**
+ * Rebuild our signed amount from a stored Wealthfolio activity.
+ *
+ * The single source of truth for "what does this activity do to the balance".
+ * When the type carries no direction the stored sign is preserved untouched,
+ * because inventing one would be worse than reporting what the host holds.
+ */
+export function activityDetailsToSignedMoney(activity: HostActivityAmount): Money {
+  const parsed = parseHostAmount(activity.amount, activity.currency);
+  const flow = activityFlowSign(activity.activityType);
+  if (flow === 0) return parsed;
+  const magnitude = abs(parsed);
+  return flow < 0 ? negate(magnitude) : magnitude;
+}
+
 /** Read our metadata back off an activity, if it is one of ours. */
 export function readChileMetadata(
   metadata: Record<string, unknown> | undefined,
@@ -200,4 +300,67 @@ export function readChileMetadata(
   const candidate = raw as Partial<ChileMetadata>;
   if (typeof candidate.fp !== 'string' || candidate.fp === '') return undefined;
   return candidate as ChileMetadata;
+}
+
+/** A stored activity, as much of it as the inverse mapping reads. */
+export interface HostActivity extends HostActivityAmount {
+  id?: string;
+  date: Date | string;
+  comment?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Rebuild a canonical transaction from an activity this addon created.
+ *
+ * Returns `undefined` for anything the addon did not write: without our
+ * metadata there is no kind, no category and no fingerprint, and inventing them
+ * from a comment string would put guesses into the user's reports.
+ */
+export function activityToTransaction(activity: HostActivity): NormalizedTransaction | undefined {
+  const metadata = readChileMetadata(activity.metadata);
+  if (!metadata) return undefined;
+
+  const amount = activityDetailsToSignedMoney(activity);
+  const direction = activityDirection(activity.activityType) ?? directionOfAmount(amount);
+  const description = activity.comment ?? '';
+
+  return {
+    sourceInstitution: metadata.inst,
+    sourceParser: metadata.parser,
+    sourceParserVersion: metadata.parserVersion,
+    sourceFileHash: metadata.fileHash,
+    fingerprint: metadata.fp,
+    date: civilDate(activity.date),
+    description,
+    normalizedDescription: normalizeDescription(description),
+    ...(metadata.merchant ? { merchant: metadata.merchant } : {}),
+    amount,
+    direction,
+    kind: (metadata.kind ?? TransactionKind.unknown) as TransactionKind,
+    kindConfidence: Confidence.confirmed,
+    ...(metadata.cat ? { category: metadata.cat } : {}),
+    tags: metadata.tags ?? [],
+    ...(metadata.cuota
+      ? {
+          installment: {
+            current: metadata.cuota.n,
+            total: metadata.cuota.of,
+            confidence: Confidence.confirmed,
+            matchedText: `${metadata.cuota.n}/${metadata.cuota.of}`,
+          },
+        }
+      : {}),
+    warnings: [],
+    rawMetadata: {},
+  };
+}
+
+function directionOfAmount(amount: Money): Direction {
+  return amount.minor < 0 ? Direction.out : Direction.in;
+}
+
+/** Read the calendar day out of whatever shape the host returns. */
+function civilDate(value: Date | string): string {
+  return typeof value === 'string' ? value.slice(0, 10) : value.toISOString().slice(0, 10);
 }
