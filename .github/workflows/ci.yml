@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# No secrets are used anywhere in this workflow. The project handles financial
+# data, so CI is deliberately kept to build and test with read-only permissions.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: typecheck · lint · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: addon
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@10.33.4 --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches upstream's .node-version.
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: addon/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+
+      - name: Check the bundle is a single self-contained file
+        run: |
+          test -f dist/addon.js
+          # The host loads dist/addon.js as one blob module; a split chunk would
+          # have no resolvable URL at runtime.
+          count=$(find dist -name '*.js' | wc -l)
+          test "$count" -eq 1 || { echo "El build produjo $count archivos JS, se esperaba 1"; exit 1; }
+
+  privacy:
+    name: no real statements committed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse tracked files under samples/private
+        run: |
+          tracked=$(git ls-files samples/private | wc -l)
+          if [ "$tracked" -ne 0 ]; then
+            echo "::error::Hay archivos versionados en samples/private/ — nunca deben subirse cartolas reales."
+            git ls-files samples/private
+            exit 1
+          fi
+
+      - name: Refuse anything that looks like a RUT in fixtures
+        run: |
+          # Synthetic fixtures must not carry a real national ID by accident.
+          if grep -rEn '\b[0-9]{1,2}\.[0-9]{3}\.[0-9]{3}-[0-9kK]\b' samples/synthetic addon/tests 2>/dev/null; then
+            echo "::error::Se encontró algo con forma de RUT en fixtures sintéticos."
+            exit 1
+          fi
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: addon
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable && corepack prepare pnpm@10.33.4 --activate
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: addon/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # Advisory: a new CVE in a transitive dependency should be visible without
+      # blocking an unrelated pull request.
+      - run: pnpm audit --audit-level high || true
