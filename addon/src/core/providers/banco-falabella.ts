@@ -1,0 +1,71 @@
+import { StatementProduct } from '../model/statement';
+import { ColumnRole } from '../parsing/columns';
+import type { StatementProfile } from '../parsing/profile';
+import { createProfileParser } from './profile-parser';
+import type { StatementParser } from './parser';
+
+/**
+ * Banco Falabella and the CMR card.
+ *
+ * The CMR statement is where installments matter most: retail in Chile sells
+ * almost everything "en cuotas", so a CMR import that misses the cuota markers
+ * produces a wildly wrong picture of what is actually committed. The profile
+ * therefore maps a dedicated installment column when one exists, and the
+ * description detector covers the case where it does not.
+ *
+ * Marked `pending-real-sample`; see docs/BANK_FORMATS.md.
+ */
+
+export const FALABELLA_CARD: StatementProfile = {
+  institution: 'banco-falabella',
+  institutionLabel: 'Banco Falabella / CMR — tarjeta',
+  parserId: 'banco-falabella.cmr',
+  parserVersion: '0.1.0',
+  product: StatementProduct.credit_card,
+  defaultCurrency: 'CLP',
+  numberFormat: 'es-CL',
+  dateOrder: 'DMY',
+  amountSign: 'debit-positive',
+  columnSynonyms: {
+    [ColumnRole.date]: ['Fecha', 'Fecha Compra', 'Fecha Transaccion'],
+    [ColumnRole.description]: ['Descripcion', 'Comercio', 'Detalle Movimiento'],
+    [ColumnRole.amount]: ['Monto', 'Monto Total', 'Valor Cuota', 'Monto Operacion'],
+    [ColumnRole.installment]: ['Cuotas', 'Cuota', 'N Cuotas'],
+    [ColumnRole.card]: ['Tarjeta', 'N Tarjeta'],
+    [ColumnRole.category]: ['Rubro', 'Categoria'],
+  },
+  ignoreRowPatterns: [/^TOTAL/i, /^CUPO/i, /^PAGO\s+M[IÍ]NIMO/i],
+  validationStatus: 'pending-real-sample',
+  validationNotes:
+    'Falta un estado de cuenta real de CMR. Hay que confirmar si "Monto" es el valor de la cuota o el total de la compra — de eso depende todo el cálculo de deuda comprometida — y cómo se marcan los pagos y las anulaciones.',
+};
+
+export const FALABELLA_ACCOUNT: StatementProfile = {
+  institution: 'banco-falabella',
+  institutionLabel: 'Banco Falabella — cuenta corriente',
+  parserId: 'banco-falabella.cuenta',
+  parserVersion: '0.1.0',
+  product: StatementProduct.checking,
+  defaultCurrency: 'CLP',
+  numberFormat: 'es-CL',
+  dateOrder: 'DMY',
+  amountSign: 'signed',
+  columnSynonyms: {
+    [ColumnRole.debit]: ['Cargo', 'Cargos'],
+    [ColumnRole.credit]: ['Abono', 'Abonos'],
+  },
+  validationStatus: 'pending-real-sample',
+  validationNotes: 'Falta una cartola real de cuenta corriente Falabella.',
+};
+
+export const falabellaCardParser: StatementParser = createProfileParser(FALABELLA_CARD, {
+  strongMarkers: [/\bCMR\b/i, /FALABELLA/i],
+  weakMarkers: [/CUOTAS?\s+SIN\s+INTER[EÉ]S/i, /\bSEGURO\s+CMR\b/i, /AVANCE\s+EN\s+EFECTIVO/i],
+  fileNamePatterns: [/cmr/i, /falabella/i, /estado.?cuenta/i],
+});
+
+export const falabellaAccountParser: StatementParser = createProfileParser(FALABELLA_ACCOUNT, {
+  strongMarkers: [/BANCO\s+FALABELLA/i],
+  weakMarkers: [/CUENTA\s+CORRIENTE/i, /\bCARGO\b/i, /\bABONO\b/i],
+  fileNamePatterns: [/falabella/i, /cartola/i],
+});
