@@ -17,17 +17,16 @@ import { categoryPath } from '../../core/categories/defaults';
 import { buildDuplicateIndex } from '../../core/dedupe/classify';
 import { formatIsoDate } from '../../core/dates';
 import { maskAccountNumber } from '../../core/privacy';
-import {
-  prepareImport,
-  setRowSelection,
-  type PreparedImport,
-  type PreviewRow,
-} from '../../core/pipeline';
+import { setRowSelection, type PreparedImport, type PreviewRow } from '../../core/pipeline';
 import { listInstitutions, PARSERS } from '../../core/providers/registry';
 import type { SourceFile } from '../../core/parsing/tabular';
-import { loadDuplicateIndex } from '../../services/activity-index';
-import { runImport } from '../../services/import-runner';
-import { loadEffectiveRules, loadSettings } from '../../services/settings';
+import {
+  prepareImportFromHost,
+  type DuplicateIndexStatus,
+  type PreparationResult,
+} from '../../services/import-preparation';
+import { runImport, type ImportBreakdown } from '../../services/import-runner';
+import { loadSettings } from '../../services/settings';
 import { useAddon } from '../context';
 import { FileDrop } from '../components/FileDrop';
 import { Amount, Stat } from '../components/Money';
@@ -43,6 +42,12 @@ import { Amount, Stat } from '../components/Money';
 
 type Step = 'file' | 'detect' | 'preview' | 'done';
 
+interface ImportOutcomeView {
+  breakdown: ImportBreakdown;
+  status: 'completed' | 'partial' | 'failed';
+  historyRecorded: boolean;
+}
+
 export function ImportWizardPage() {
   const ctx = useAddon();
 
@@ -51,10 +56,12 @@ export function ImportWizardPage() {
   const [accountId, setAccountId] = useState<string>('');
   const [file, setFile] = useState<SourceFile | undefined>();
   const [parserId, setParserId] = useState<string | undefined>();
-  const [prepared, setPrepared] = useState<PreparedImport | undefined>();
+  const [preparation, setPreparation] = useState<PreparationResult | undefined>();
   const [busy, setBusy] = useState(false);
+  // Reserved for failures that belong to no single stage: loading the account
+  // list, and the write itself. Parsing and deduplication report separately.
   const [error, setError] = useState<string | undefined>();
-  const [result, setResult] = useState<{ imported: number; skipped: number } | undefined>();
+  const [result, setResult] = useState<ImportOutcomeView | undefined>();
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +82,7 @@ export function ImportWizardPage() {
   }, [ctx]);
 
   const account = accounts.find((candidate) => candidate.id === accountId);
+  const prepared = preparation?.prepared;
 
   const analyze = useCallback(
     async (source: SourceFile, chosenParser?: string) => {
@@ -85,28 +93,14 @@ export function ImportWizardPage() {
       setBusy(true);
       setError(undefined);
       try {
-        const [rules, duplicateIndex] = await Promise.all([
-          loadEffectiveRules(ctx.api.storage),
-          loadDuplicateIndex(ctx, { accountId }),
-        ]);
-
-        const next = prepareImport({
+        const outcome = await prepareImportFromHost(ctx, {
           file: source,
           accountId,
           ...(account?.name ? { accountName: account.name } : {}),
           ...(chosenParser ? { parserId: chosenParser } : {}),
-          rules,
-          duplicateIndex,
         });
-
-        setPrepared(next);
-        setParserId(next.parser.id);
-        setStep('detect');
-      } catch (err) {
-        setPrepared(undefined);
-        setError(messageOf(err));
-        // Falling back to an empty index keeps the manual picker reachable even
-        // when reading existing activities failed.
+        setPreparation(outcome);
+        if (outcome.prepared) setParserId(outcome.prepared.parser.id);
         setStep('detect');
       } finally {
         setBusy(false);
@@ -132,8 +126,14 @@ export function ImportWizardPage() {
     [analyze, file],
   );
 
+  /** Re-run the whole preparation, which is also how "Reintentar" recovers. */
+  const retry = useCallback(() => {
+    if (!file) return;
+    void analyze(file, parserId);
+  }, [analyze, file, parserId]);
+
   const confirm = useCallback(async () => {
-    if (!prepared || !account) return;
+    if (!prepared || !account || !preparation?.canImport) return;
     setBusy(true);
     setError(undefined);
     try {
@@ -145,24 +145,39 @@ export function ImportWizardPage() {
         accountName: account.name,
         verboseLogging: settings.verboseLogging,
       });
+
       setResult({
-        imported: outcome.createdCount,
-        skipped: prepared.rows.length - outcome.createdCount,
+        breakdown: outcome.breakdown,
+        status: outcome.status,
+        historyRecorded: outcome.historyRecorded,
       });
       if (outcome.errors.length > 0) setError(outcome.errors.join(' · '));
       setStep('done');
-      ctx.api.toast.success(`Se importaron ${outcome.createdCount} movimientos.`);
+
+      // A partial or failed run never gets the success toast: a green message
+      // over a half-written import is how a person stops checking.
+      if (outcome.status === 'completed') {
+        ctx.api.toast.success(`Se importaron ${outcome.breakdown.created} movimientos.`);
+      } else if (outcome.status === 'partial') {
+        ctx.api.toast.warning(
+          `Importación parcial: ${outcome.breakdown.created} de ${outcome.breakdown.selected} movimientos. ` +
+            `${outcome.breakdown.failed} no se pudieron guardar.`,
+        );
+      } else {
+        ctx.api.toast.error('No se pudo guardar ningún movimiento.');
+      }
     } catch (err) {
       setError(messageOf(err));
+      ctx.api.toast.error('No se pudo completar la importación.');
     } finally {
       setBusy(false);
     }
-  }, [account, ctx, prepared]);
+  }, [account, ctx, prepared, preparation?.canImport]);
 
   const restart = () => {
     setStep('file');
     setFile(undefined);
-    setPrepared(undefined);
+    setPreparation(undefined);
     setParserId(undefined);
     setResult(undefined);
     setError(undefined);
@@ -184,6 +199,33 @@ export function ImportWizardPage() {
           <AlertTitle>No se pudo continuar</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
+      ) : null}
+
+      {preparation?.parse.status === 'error' ? (
+        <Alert variant="destructive">
+          <AlertTitle>No se pudo leer el archivo</AlertTitle>
+          <AlertDescription className="flex flex-col items-start gap-2">
+            <span>{preparation.parse.message}</span>
+            <Button size="sm" variant="outline" onClick={retry} disabled={busy || !file}>
+              Reintentar
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {preparation?.rules.status === 'fallback' ? (
+        <Alert>
+          <AlertTitle>Reglas no disponibles</AlertTitle>
+          <AlertDescription>{preparation.rules.message}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {preparation && preparation.duplicateIndex.status === 'unavailable' && step !== 'done' ? (
+        <DedupeUnavailableAlert
+          status={preparation.duplicateIndex}
+          onRetry={retry}
+          busy={busy || !file}
+        />
       ) : null}
 
       {step === 'file' ? (
@@ -226,8 +268,14 @@ export function ImportWizardPage() {
       {step === 'preview' && prepared ? (
         <PreviewStep
           prepared={prepared}
+          dedupeAvailable={preparation?.duplicateIndex.status === 'ready'}
+          canImport={preparation?.canImport ?? false}
           onToggle={(fingerprint, willImport) =>
-            setPrepared(setRowSelection(prepared, fingerprint, willImport))
+            setPreparation((current) =>
+              current?.prepared
+                ? { ...current, prepared: setRowSelection(current.prepared, fingerprint, willImport) }
+                : current,
+            )
           }
           onBack={() => setStep('detect')}
           onConfirm={confirm}
@@ -236,30 +284,124 @@ export function ImportWizardPage() {
       ) : null}
 
       {step === 'done' && result ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Importación completada</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <p className="text-sm">
-              Se importaron <strong>{result.imported}</strong> movimientos.{' '}
-              {result.skipped > 0 ? `Se omitieron ${result.skipped}.` : null}
-            </p>
-            <p className="text-muted-foreground text-sm">
-              Si vuelves a importar el mismo archivo no se duplicará ningún movimiento.
-            </p>
-            <div className="flex gap-2">
-              <Button onClick={restart}>Importar otra cartola</Button>
-              <Button
-                variant="outline"
-                onClick={() => ctx.api.navigation.navigate('/addons/wealthfolio-chile')}
-              >
-                Ir al panel
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <ResultStep
+          result={result}
+          onRestart={restart}
+          onGoToDashboard={() => ctx.api.navigation.navigate('/addons/wealthfolio-chile')}
+        />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * The blocking case: the preview is real, but we could not check it against
+ * what is already stored, so confirming stays out of reach until a retry works.
+ */
+function DedupeUnavailableAlert({
+  status,
+  onRetry,
+  busy,
+}: {
+  status: Extract<DuplicateIndexStatus, { status: 'unavailable' }>;
+  onRetry: () => void;
+  busy: boolean;
+}) {
+  return (
+    <Alert variant="destructive">
+      <AlertTitle>No se puede comprobar si hay duplicados</AlertTitle>
+      <AlertDescription className="flex flex-col items-start gap-2">
+        <span>{status.message}</span>
+        <span>
+          Puedes revisar la vista previa, pero importar queda deshabilitado: sin esa comprobación
+          un movimiento ya registrado se guardaría dos veces.
+        </span>
+        <Button size="sm" variant="outline" onClick={onRetry} disabled={busy}>
+          Reintentar
+        </Button>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function ResultStep({
+  result,
+  onRestart,
+  onGoToDashboard,
+}: {
+  result: ImportOutcomeView;
+  onRestart: () => void;
+  onGoToDashboard: () => void;
+}) {
+  const { breakdown, status } = result;
+  const title =
+    status === 'completed'
+      ? 'Importación completada'
+      : status === 'partial'
+        ? 'Importación parcial'
+        : 'No se importó nada';
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {status !== 'completed' ? (
+          <Alert variant="destructive">
+            <AlertTitle>
+              {status === 'partial'
+                ? `${breakdown.failed} movimiento(s) no se guardaron`
+                : 'Wealthfolio rechazó la escritura'}
+            </AlertTitle>
+            <AlertDescription>
+              Revisa el detalle de abajo y vuelve a importar el archivo: los movimientos que sí se
+              guardaron se detectarán como duplicados y no se repetirán.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          <Counter label="Detectados en el archivo" value={breakdown.detected} />
+          <Counter label="Seleccionados" value={breakdown.selected} />
+          <Counter label="Creados en Wealthfolio" value={breakdown.created} />
+          <Counter label="Fallaron al escribir" value={breakdown.failed} />
+          <Counter label="Duplicados exactos" value={breakdown.skippedExactDuplicate} />
+          <Counter label="Posibles duplicados" value={breakdown.skippedProbableDuplicate} />
+          <Counter label="Ignorados por regla" value={breakdown.skippedByRule} />
+          <Counter label="Desmarcados por ti" value={breakdown.skippedByUser} />
+        </dl>
+
+        {!result.historyRecorded ? (
+          <Alert>
+            <AlertTitle>El historial no se pudo actualizar</AlertTitle>
+            <AlertDescription>
+              Los movimientos sí quedaron guardados en Wealthfolio, pero esta importación no
+              aparecerá en el historial del addon.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        <p className="text-muted-foreground text-sm">
+          Si vuelves a importar el mismo archivo no se duplicará ningún movimiento.
+        </p>
+
+        <div className="flex gap-2">
+          <Button onClick={onRestart}>Importar otra cartola</Button>
+          <Button variant="outline" onClick={onGoToDashboard}>
+            Ir al panel
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Counter({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex flex-col">
+      <dt className="text-muted-foreground text-xs uppercase tracking-wide">{label}</dt>
+      <dd className="text-base font-medium tabular-nums">{value}</dd>
     </div>
   );
 }
@@ -411,12 +553,16 @@ function DetectionStep({
 
 function PreviewStep({
   prepared,
+  dedupeAvailable,
+  canImport,
   onToggle,
   onBack,
   onConfirm,
   busy,
 }: {
   prepared: PreparedImport;
+  dedupeAvailable: boolean;
+  canImport: boolean;
   onToggle: (fingerprint: string, willImport: boolean) => void;
   onBack: () => void;
   onConfirm: () => void;
@@ -517,20 +663,30 @@ function PreviewStep({
             </thead>
             <tbody>
               {rows.map((row) => (
-                <PreviewRowView key={row.transaction.fingerprint} row={row} onToggle={onToggle} />
+                <PreviewRowView
+                  key={row.transaction.fingerprint}
+                  row={row}
+                  dedupeAvailable={dedupeAvailable}
+                  onToggle={onToggle}
+                />
               ))}
             </tbody>
           </table>
         </CardContent>
       </Card>
 
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={onConfirm} disabled={busy || totals.toImport === 0}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={onConfirm} disabled={busy || totals.toImport === 0 || !canImport}>
           {busy ? 'Importando…' : `Confirmar e importar ${totals.toImport} movimientos`}
         </Button>
         <Button variant="outline" onClick={onBack} disabled={busy}>
           Volver
         </Button>
+        {!canImport ? (
+          <span className="text-muted-foreground text-xs">
+            Importar está deshabilitado hasta poder comprobar los movimientos ya registrados.
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -538,9 +694,11 @@ function PreviewStep({
 
 function PreviewRowView({
   row,
+  dedupeAvailable,
   onToggle,
 }: {
   row: PreviewRow;
+  dedupeAvailable: boolean;
   onToggle: (fingerprint: string, willImport: boolean) => void;
 }) {
   const { transaction } = row;
@@ -576,7 +734,11 @@ function PreviewRowView({
       </td>
       <td className="text-muted-foreground p-2 text-xs">{categoryPath(transaction.category)}</td>
       <td className="p-2 text-xs">
-        {row.duplicate.verdict === 'exact' ? (
+        {!dedupeAvailable ? (
+          <Badge variant="outline" title="No se pudieron leer los movimientos ya registrados">
+            Sin verificar
+          </Badge>
+        ) : row.duplicate.verdict === 'exact' ? (
           <Badge variant="outline">Duplicado</Badge>
         ) : row.duplicate.verdict === 'probable' ? (
           <Badge variant="outline" title={row.duplicate.reason}>
