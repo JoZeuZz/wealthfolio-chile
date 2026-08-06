@@ -91,8 +91,10 @@ export function ImportHistoryPage() {
                   <th className="p-3">Período</th>
                   <th className="p-3">Parser</th>
                   <th className="p-3 text-right">Detectados</th>
-                  <th className="p-3 text-right">Importados</th>
+                  <th className="p-3 text-right">Creados</th>
+                  <th className="p-3 text-right">Fallidos</th>
                   <th className="p-3 text-right">Duplicados</th>
+                  <th className="p-3 text-right">Ignorados</th>
                   <th className="p-3">Estado</th>
                 </tr>
               </thead>
@@ -138,7 +140,14 @@ export function ImportHistoryPage() {
                     <td className="p-3 text-right tabular-nums">{run.detectedRows}</td>
                     <td className="p-3 text-right tabular-nums">{run.importedRows}</td>
                     <td className="p-3 text-right tabular-nums">
+                      {/* Runs recorded before v0.1.1 did not separate write failures. */}
+                      {run.failedRows ?? '—'}
+                    </td>
+                    <td className="p-3 text-right tabular-nums">
                       {run.exactDuplicates + run.probableDuplicates}
+                    </td>
+                    <td className="p-3 text-right tabular-nums">
+                      {run.ignoredRows + (run.deselectedRows ?? 0)}
                     </td>
                     <td className="p-3">
                       <Badge

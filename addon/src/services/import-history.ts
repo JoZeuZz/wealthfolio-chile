@@ -35,11 +35,23 @@ export interface ImportRun {
   periodFrom?: string;
   periodTo?: string;
 
+  /** Rows the parser produced. */
   detectedRows: number;
+  /** Rows the user approved. Absent on runs recorded before v0.1.1. */
+  selectedRows?: number;
+  /** Rows Wealthfolio confirmed it created. */
   importedRows: number;
+  /** Approved rows the host did not create. Absent on runs recorded before v0.1.1. */
+  failedRows?: number;
+  /** Skipped because an identical movement was already stored. */
   exactDuplicates: number;
+  /** Skipped because a similar movement was already stored. */
   probableDuplicates: number;
+  /** Skipped by an `ignore` rule. */
   ignoredRows: number;
+  /** Unticked by the user in the preview. Absent on runs recorded before v0.1.1. */
+  deselectedRows?: number;
+  /** Rows the validator flagged as unreadable. Not a skip reason on its own. */
   errorRows: number;
 
   status: 'completed' | 'partial' | 'failed';
