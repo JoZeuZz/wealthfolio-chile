@@ -1,0 +1,26 @@
+# Development overlay.
+#
+#   docker compose --env-file .env -f compose.yml -f compose.dev.yml up
+#
+# Loosens exactly the settings that make local work painful and nothing else.
+# Never apply this overlay on the machine that holds your real data.
+
+services:
+  wealthfolio:
+    # `ports` is deliberately not overridden here: Compose *appends* list values
+    # across files, so a second entry would collide with the base mapping. To
+    # reach the dev instance from another device, set WF_BIND_ADDR=0.0.0.0 in
+    # `.env` instead.
+    environment:
+      # A local dev instance behind no proxy does not need a login wall.
+      WF_AUTH_REQUIRED: 'false'
+      WF_CORS_ALLOW_ORIGINS: '*'
+      RUST_LOG: '${RUST_LOG:-info}'
+
+    # The addon dev server writes into the mounted addons directory, so the
+    # container must be able to see changes as they land.
+    read_only: false
+
+    healthcheck:
+      interval: 10s
+      start_period: 5s

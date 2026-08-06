@@ -1,0 +1,91 @@
+# Wealthfolio Chile — production stack.
+#
+# This is our own compose file rather than an edit of upstream's: upstream ships
+# `compose.yml` inside its repository, which we track read-only in `.upstream/`.
+# Keeping ours separate means `scripts/update-upstream.sh` can pull a new
+# version without ever touching local configuration.
+#
+#   docker compose --env-file .env up -d
+#
+# Every setting that differs between machines lives in `.env` (see .env.example).
+
+services:
+  wealthfolio:
+    # Pinned on purpose. `latest` turns an unrelated `docker compose up` into an
+    # unplanned upgrade of the app that holds your financial history.
+    # Bump deliberately, with a backup taken first — see scripts/backup.sh.
+    image: wealthfolio/wealthfolio:${WF_VERSION:?Set WF_VERSION, e.g. v3.6.2}
+    container_name: wealthfolio
+    restart: unless-stopped
+
+    # Bound to loopback by default. Expose it through a reverse proxy with TLS
+    # rather than publishing this port to the LAN — the app holds bank data.
+    ports:
+      - '${WF_BIND_ADDR:-127.0.0.1}:${WF_PORT:-8088}:8088'
+
+    volumes:
+      - wealthfolio-data:/data
+      # Sideloaded addons, including this project's build output.
+      - ${WF_ADDONS_DIR:-./addons}:/data/addons
+
+    environment:
+      WF_LISTEN_ADDR: '0.0.0.0:8088'
+      WF_DB_PATH: '/data/wealthfolio.db'
+      WF_ADDONS_DIR: '/data/addons'
+
+      # Required. Generate with: openssl rand -base64 32
+      WF_SECRET_KEY: '${WF_SECRET_KEY:?Set WF_SECRET_KEY}'
+
+      # Argon2id PHC hash of the login password. Compose interpolates `$`, so
+      # single-quote the value in .env: WF_AUTH_PASSWORD_HASH='$argon2id$v=19$...'
+      WF_AUTH_PASSWORD_HASH: '${WF_AUTH_PASSWORD_HASH:-}'
+      WF_AUTH_REQUIRED: '${WF_AUTH_REQUIRED:-true}'
+      WF_AUTH_TOKEN_TTL_MINUTES: '${WF_AUTH_TOKEN_TTL_MINUTES:-60}'
+
+      # Must match the origin the browser uses, e.g. https://wealthfolio.casa.lan
+      WF_CORS_ALLOW_ORIGINS: '${WF_CORS_ALLOW_ORIGINS:-}'
+      WF_REQUEST_TIMEOUT_MS: '${WF_REQUEST_TIMEOUT_MS:-30000}'
+
+      # Off unless you actually want external AI agents reading your finances.
+      WF_MCP_ENABLED: '${WF_MCP_ENABLED:-false}'
+
+      TZ: '${TZ:-America/Santiago}'
+
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--quiet',
+          '--tries=1',
+          '--spider',
+          'http://127.0.0.1:8088/api/v1/healthz',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    # The image already runs as UID/GID 1000; these harden it further.
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+
+    deploy:
+      resources:
+        limits:
+          memory: ${WF_MEMORY_LIMIT:-768M}
+        reservations:
+          memory: 128M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  wealthfolio-data:
+    driver: local
