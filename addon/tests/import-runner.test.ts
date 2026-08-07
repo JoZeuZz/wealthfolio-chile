@@ -90,18 +90,15 @@ describe('saveMany', () => {
     });
 
     const firstCreate = host.saveManyCalls[0]?.request.creates?.[0];
-    const metadata = readChileMetadata(
-      firstCreate?.metadata as Record<string, unknown> | undefined,
-    );
+    const metadata = readChileMetadata(firstCreate?.metadata);
 
     expect(metadata?.fp).toBeTruthy();
     expect(metadata?.wfp).toBeTruthy();
     expect(metadata?.inst).toBe(prepared.statement.institution);
     expect(metadata?.parserVersion).toBe(prepared.statement.parserVersion);
     expect(metadata?.runId).toMatch(/^run-/);
-    expect(
-      (firstCreate?.metadata as Record<string, unknown>)[METADATA_NAMESPACE],
-    ).toBeDefined();
+    expect(typeof firstCreate?.metadata).toBe('string');
+    expect(JSON.parse(firstCreate?.metadata as string)[METADATA_NAMESPACE]).toBeDefined();
   });
 
   it('stamps every row of a run with the same run id', async () => {
@@ -116,10 +113,7 @@ describe('saveMany', () => {
     const runIds = new Set(
       host.saveManyCalls
         .flatMap((call) => call.request.creates ?? [])
-        .map(
-          (create) =>
-            readChileMetadata(create.metadata as Record<string, unknown> | undefined)?.runId,
-        ),
+        .map((create) => readChileMetadata(create.metadata)?.runId),
     );
 
     expect(runIds.size).toBe(1);

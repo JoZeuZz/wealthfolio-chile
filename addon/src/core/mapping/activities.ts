@@ -132,7 +132,11 @@ export function toActivityCreate(
     amount: toDecimalString(magnitude),
     currency: transaction.amount.currency,
     comment: buildComment(transaction),
-    metadata: { [METADATA_NAMESPACE]: metadata },
+    // A JSON *string*, not an object. `NewActivity.metadata` is `Option<String>`
+    // in the v3.6.2 backend, so an object costs the whole batch a 422 before a
+    // single row is written. Reads are asymmetric — `ActivityDetails.metadata`
+    // comes back already parsed — which is why `readChileMetadata` takes both.
+    metadata: JSON.stringify({ [METADATA_NAMESPACE]: metadata }),
   };
 }
 
@@ -247,9 +251,10 @@ export interface HostActivityAmount {
    * The activity's metadata blob, when the host hands one back.
    *
    * Optional because a caller may only have the amount fields, but it is what
-   * lets a directionless type recover the sign it was written with.
+   * lets a directionless type recover the sign it was written with. Either
+   * shape: parsed from `activities.search`, still a JSON string from a create.
    */
-  metadata?: Record<string, unknown>;
+  metadata?: string | Record<string, unknown>;
 }
 
 /**
@@ -300,7 +305,9 @@ export function activityDirection(activityType: string): Direction | undefined {
  * Validated rather than trusted: metadata is JSON that survived a round trip
  * through the host's database and could have been edited by anything.
  */
-function recordedDirection(metadata: Record<string, unknown> | undefined): Direction | undefined {
+function recordedDirection(
+  metadata: string | Record<string, unknown> | undefined,
+): Direction | undefined {
   const dir = readChileMetadata(metadata)?.dir;
   return dir === Direction.in || dir === Direction.out ? dir : undefined;
 }
@@ -361,16 +368,35 @@ export function activityDetailsToSignedMoney(activity: HostActivityAmount): Mone
   return direction === Direction.out ? negate(magnitude) : magnitude;
 }
 
-/** Read our metadata back off an activity, if it is one of ours. */
+/**
+ * Read our metadata back off an activity, if it is one of ours.
+ *
+ * Accepts both shapes on purpose. `activities.search` returns metadata parsed,
+ * but the same blob is a JSON string on the way in and in anything that echoes
+ * a create back, and a reader that only understood one of the two would decide
+ * a movement is not ours purely because of which side of the wire it came from.
+ */
 export function readChileMetadata(
-  metadata: Record<string, unknown> | undefined,
+  metadata: string | Record<string, unknown> | undefined,
 ): ChileMetadata | undefined {
   if (!metadata) return undefined;
-  const raw = metadata[METADATA_NAMESPACE];
+  const parsed = typeof metadata === 'string' ? parseMetadataJson(metadata) : metadata;
+  if (!parsed) return undefined;
+  const raw = parsed[METADATA_NAMESPACE];
   if (!raw || typeof raw !== 'object') return undefined;
   const candidate = raw as Partial<ChileMetadata>;
   if (typeof candidate.fp !== 'string' || candidate.fp === '') return undefined;
   return candidate as ChileMetadata;
+}
+
+/** A metadata string the host never wrote is not an error — it is simply not ours. */
+function parseMetadataJson(metadata: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(metadata);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** A stored activity, as much of it as the inverse mapping reads. */

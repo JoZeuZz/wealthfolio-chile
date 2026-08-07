@@ -48,7 +48,9 @@ function roundTrip(transaction: NormalizedTransaction) {
     currency: create.currency ?? 'CLP',
     date: String(create.activityDate),
     comment: create.comment ?? '',
-    metadata: (create.metadata as Record<string, ChileMetadata>)['wealthfolioChile'] as ChileMetadata,
+    // The host takes a JSON string and gives back a parsed object; the stub has
+    // to make the same turn or these tests stop resembling the round trip.
+    metadata: readChileMetadata(create.metadata) as ChileMetadata,
   });
 
   return { create, stored, reconstructed: activityDetailsToSignedMoney(stored) };
@@ -87,6 +89,47 @@ describe('activity flow sign', () => {
 });
 
 /**
+ * Observed against a real Wealthfolio v3.6.2 container on 2026-08-07.
+ *
+ * `NewActivity.metadata` on the Rust side is `Option<String>`, so an object
+ * loses the whole request to a 422 before a single row is written — while
+ * `ActivityDetails.metadata` comes *back* as a parsed object. The asymmetry is
+ * the host's, and this test is the only thing standing between us and shipping
+ * an import that cannot write anything.
+ */
+describe('the shape the host accepts for metadata', () => {
+  it('serialises metadata to a JSON string on the way out', () => {
+    const { create } = roundTrip(
+      makeTransaction({
+        date: '2026-03-01',
+        amount: -4_500,
+        description: 'CARGO SIN GLOSA',
+        kind: TransactionKind.unknown,
+        direction: Direction.out,
+      }),
+    );
+
+    expect(typeof create.metadata).toBe('string');
+    expect(JSON.parse(create.metadata as string)).toHaveProperty('wealthfolioChile.fp');
+  });
+
+  it('reads metadata back whether the host hands over a string or an object', () => {
+    const { create } = roundTrip(
+      makeTransaction({ date: '2026-03-01', amount: -4_500, kind: TransactionKind.unknown }),
+    );
+    const asString = create.metadata as string;
+    const asObject = JSON.parse(asString) as Record<string, unknown>;
+
+    expect(readChileMetadata(asString)?.fp).toBe(readChileMetadata(asObject)?.fp);
+    expect(readChileMetadata(asString)?.v).toBe(METADATA_VERSION);
+  });
+
+  it('treats a metadata string that is not JSON as not ours', () => {
+    expect(readChileMetadata('no soy json')).toBeUndefined();
+  });
+});
+
+/**
  * The directionless types.
  *
  * `UNKNOWN` is the one that bit us: `toActivityCreate()` writes the magnitude,
@@ -106,7 +149,7 @@ describe('direction of a type Wealthfolio does not classify', () => {
     });
 
     const { create } = roundTrip(outgoing);
-    const metadata = readChileMetadata(create.metadata as Record<string, unknown>);
+    const metadata = readChileMetadata(create.metadata);
 
     expect(create.activityType).toBe('UNKNOWN');
     expect(String(create.amount)).toBe('4500');
