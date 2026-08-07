@@ -6,8 +6,10 @@ import {
   activityDirection,
   activityFlowSign,
   activityToTransaction,
+  METADATA_VERSION,
   parseHostAmount,
   readChileMetadata,
+  resolveActivityDirection,
   toActivityCreate,
   type ChileMetadata,
 } from '../src/core/mapping/activities';
@@ -81,6 +83,160 @@ describe('activity flow sign', () => {
   it('keeps whatever sign the host stored when the type carries no direction', () => {
     const stored = activityStub({ activityType: 'UNKNOWN', amount: '-4500', date: '2026-03-01' });
     expect(activityDetailsToSignedMoney(stored)).toEqual(money(-4500, 0, 'CLP'));
+  });
+});
+
+/**
+ * The directionless types.
+ *
+ * `UNKNOWN` is the one that bit us: `toActivityCreate()` writes the magnitude,
+ * `activityFlowSign('UNKNOWN')` is correctly `0`, and so an outgoing 4.500 came
+ * back as an incoming 4.500. Nothing in the round trip remembered the sign,
+ * which meant the duplicate index compared `+4500` against `-4500` and called
+ * the movement new.
+ */
+describe('direction of a type Wealthfolio does not classify', () => {
+  it('writes the original direction into our metadata', () => {
+    const outgoing = makeTransaction({
+      date: '2026-03-01',
+      amount: -4_500,
+      description: 'CARGO SIN GLOSA',
+      kind: TransactionKind.unknown,
+      direction: Direction.out,
+    });
+
+    const { create } = roundTrip(outgoing);
+    const metadata = readChileMetadata(create.metadata as Record<string, unknown>);
+
+    expect(create.activityType).toBe('UNKNOWN');
+    expect(String(create.amount)).toBe('4500');
+    expect(metadata?.dir).toBe(Direction.out);
+    expect(metadata?.v).toBe(METADATA_VERSION);
+  });
+
+  it('round-trips an outgoing UNKNOWN through a realistic host activity', () => {
+    const outgoing = makeTransaction({
+      date: '2026-03-01',
+      amount: -4_500,
+      description: 'CARGO SIN GLOSA',
+      kind: TransactionKind.unknown,
+      direction: Direction.out,
+    });
+
+    const { stored } = roundTrip(outgoing);
+
+    // What the host actually holds: a magnitude under an UNKNOWN.
+    expect(stored.activityType).toBe('UNKNOWN');
+    expect(stored.amount).toBe('4500');
+
+    const rebuilt = activityToTransaction(stored);
+
+    expect(rebuilt?.kind).toBe(TransactionKind.unknown);
+    expect(rebuilt?.direction).toBe(Direction.out);
+    expect(rebuilt?.amount).toEqual(money(-4_500, 0, 'CLP'));
+  });
+
+  it('round-trips an incoming UNKNOWN', () => {
+    const incoming = makeTransaction({
+      date: '2026-03-01',
+      amount: 4_500,
+      description: 'ABONO SIN GLOSA',
+      kind: TransactionKind.unknown,
+      direction: Direction.in,
+    });
+
+    const { stored } = roundTrip(incoming);
+    expect(stored.amount).toBe('4500');
+
+    const rebuilt = activityToTransaction(stored);
+
+    expect(rebuilt?.kind).toBe(TransactionKind.unknown);
+    expect(rebuilt?.direction).toBe(Direction.in);
+    expect(rebuilt?.amount).toEqual(money(4_500, 0, 'CLP'));
+  });
+
+  it('falls back to the stored sign for a 0.1.1 activity that has no dir', () => {
+    // Exactly what 0.1.0/0.1.1 wrote: metadata v1, no direction recorded.
+    const legacy = activityStub({
+      activityType: 'UNKNOWN',
+      amount: '-4500',
+      date: '2026-03-01',
+      comment: 'CARGO SIN GLOSA',
+      metadata: { v: 1, fp: 'legacy-fp', inst: 'banco-chile', kind: TransactionKind.unknown },
+    });
+
+    expect(activityDetailsToSignedMoney(legacy)).toEqual(money(-4_500, 0, 'CLP'));
+    expect(resolveActivityDirection(legacy)).toBeUndefined();
+
+    const rebuilt = activityToTransaction(legacy);
+    expect(rebuilt?.direction).toBe(Direction.out);
+    expect(rebuilt?.amount).toEqual(money(-4_500, 0, 'CLP'));
+  });
+
+  it('recovers the sign for ADJUSTMENT and SPLIT too, not only UNKNOWN', () => {
+    for (const activityType of ['ADJUSTMENT', 'SPLIT', 'SOMETHING_NEW_UPSTREAM_ADDED']) {
+      const stored = activityStub({
+        activityType,
+        amount: '4500',
+        date: '2026-03-01',
+        metadata: { v: METADATA_VERSION, fp: `fp-${activityType}`, dir: Direction.out },
+      });
+      expect(activityDetailsToSignedMoney(stored)).toEqual(money(-4_500, 0, 'CLP'));
+    }
+  });
+
+  it('ignores a dir it does not recognise', () => {
+    const stored = activityStub({
+      activityType: 'UNKNOWN',
+      amount: '-4500',
+      date: '2026-03-01',
+      metadata: { v: 2, fp: 'weird', dir: 'sideways' as unknown as Direction },
+    });
+
+    expect(resolveActivityDirection(stored)).toBeUndefined();
+    expect(activityDetailsToSignedMoney(stored)).toEqual(money(-4_500, 0, 'CLP'));
+  });
+});
+
+describe('a known activity type outranks our metadata', () => {
+  it('reads a WITHDRAWAL as an outflow even when dir says otherwise', () => {
+    const stored = activityStub({
+      activityType: 'WITHDRAWAL',
+      amount: '4500',
+      date: '2026-03-01',
+      comment: 'GIRO CAJERO',
+      metadata: { v: METADATA_VERSION, fp: 'conflicting', dir: Direction.in },
+    });
+
+    expect(resolveActivityDirection(stored)).toBe(Direction.out);
+    expect(activityDetailsToSignedMoney(stored)).toEqual(money(-4_500, 0, 'CLP'));
+    expect(activityToTransaction(stored)?.direction).toBe(Direction.out);
+    expect(activityToTransaction(stored)?.amount).toEqual(money(-4_500, 0, 'CLP'));
+  });
+
+  it('does the same for every type Wealthfolio gives a direction', () => {
+    const inflow = ['DEPOSIT', 'TRANSFER_IN', 'INTEREST', 'CREDIT', 'DIVIDEND', 'SELL'];
+    const outflow = ['WITHDRAWAL', 'TRANSFER_OUT', 'FEE', 'TAX', 'BUY'];
+
+    for (const activityType of inflow) {
+      const stored = activityStub({
+        activityType,
+        amount: '4500',
+        date: '2026-03-01',
+        metadata: { v: METADATA_VERSION, fp: `in-${activityType}`, dir: Direction.out },
+      });
+      expect(activityDetailsToSignedMoney(stored)).toEqual(money(4_500, 0, 'CLP'));
+    }
+
+    for (const activityType of outflow) {
+      const stored = activityStub({
+        activityType,
+        amount: '4500',
+        date: '2026-03-01',
+        metadata: { v: METADATA_VERSION, fp: `out-${activityType}`, dir: Direction.in },
+      });
+      expect(activityDetailsToSignedMoney(stored)).toEqual(money(-4_500, 0, 'CLP'));
+    }
   });
 });
 

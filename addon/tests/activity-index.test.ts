@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { classifyDuplicate } from '../src/core/dedupe/classify';
 import { computeFingerprint, computeWeakFingerprint } from '../src/core/dedupe/fingerprint';
+import {
+  METADATA_NAMESPACE,
+  toActivityCreate,
+  type ChileMetadata,
+} from '../src/core/mapping/activities';
 import { money } from '../src/core/money';
 import { Direction, TransactionKind } from '../src/core/model/kinds';
+import type { NormalizedTransaction } from '../src/core/model/transaction';
 import {
   activityDateFilters,
   loadDuplicateIndex,
@@ -33,6 +39,29 @@ function ourMetadata(overrides: { fp: string; wfp?: string; kind?: TransactionKi
     runId: 'run-1',
     kind: overrides.kind ?? TransactionKind.expense,
   };
+}
+
+/**
+ * Store a transaction the way the addon really does: through the writer, not by
+ * hand. A stub can agree with a reader that both get the sign wrong.
+ */
+function writeAsAddonWould(transaction: NormalizedTransaction) {
+  const create = toActivityCreate(transaction, {
+    accountId: ACCOUNT,
+    runId: 'run-1',
+    weakFingerprint: computeWeakFingerprint(transaction, SCOPE),
+  });
+
+  return activityStub({
+    accountId: ACCOUNT,
+    activityType: create.activityType,
+    ...(create.subtype ? { subtype: create.subtype } : {}),
+    amount: String(create.amount),
+    currency: create.currency ?? 'CLP',
+    date: String(create.activityDate),
+    comment: create.comment ?? '',
+    metadata: (create.metadata as Record<string, ChileMetadata>)[METADATA_NAMESPACE],
+  });
 }
 
 describe('loadDuplicateIndex', () => {
@@ -298,5 +327,50 @@ describe('end to end: index feeds classification', () => {
       new Map(),
     );
     expect(probable.verdict).toBe('probable');
+  });
+
+  /**
+   * The same path for a row nothing classified.
+   *
+   * Written through the real `toActivityCreate()` rather than a hand-made stub,
+   * because the bug lived precisely in what the writer produces: an outgoing
+   * 4.500 becomes `UNKNOWN` with `amount = 4500`, and before `metadata.dir`
+   * existed the index rebuilt it as `+4500` and matched nothing.
+   */
+  it('flags a drifted re-import of an UNKNOWN outflow as probable', async () => {
+    const source = makeTransaction({
+      date: '2026-03-01',
+      amount: -4_500,
+      description: 'CARGO NO RECONOCIDO 4471',
+      kind: TransactionKind.unknown,
+      direction: Direction.out,
+    });
+    const original = { ...source, fingerprint: computeFingerprint(source, SCOPE) };
+
+    const stored = writeAsAddonWould(original);
+    expect(stored.activityType).toBe('UNKNOWN');
+    expect(stored.amount).toBe('4500');
+
+    const host = fakeHost({ activities: [stored] });
+    const index = await loadDuplicateIndex(host.ctx, { accountId: ACCOUNT });
+
+    expect(index.byFingerprint.get(original.fingerprint)?.amount).toEqual(money(-4_500, 0, 'CLP'));
+
+    // The bank re-exports the same charge with a longer glosa: the exact
+    // fingerprint no longer matches, so only the signed amount can catch it.
+    const reExported = makeTransaction({
+      date: '2026-03-01',
+      amount: -4_500,
+      description: 'CARGO NO RECONOCIDO 4471 REF',
+      kind: TransactionKind.unknown,
+      direction: Direction.out,
+    });
+    const candidate = { ...reExported, fingerprint: computeFingerprint(reExported, SCOPE) };
+    expect(candidate.fingerprint).not.toBe(original.fingerprint);
+
+    const finding = classifyDuplicate(candidate, index, SCOPE, new Map());
+
+    expect(finding.verdict).toBe('probable');
+    expect(finding.existingActivityId).toBe(stored.id);
   });
 });

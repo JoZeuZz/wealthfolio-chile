@@ -213,7 +213,7 @@ positiva (el tipo lleva la dirección) y nuestra metadata bajo la clave
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "fp": "<huella>",
   "wfp": "<huella débil>",
   "inst": "banco-chile",
@@ -222,6 +222,7 @@ positiva (el tipo lleva la dirección) y nuestra metadata bajo la clave
   "fileHash": "<sha256 del archivo>",
   "runId": "run-…",
   "kind": "expense",
+  "dir": "out",
   "cat": "alimentacion.supermercado",
   "merchant": "Lider",
   "cuota": { "n": 2, "of": 6 }
@@ -232,8 +233,32 @@ Se escribe con `activities.saveMany({ creates })` en lotes de 100. Un lote que
 falla se reporta, **no se reintenta**: reintentar una escritura parcialmente
 aplicada es justo como se crean duplicados.
 
+En v3.6.2 `bulk_mutate_activities` valida la petición completa antes de escribir
+y, si algo falla, devuelve `created` vacío sin persistir nada. Por eso **cada
+entrada de `result.errors` corresponde siempre a filas que no se crearon**, y una
+fila mala cuesta su lote entero — que es el costo que acota el tamaño 100.
+
 Al terminar se registra la corrida en el historial y se invalidan las queries de
-`activities` y `portfolio`.
+`activities` y `portfolio`. Ese registro ocurre **después** de la escritura: si
+falla, la importación sigue siendo `completed` y se reporta aparte
+(`historyRecorded: false`), nunca como importación fallida.
+
+### `dir` — la dirección original
+
+Wealthfolio guarda un monto sin signo y expresa la dirección en el
+`activityType`. Para `DEPOSIT`, `WITHDRAWAL`, `TRANSFER_IN`, `TRANSFER_OUT`,
+`FEE`, `TAX`, `INTEREST`, `CREDIT`, `DIVIDEND`, `BUY` y `SELL` eso basta: el tipo
+es la autoridad y **la metadata nunca puede contradecirlo**.
+
+Pero `UNKNOWN`, `ADJUSTMENT`, `SPLIT` y cualquier tipo futuro no llevan dirección
+semántica. Un cargo `unknown / out / -4500` se escribía como `UNKNOWN` con monto
+`+4500` y al releerlo volvía como `in / +4500`: el mapping no era reversible y el
+índice de duplicados comparaba `+4500` contra `-4500` sin encontrar nada.
+
+Desde `v: 2` la metadata guarda `dir` (`"in"` | `"out"`) y la lectura la usa
+**sólo** cuando el tipo del host no dice nada. Una actividad de 0.1.0/0.1.1 sin
+`dir` conserva el comportamiento anterior: se respeta el signo tal como el host
+lo tenga almacenado.
 
 ---
 

@@ -27,9 +27,24 @@ import { normalizeDescription } from '../text';
 /** Namespace for our metadata inside a Wealthfolio activity. */
 export const METADATA_NAMESPACE = 'wealthfolioChile';
 
+/**
+ * Schema version of the metadata blob we write.
+ *
+ * - `1` — 0.1.0 and 0.1.1. No `dir`.
+ * - `2` — records `dir`, the direction the source row carried. Needed because
+ *   `UNKNOWN` (and every other activity type Wealthfolio gives no cash
+ *   direction) would otherwise come back as an inflow: we write the magnitude,
+ *   the host stores it unsigned, and nothing on the way back remembers that the
+ *   money left the account.
+ *
+ * Readers must keep accepting `1`: an activity written by 0.1.1 is still in the
+ * user's ledger and still has to round-trip.
+ */
+export const METADATA_VERSION = 2;
+
 /** Metadata written on every activity we create. */
 export interface ChileMetadata {
-  /** Schema version of this metadata blob. */
+  /** Schema version of this metadata blob. See `METADATA_VERSION`. */
   v: number;
   /** Content fingerprint — the idempotency key for re-imports. */
   fp: string;
@@ -46,6 +61,15 @@ export interface ChileMetadata {
   runId: string;
   /** Our transaction kind, so a re-read can rebuild the model. */
   kind: TransactionKind;
+  /**
+   * Direction the row had before it was written, as `'in'` or `'out'`.
+   *
+   * Only consulted for activity types Wealthfolio gives no direction of its own
+   * (`UNKNOWN`, `ADJUSTMENT`, `SPLIT`, anything upstream adds later). For every
+   * type with documented semantics the `activityType` wins, so stale or
+   * hand-edited metadata can never turn a `WITHDRAWAL` into an inflow.
+   */
+  dir?: Direction;
   /** Category id, if assigned. */
   cat?: string;
   merchant?: string;
@@ -67,6 +91,9 @@ export interface MapToActivityOptions {
  *
  * `amount` is always the positive magnitude: direction is carried by the
  * activity type, which is how Wealthfolio's calculator expects it.
+ *
+ * For the types that carry no direction that erases information, so the
+ * original direction is also written to `metadata.dir`. See `METADATA_VERSION`.
  */
 export function toActivityCreate(
   transaction: EnrichedTransaction | NormalizedTransaction,
@@ -76,7 +103,7 @@ export function toActivityCreate(
   const magnitude = abs(transaction.amount);
 
   const metadata: ChileMetadata = {
-    v: 1,
+    v: METADATA_VERSION,
     fp: transaction.fingerprint,
     ...(options.weakFingerprint ? { wfp: options.weakFingerprint } : {}),
     inst: transaction.sourceInstitution,
@@ -85,6 +112,7 @@ export function toActivityCreate(
     fileHash: transaction.sourceFileHash,
     runId: options.runId,
     kind: transaction.kind,
+    dir: transaction.direction,
     ...(transaction.category ? { cat: transaction.category } : {}),
     ...(transaction.merchant ? { merchant: transaction.merchant } : {}),
     ...(transaction.tags.length > 0 ? { tags: transaction.tags } : {}),
@@ -215,6 +243,13 @@ export interface HostActivityAmount {
   subtype?: string | null;
   amount: string | number | null | undefined;
   currency: string;
+  /**
+   * The activity's metadata blob, when the host hands one back.
+   *
+   * Optional because a caller may only have the amount fields, but it is what
+   * lets a directionless type recover the sign it was written with.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -259,6 +294,35 @@ export function activityDirection(activityType: string): Direction | undefined {
 }
 
 /**
+ * Direction we recorded when we wrote the activity, if we wrote it and if the
+ * value is one we recognise.
+ *
+ * Validated rather than trusted: metadata is JSON that survived a round trip
+ * through the host's database and could have been edited by anything.
+ */
+function recordedDirection(metadata: Record<string, unknown> | undefined): Direction | undefined {
+  const dir = readChileMetadata(metadata)?.dir;
+  return dir === Direction.in || dir === Direction.out ? dir : undefined;
+}
+
+/**
+ * The direction of a stored activity: the host's activity type first, our own
+ * metadata only as the fallback.
+ *
+ * That order is the whole rule. `WITHDRAWAL` means money left the account no
+ * matter what our metadata claims, so a stale `dir` can never flip a type whose
+ * semantics Wealthfolio defines. Metadata is consulted exactly where the host
+ * has nothing to say — `UNKNOWN`, `ADJUSTMENT`, `SPLIT`, and whatever upstream
+ * adds next.
+ *
+ * `undefined` means neither source knows: an `UNKNOWN` written by 0.1.0/0.1.1,
+ * or an activity some other addon created.
+ */
+export function resolveActivityDirection(activity: HostActivityAmount): Direction | undefined {
+  return activityDirection(activity.activityType) ?? recordedDirection(activity.metadata);
+}
+
+/**
  * Parse an amount Wealthfolio returns as a decimal string.
  *
  * The string form is authoritative — it is what the backend stores — so the
@@ -279,15 +343,22 @@ export function parseHostAmount(amount: string | number | null | undefined, curr
  * Rebuild our signed amount from a stored Wealthfolio activity.
  *
  * The single source of truth for "what does this activity do to the balance".
- * When the type carries no direction the stored sign is preserved untouched,
- * because inventing one would be worse than reporting what the host holds.
+ *
+ * Three cases, in order:
+ *
+ * 1. The type has a direction — it wins, always.
+ * 2. It does not, but we wrote the row and recorded `dir` — the sign we
+ *    originally had is restored. Without this an `UNKNOWN` outflow comes back
+ *    as an inflow, because `toActivityCreate()` writes the magnitude.
+ * 3. Neither — the stored sign is preserved untouched, because inventing one
+ *    would be worse than reporting what the host holds.
  */
 export function activityDetailsToSignedMoney(activity: HostActivityAmount): Money {
   const parsed = parseHostAmount(activity.amount, activity.currency);
-  const flow = activityFlowSign(activity.activityType);
-  if (flow === 0) return parsed;
+  const direction = resolveActivityDirection(activity);
+  if (!direction) return parsed;
   const magnitude = abs(parsed);
-  return flow < 0 ? negate(magnitude) : magnitude;
+  return direction === Direction.out ? negate(magnitude) : magnitude;
 }
 
 /** Read our metadata back off an activity, if it is one of ours. */
@@ -307,7 +378,6 @@ export interface HostActivity extends HostActivityAmount {
   id?: string;
   date: Date | string;
   comment?: string | null;
-  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -322,7 +392,7 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
   if (!metadata) return undefined;
 
   const amount = activityDetailsToSignedMoney(activity);
-  const direction = activityDirection(activity.activityType) ?? directionOfAmount(amount);
+  const direction = resolveActivityDirection(activity) ?? directionOfAmount(amount);
   const description = activity.comment ?? '';
 
   return {
