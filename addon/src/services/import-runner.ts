@@ -72,6 +72,10 @@ export interface RunImportResult {
  *
  * Small enough that a failure loses little work and the UI can report progress,
  * large enough to avoid a round trip per movement.
+ *
+ * "Loses little work" is literal: v3.6.2 validates a bulk request as a unit and
+ * persists nothing if any row in it fails, so one bad row costs its whole batch.
+ * That is the cost being bounded here.
  */
 const BATCH_SIZE = 100;
 
@@ -114,9 +118,23 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
 
   const breakdown = buildBreakdown(prepared.rows, created);
 
-  // `failed` rather than `errors` decides the status: a host that rejects rows
-  // without raising is still a partial import, and a host that reports an error
-  // yet created everything is not.
+  // Every entry in `errors` is a row that was *not* created.
+  //
+  // In v3.6.2 `bulk_mutate_activities` validates the whole request first and, if
+  // anything at all failed validation, returns `{ errors, ..Default::default() }`
+  // — created empty, nothing persisted. Past that check the write is one
+  // transaction, so a database failure comes back as a rejected promise, not as
+  // an `errors` entry. There is therefore no v3.6.2 path where the host reports
+  // an error and still created the row.
+  //
+  // `failed` alone would be enough against that contract. `errors.length === 0`
+  // stays as the conservative half of the test: if some future host did report
+  // an error while creating everything, calling that run `completed` would tell
+  // the user there is nothing to look at. `partial` sends them to the detail.
+  //
+  // The history failure is appended to `errors` *after* this, on purpose: it
+  // happens once the money is already in the ledger and must never downgrade a
+  // financially complete run.
   const status: ImportRun['status'] =
     breakdown.failed === 0 && errors.length === 0
       ? 'completed'

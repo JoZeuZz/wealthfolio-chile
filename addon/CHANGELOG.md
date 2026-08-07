@@ -14,6 +14,22 @@ usuario; tres correcciones que afectaban directamente la integridad de los datos
   seguía funcionando, que es por qué el error no se notaba. La semántica de signos
   vive ahora en una sola función (`activityDetailsToSignedMoney`) y ya no está
   duplicada entre el panel y el índice.
+- **El signo se perdía también en los tipos sin dirección.** Wealthfolio no da
+  dirección semántica a `UNKNOWN`, `ADJUSTMENT` ni `SPLIT`, y como escribimos
+  siempre la magnitud, un cargo `unknown / out / -4.500` llegaba al host como
+  `UNKNOWN +4.500` y volvía como ingreso de `+4.500`. El mapping no era
+  reversible y el índice de duplicados no encontraba nada. La metadata sube a
+  `v: 2` y guarda `dir` (`"in"`/`"out"`), que la lectura consulta **sólo** para
+  esos tipos: para los once tipos con dirección documentada manda el
+  `activityType` y la metadata no puede contradecirlo. Las actividades escritas
+  por 0.1.0/0.1.1, sin `dir`, conservan el comportamiento anterior.
+- **Una importación correcta podía anunciarse como fallida.** Si los movimientos
+  se escribían bien pero el historial no, el wizard mostraba a la vez el toast
+  verde y una alerta roja «No se pudo continuar», sugiriendo repetir una
+  importación que no lo necesitaba. Ahora el resultado separa tres cosas: fallo
+  (faltan movimientos), advertencia (el ledger está bien, algo alrededor no) y
+  detalle por fila. El error global queda sólo para la excepción que impide
+  saber si se escribió algo.
 - **Filtro de fechas inexistente.** Se enviaban `startDate`/`endDate` a
   `activities.search`; v3.6.2 lee `dateFrom`/`dateTo`. Los filtros se ignoraban en
   silencio y toda consulta escaneaba la cuenta completa.
@@ -41,9 +57,20 @@ usuario; tres correcciones que afectaban directamente la integridad de los datos
 - `services/reconciliation.ts`: fachada de orquestación para la conciliación
   multi-cuenta. No añade funcionalidad — mantiene `prepareImport()` puro y deja
   documentado dónde entra el host.
-- 95 tests nuevos (280 en total), los primeros sobre `services/` con un doble
-  mínimo del host: `activity-index`, `import-runner`, `import-preparation`,
-  `imported-transactions`, `storage` y el round-trip de signos.
+- `ui/import-outcome.ts`: la decisión de qué mostrar al terminar una corrida,
+  como función pura y testeable, fuera del JSX del wizard.
+- 116 tests nuevos (301 en total), los primeros sobre `services/` y sobre la
+  semántica visual del wizard, con un doble mínimo del host: `activity-index`,
+  `import-runner`, `import-preparation`, `imported-transactions`, `storage`,
+  `import-outcome` y el round-trip de signos.
+
+### Documentado
+
+- `docs/UPSTREAM.md` corrige su propia afirmación sobre `saveMany`: el lote es
+  **atómico**, así que cada entrada de `result.errors` corresponde siempre a
+  filas no creadas y una fila mala cuesta su lote entero. El comentario de
+  `import-runner` decía lo contrario; se ajustó el comentario, no el
+  comportamiento.
 
 ## 0.1.0 — 2026-08-05
 

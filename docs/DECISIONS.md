@@ -193,3 +193,34 @@ decisión del propietario del proyecto.
 
 Hasta que se decida, el repositorio no debe publicarse: sin licencia, nadie
 —incluido el autor a futuro— tiene permisos claros sobre el código.
+
+---
+
+## D14 — `unknown` sigue viniendo marcado en la vista previa — pendiente
+
+**Estado.** Sin decidir. Requiere una decisión explícita del propietario.
+
+**Cómo está hoy.** Una fila que el clasificador no supo leer
+(`TransactionKind.unknown`) llega a la vista previa **marcada para importar**,
+igual que cualquier otra. El usuario la ve, la cuenta «Requieren revisión» la
+suma, y si no la desmarca se escribe como `UNKNOWN` en Wealthfolio.
+
+**Por qué se mantuvo así en la estabilización de 0.1.1.** El defecto que se
+corrigió fue que el mapping de `UNKNOWN` no era reversible —ver
+[IMPORT_PIPELINE.md](IMPORT_PIPELINE.md) § *`dir`*—, no la política de selección.
+Cambiar en silencio qué filas vienen marcadas altera lo que un usuario importa
+sin que él lo pida, y eso no es una corrección: es una decisión de producto.
+
+**Propuesta a evaluar.** Que `unknown` venga **desmarcado por defecto**, con la
+misma mecánica que ya tienen los duplicados probables: visible, contado, y
+re-marcable con un clic.
+
+| | A favor | En contra |
+| --- | --- | --- |
+| Desmarcado por defecto | El usuario sólo escribe lo que entendió; `UNKNOWN` en Wealthfolio queda `needs_review` y fuera de todo cálculo, así que omitirlo no distorsiona nada | Un banco mal calibrado puede producir muchas filas `unknown`: el usuario importaría una fracción de su cartola sin notarlo |
+| Marcado (hoy) | La cartola entra completa; nada se pierde en silencio | Se escriben filas que nadie clasificó, y el costo de sacarlas después es manual |
+
+**Qué falta para decidir.** Saber qué proporción de filas queda `unknown` con
+cartolas reales. Con perfiles bancarios todavía `pending-real-sample` ese número
+no existe, y sin él la comparación de arriba es especulación. Revisar después de
+[HOST_VALIDATION.md](HOST_VALIDATION.md) y de la calibración con cartolas reales.

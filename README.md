@@ -5,7 +5,7 @@ en Chile: importa cartolas de bancos chilenos, concilia transferencias entre tus
 cuentas, detecta compras en cuotas y responde en qué se te va el sueldo.
 
 > **Estado: 0.1.1 — motor completo, todavía sin validar contra un Wealthfolio
-> real.** 280 tests cubren el motor y la capa de servicios. Los adaptadores de
+> real.** 301 tests cubren el motor y la capa de servicios. Los adaptadores de
 > Banco de Chile, BancoEstado y Falabella/CMR están implementados pero derivados
 > de documentación pública, no de cartolas reales. El addon compila a un bundle
 > cargable, pero **nunca se ha ejecutado dentro de Wealthfolio**. Ver la matriz

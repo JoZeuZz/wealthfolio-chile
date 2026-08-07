@@ -25,9 +25,10 @@ import {
   type DuplicateIndexStatus,
   type PreparationResult,
 } from '../../services/import-preparation';
-import { runImport, type ImportBreakdown } from '../../services/import-runner';
+import { runImport } from '../../services/import-runner';
 import { loadSettings } from '../../services/settings';
 import { useAddon } from '../context';
+import { describeImportOutcome, type ImportOutcomeView } from '../import-outcome';
 import { FileDrop } from '../components/FileDrop';
 import { Amount, Stat } from '../components/Money';
 
@@ -42,12 +43,6 @@ import { Amount, Stat } from '../components/Money';
 
 type Step = 'file' | 'detect' | 'preview' | 'done';
 
-interface ImportOutcomeView {
-  breakdown: ImportBreakdown;
-  status: 'completed' | 'partial' | 'failed';
-  historyRecorded: boolean;
-}
-
 export function ImportWizardPage() {
   const ctx = useAddon();
 
@@ -58,8 +53,10 @@ export function ImportWizardPage() {
   const [parserId, setParserId] = useState<string | undefined>();
   const [preparation, setPreparation] = useState<PreparationResult | undefined>();
   const [busy, setBusy] = useState(false);
-  // Reserved for failures that belong to no single stage: loading the account
-  // list, and the write itself. Parsing and deduplication report separately.
+  // Fatal only: loading the account list, and an exception that left us unable
+  // to know whether anything was written. A run that returned a result — even a
+  // partial or a failed one — reports through `result`, not here. Parsing and
+  // deduplication report separately again.
   const [error, setError] = useState<string | undefined>();
   const [result, setResult] = useState<ImportOutcomeView | undefined>();
 
@@ -146,27 +143,25 @@ export function ImportWizardPage() {
         verboseLogging: settings.verboseLogging,
       });
 
-      setResult({
+      const view: ImportOutcomeView = {
         breakdown: outcome.breakdown,
         status: outcome.status,
         historyRecorded: outcome.historyRecorded,
-      });
-      if (outcome.errors.length > 0) setError(outcome.errors.join(' · '));
+        errors: outcome.errors,
+      };
+      setResult(view);
       setStep('done');
 
       // A partial or failed run never gets the success toast: a green message
-      // over a half-written import is how a person stops checking.
-      if (outcome.status === 'completed') {
-        ctx.api.toast.success(`Se importaron ${outcome.breakdown.created} movimientos.`);
-      } else if (outcome.status === 'partial') {
-        ctx.api.toast.warning(
-          `Importación parcial: ${outcome.breakdown.created} de ${outcome.breakdown.selected} movimientos. ` +
-            `${outcome.breakdown.failed} no se pudieron guardar.`,
-        );
-      } else {
-        ctx.api.toast.error('No se pudo guardar ningún movimiento.');
-      }
+      // over a half-written import is how a person stops checking. A run that
+      // wrote everything and only failed to log itself still gets it, because
+      // the ledger is correct — the warning lives in the result card.
+      const { toast } = describeImportOutcome(view);
+      ctx.api.toast[toast.level](toast.message);
     } catch (err) {
+      // The only genuinely fatal branch: `runImport()` never threw us a result,
+      // so we cannot say whether anything reached the ledger. That uncertainty
+      // is what the global error is for.
       setError(messageOf(err));
       ctx.api.toast.error('No se pudo completar la importación.');
     } finally {
@@ -333,13 +328,8 @@ function ResultStep({
   onRestart: () => void;
   onGoToDashboard: () => void;
 }) {
-  const { breakdown, status } = result;
-  const title =
-    status === 'completed'
-      ? 'Importación completada'
-      : status === 'partial'
-        ? 'Importación parcial'
-        : 'No se importó nada';
+  const { breakdown } = result;
+  const { title, failure, warnings, details } = describeImportOutcome(result);
 
   return (
     <Card>
@@ -347,19 +337,24 @@ function ResultStep({
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {status !== 'completed' ? (
+        {failure ? (
           <Alert variant="destructive">
-            <AlertTitle>
-              {status === 'partial'
-                ? `${breakdown.failed} movimiento(s) no se guardaron`
-                : 'Wealthfolio rechazó la escritura'}
-            </AlertTitle>
-            <AlertDescription>
-              Revisa el detalle de abajo y vuelve a importar el archivo: los movimientos que sí se
-              guardaron se detectarán como duplicados y no se repetirán.
-            </AlertDescription>
+            <AlertTitle>{failure.title}</AlertTitle>
+            <AlertDescription>{failure.description}</AlertDescription>
           </Alert>
         ) : null}
+
+        {/*
+          Neutral variant on purpose. A run that wrote the ledger and then failed
+          to log itself is not a failed import, and the copy never suggests
+          retrying — that would only re-check duplicates for nothing.
+        */}
+        {warnings.map((warning) => (
+          <Alert key={warning.title}>
+            <AlertTitle>{warning.title}</AlertTitle>
+            <AlertDescription>{warning.description}</AlertDescription>
+          </Alert>
+        ))}
 
         <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
           <Counter label="Detectados en el archivo" value={breakdown.detected} />
@@ -372,14 +367,17 @@ function ResultStep({
           <Counter label="Desmarcados por ti" value={breakdown.skippedByUser} />
         </dl>
 
-        {!result.historyRecorded ? (
-          <Alert>
-            <AlertTitle>El historial no se pudo actualizar</AlertTitle>
-            <AlertDescription>
-              Los movimientos sí quedaron guardados en Wealthfolio, pero esta importación no
-              aparecerá en el historial del addon.
-            </AlertDescription>
-          </Alert>
+        {details.length > 0 ? (
+          <details className="text-sm">
+            <summary className="cursor-pointer font-medium">
+              Detalle de la ejecución ({details.length})
+            </summary>
+            <ul className="text-muted-foreground mt-2 list-disc pl-5">
+              {details.slice(0, 20).map((message, index) => (
+                <li key={`${index}-${message}`}>{message}</li>
+              ))}
+            </ul>
+          </details>
         ) : null}
 
         <p className="text-muted-foreground text-sm">

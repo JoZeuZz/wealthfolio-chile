@@ -140,9 +140,29 @@ un **array** en vez de un objeto, lo interpreta como `{ updates: input }`. Pasar
 `ActivityCreate[]` directamente crearía cero actividades sin error visible.
 Nuestro `import-runner` siempre pasa el objeto, y hay un test que lo fija.
 
-`ActivityBulkMutationResult.errors` es por fila: un lote puede devolver `created`
-parcial y `errors` con el resto. Por eso el resultado de la importación distingue
-`created` de `failed` en vez de asumir que no lanzar significa éxito.
+**El lote es atómico.** `bulk_mutate_activities`
+(`crates/core/src/activities/activities_service.rs:4240`) valida la petición
+completa primero y, si algo falla, retorna temprano con
+`ActivityBulkMutationResult { errors, ..Default::default() }` — `created` vacío,
+nada persistido. Pasada esa validación la escritura es una sola transacción
+(`crates/storage-sqlite/src/activities/repository.rs:1265`), así que un fallo de
+base de datos vuelve como promesa rechazada, no como entrada en `errors`.
+
+Consecuencias, ambas fijadas por test:
+
+- **Cada entrada de `result.errors` representa siempre filas no creadas.** No
+  existe en v3.6.2 un camino donde el host reporte un error y aun así haya
+  creado la fila.
+- **Una fila mala cuesta su lote entero.** Es lo que acota el `BATCH_SIZE = 100`
+  de `import-runner`.
+
+> **Corrección de esta auditoría.** Hasta 0.1.1 este documento afirmaba que
+> `errors` era *por fila* y que un lote podía devolver `created` parcial junto a
+> `errors`. Es falso: o se crea todo el lote, o no se crea nada de él. El
+> resultado de la importación igual distingue `created` de `failed` en vez de
+> asumir que no lanzar significa éxito, y `status` sigue exigiendo
+> `errors.length === 0` para `completed` — la mitad conservadora del test, por si
+> un host futuro sí reportara un error habiendo creado todo.
 
 ### `activities.search` — el tipo del SDK está incompleto
 
@@ -204,6 +224,16 @@ efecto en caja:
 > funcionando, de ahí que pasara inadvertido; los duplicados *probables* no se
 > detectaban nunca. La regla vive ahora sólo en
 > `core/mapping/activities.ts` (`activityFlowSign`, `activityDetailsToSignedMoney`).
+
+> **Segundo error, encontrado en la auditoría posterior a 0.1.1.** La fila «sin
+> dirección» de la tabla no era recuperable. Escribimos siempre la magnitud, así
+> que un `unknown / out / -4500` llegaba al host como `UNKNOWN +4500` y volvía
+> como `in / +4500`. El mapping no era reversible para `SPLIT`, `ADJUSTMENT`,
+> `UNKNOWN` ni para ningún tipo que upstream agregue después. Desde `v: 2` la
+> metadata guarda `dir` y la lectura la consulta **sólo** para esos tipos: para
+> los once tipos con dirección documentada el `activityType` sigue siendo la
+> autoridad, y metadata inconsistente no puede alterarla. Ver
+> `resolveActivityDirection` y docs/IMPORT_PIPELINE.md.
 
 `CREDIT` altera net contribution **según el subtipo**: `BONUS` suma, `REFUND` y
 `REBATE` no. Usamos `CREDIT`/`REFUND`, que es el comportamiento buscado — según

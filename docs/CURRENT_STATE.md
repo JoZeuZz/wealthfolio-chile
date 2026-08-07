@@ -27,8 +27,8 @@ evidencia obtenida de un Wealthfolio en ejecución.
 ```
 typecheck   ✅  tsc --noEmit, strict + noUncheckedIndexedAccess
 lint        ✅  eslint, 0 errores, 0 warnings, sin `any`
-tests       ✅  280 pasando (15 archivos)
-build       ✅  dist/addon.js — 745 KB (194 KB gzip), un solo archivo
+tests       ✅  301 pasando (16 archivos)
+build       ✅  dist/addon.js — 747 KB (194 KB gzip), un solo archivo
 ```
 
 `./scripts/test.sh` corre las cuatro.
@@ -210,7 +210,7 @@ Los cinco están corregidos y cubiertos por tests de regresión.
 | 10 | Llega por APIs soportadas | ✅ `saveMany({ creates })` |
 | 11 | Reimportar no duplica | ✅ con test |
 | 12 | Hay historial | ✅ |
-| 13 | Hay tests | ✅ 280 |
+| 13 | Hay tests | ✅ 301 |
 | 14 | Hay documentación | ✅ |
 | 15 | No se filtran datos en logs | ✅ con test |
 
