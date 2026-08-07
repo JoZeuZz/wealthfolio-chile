@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { classifyDuplicate } from '../src/core/dedupe/classify';
 import { computeFingerprint, computeWeakFingerprint } from '../src/core/dedupe/fingerprint';
 import {
-  METADATA_NAMESPACE,
+  readChileMetadata,
   toActivityCreate,
   type ChileMetadata,
 } from '../src/core/mapping/activities';
@@ -60,7 +60,7 @@ function writeAsAddonWould(transaction: NormalizedTransaction) {
     currency: create.currency ?? 'CLP',
     date: String(create.activityDate),
     comment: create.comment ?? '',
-    metadata: (create.metadata as Record<string, ChileMetadata>)[METADATA_NAMESPACE],
+    metadata: readChileMetadata(create.metadata) as ChileMetadata,
   });
 }
 
@@ -212,9 +212,10 @@ describe('pagination', () => {
 });
 
 describe('filters sent to the host', () => {
-  it('uses the dateFrom/dateTo names v3.6.2 actually reads', () => {
-    expect(activityDateFilters({ accountId: ACCOUNT, fromDate: '2026-03-01', toDate: '2026-03-31' }))
-      .toEqual({ accountIds: ACCOUNT, dateFrom: '2026-03-01', dateTo: '2026-03-31' });
+  it('uses the dateFrom/dateTo names v3.6.2 actually reads, padded by a day', () => {
+    expect(
+      activityDateFilters({ accountId: ACCOUNT, fromDate: '2026-03-01', toDate: '2026-03-31' }),
+    ).toEqual({ accountIds: ACCOUNT, dateFrom: '2026-02-28', dateTo: '2026-04-01' });
   });
 
   it('omits bounds that were not asked for', () => {
@@ -250,9 +251,82 @@ describe('filters sent to the host', () => {
     expect(index.byFingerprint.has('january')).toBe(false);
     expect(host.searchCalls[0]?.filters).toEqual({
       accountIds: ACCOUNT,
-      dateFrom: '2026-03-01',
-      dateTo: '2026-03-31',
+      dateFrom: '2026-02-28',
+      dateTo: '2026-04-01',
     });
+  });
+
+  /**
+   * Observed on a real Wealthfolio v3.6.2 container on 2026-08-07: the backend
+   * reads `dateFrom`/`dateTo` in the instance timezone while storing our bare
+   * `YYYY-MM-DD` activity dates at UTC midnight, so under `America/Santiago`
+   * the whole window comes back slid a day forward. A movement on the first day
+   * of the window then never reaches the index, the import calls it new, and the
+   * user gets it twice.
+   */
+  it('still sees the edges of the window when the host slides it a day', async () => {
+    const host = fakeHost({
+      dateFilterShiftDays: 1,
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '1000',
+          date: '2026-03-01',
+          metadata: ourMetadata({ fp: 'primer-dia' }),
+        }),
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '2000',
+          date: '2026-03-31',
+          metadata: ourMetadata({ fp: 'ultimo-dia' }),
+        }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, {
+      accountId: ACCOUNT,
+      fromDate: '2026-03-01',
+      toDate: '2026-03-31',
+    });
+
+    expect(index.byFingerprint.has('primer-dia')).toBe(true);
+    expect(index.byFingerprint.has('ultimo-dia')).toBe(true);
+  });
+
+  it('drops what the padding dragged in beyond the window', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '1000',
+          date: '2026-02-28',
+          metadata: ourMetadata({ fp: 'vispera' }),
+        }),
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '2000',
+          date: '2026-03-01',
+          metadata: ourMetadata({ fp: 'dentro' }),
+        }),
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '3000',
+          date: '2026-04-01',
+          metadata: ourMetadata({ fp: 'siguiente' }),
+        }),
+      ],
+    });
+
+    const result = await loadDuplicateIndexResult(host.ctx, {
+      accountId: ACCOUNT,
+      fromDate: '2026-03-01',
+      toDate: '2026-03-31',
+    });
+
+    expect(result.index.byFingerprint.has('dentro')).toBe(true);
+    expect(result.index.byFingerprint.has('vispera')).toBe(false);
+    expect(result.index.byFingerprint.has('siguiente')).toBe(false);
+    expect(result.scanned).toBe(1);
   });
 
   it('only reads the requested account', async () => {

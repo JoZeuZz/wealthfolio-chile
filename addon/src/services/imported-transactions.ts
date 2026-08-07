@@ -2,7 +2,7 @@ import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { activityToTransaction } from '../core/mapping/activities';
 import type { NormalizedTransaction } from '../core/model/transaction';
 import type { ScopedTransaction } from '../core/reconcile/transfers';
-import { activityDateFilters } from './activity-index';
+import { activityDateFilters, withinWindow } from './activity-index';
 
 /**
  * Reading back the movements this addon imported.
@@ -70,9 +70,12 @@ export async function loadImportedTransactions(
     );
 
     totalRowCount = response.meta.totalRowCount;
-    scanned += response.data.length;
 
     for (const activity of response.data) {
+      // The request is padded by a day on each side to survive the host's
+      // timezone-shifted bounds; the exact window is re-imposed here.
+      if (!withinWindow(activity.date, window)) continue;
+      scanned += 1;
       const transaction = activityToTransaction(activity);
       if (!transaction) continue;
       transactions.push(transaction);

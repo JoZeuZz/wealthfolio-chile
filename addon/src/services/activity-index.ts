@@ -1,4 +1,5 @@
 import type { ActivitySearchFilters, AddonContext } from '@wealthfolio/addon-sdk';
+import { addDays, type IsoDate } from '../core/dates';
 import { buildDuplicateIndex, type DuplicateIndex, type ExistingMovement } from '../core/dedupe/classify';
 import { activityDetailsToSignedMoney, readChileMetadata } from '../core/mapping/activities';
 
@@ -77,6 +78,7 @@ export async function loadDuplicateIndexResult(
     totalRowCount = response.meta.totalRowCount;
 
     for (const activity of response.data) {
+      if (!withinWindow(activity.date, options)) continue;
       const metadata = readChileMetadata(activity.metadata);
       movements.push({
         ...(metadata?.fp ? { fingerprint: metadata.fp } : {}),
@@ -112,20 +114,46 @@ export async function loadDuplicateIndex(
 /**
  * Filters for `activities.search`.
  *
- * v3.6.2 names the date bounds `dateFrom`/`dateTo` (`YYYY-MM-DD`, inclusive) at
- * the adapter and both backends. They are absent from `ActivitySearchFilters`
- * in the SDK's type declarations, but the addon bridge forwards the filter
- * object verbatim, so they do reach the query — see docs/UPSTREAM.md. The cast
- * is the honest way to say "wider than the published type".
+ * v3.6.2 names the date bounds `dateFrom`/`dateTo` (`YYYY-MM-DD`) at the
+ * adapter and both backends. They are absent from `ActivitySearchFilters` in
+ * the SDK's type declarations, but the addon bridge forwards the filter object
+ * verbatim, so they do reach the query — see docs/UPSTREAM.md. The cast is the
+ * honest way to say "wider than the published type".
+ *
+ * The bounds are padded by a day on each side, and that is not caution. The
+ * backend resolves them in the *instance timezone* while our activity dates go
+ * in as bare calendar days and land at UTC midnight, so under `America/Santiago`
+ * a window asked for as 05→06 answers with 06→07 — observed against a real
+ * container on 2026-08-07. Without the padding, a movement on the first day of
+ * the window never reaches the duplicate index, the import declares it new, and
+ * the user ends up with it twice. Callers narrow the result back to the exact
+ * days with {@link withinWindow}.
  */
 export function activityDateFilters(
   options: Omit<LoadIndexOptions, 'accountId'> & { accountId?: string },
 ): ActivitySearchFilters {
   return {
     ...(options.accountId ? { accountIds: options.accountId } : {}),
-    ...(options.fromDate ? { dateFrom: options.fromDate } : {}),
-    ...(options.toDate ? { dateTo: options.toDate } : {}),
+    ...(options.fromDate ? { dateFrom: addDays(options.fromDate as IsoDate, -1) } : {}),
+    ...(options.toDate ? { dateTo: addDays(options.toDate as IsoDate, 1) } : {}),
   } as ActivitySearchFilters;
+}
+
+/**
+ * Is this activity inside the calendar window the caller actually asked for?
+ *
+ * The counterpart to the padding in {@link activityDateFilters}: the host is
+ * asked for one day more on each side, and the exact window is re-imposed here
+ * where the dates are ours to compare.
+ */
+export function withinWindow(
+  date: Date | string,
+  window: { fromDate?: string; toDate?: string },
+): boolean {
+  const day = toIsoDate(date);
+  if (window.fromDate && day < window.fromDate) return false;
+  if (window.toDate && day > window.toDate) return false;
+  return true;
 }
 
 function toIsoDate(value: Date | string): string {

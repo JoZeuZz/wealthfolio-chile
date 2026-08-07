@@ -85,8 +85,22 @@ export interface FakeHost {
   saveManyPlan: (('ok' | 'throw') | number)[];
 }
 
-export function fakeHost(options: { activities?: ActivityDetails[] } = {}): FakeHost {
+export interface FakeHostOptions {
+  activities?: ActivityDetails[];
+  /**
+   * Days by which the host slides the `dateFrom`/`dateTo` window.
+   *
+   * Wealthfolio v3.6.2 reads those bounds in the instance timezone while
+   * storing our bare `YYYY-MM-DD` activity dates at UTC midnight, so under
+   * `America/Santiago` a window asked for as 05→06 answers with 06→07.
+   * Observed on a real container on 2026-08-07; `1` reproduces it.
+   */
+  dateFilterShiftDays?: number;
+}
+
+export function fakeHost(options: FakeHostOptions = {}): FakeHost {
   const store = memoryStore();
+  const shift = options.dateFilterShiftDays ?? 0;
 
   const host: FakeHost = {
     activities: options.activities ?? [],
@@ -111,7 +125,9 @@ export function fakeHost(options: { activities?: ActivityDetails[] } = {}): Fake
         host.searchCalls.push({ page, pageSize, filters });
         if (host.searchError) throw host.searchError;
 
-        const matching = host.activities.filter((activity) => matchesFilters(activity, filters));
+        const matching = host.activities.filter((activity) =>
+          matchesFilters(activity, filters, shift),
+        );
         return {
           data: matching.slice(page * pageSize, (page + 1) * pageSize),
           meta: { totalRowCount: matching.length },
@@ -168,7 +184,11 @@ export function fakeHost(options: { activities?: ActivityDetails[] } = {}): Fake
 }
 
 /** The date and account filtering the real backend applies, and nothing else. */
-function matchesFilters(activity: ActivityDetails, filters: Record<string, unknown>): boolean {
+function matchesFilters(
+  activity: ActivityDetails,
+  filters: Record<string, unknown>,
+  shiftDays: number,
+): boolean {
   const accountIds = filters['accountIds'];
   if (typeof accountIds === 'string' && activity.accountId !== accountIds) return false;
   if (Array.isArray(accountIds) && !accountIds.includes(activity.accountId)) return false;
@@ -176,10 +196,18 @@ function matchesFilters(activity: ActivityDetails, filters: Record<string, unkno
   const day = isoDay(activity.date);
   const from = filters['dateFrom'];
   const to = filters['dateTo'];
-  if (typeof from === 'string' && day < from) return false;
-  if (typeof to === 'string' && day > to) return false;
+  if (typeof from === 'string' && day < shiftDay(from, shiftDays)) return false;
+  if (typeof to === 'string' && day > shiftDay(to, shiftDays)) return false;
 
   return true;
+}
+
+/** Slide a `YYYY-MM-DD` bound, the way a timezone-aware backend effectively does. */
+function shiftDay(iso: string, days: number): string {
+  if (days === 0) return iso;
+  const shifted = new Date(`${iso}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
 }
 
 function isoDay(value: Date | string): string {

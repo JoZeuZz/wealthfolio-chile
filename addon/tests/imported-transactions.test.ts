@@ -140,10 +140,67 @@ describe('loadImportedTransactions', () => {
     });
 
     expect(loaded.transactions.map((t) => t.fingerprint)).toEqual(['recent']);
+    // A day wider than asked for, because the host slides the bounds by its own
+    // timezone; the exact window is re-imposed on the rows that come back.
     expect(host.searchCalls[0]?.filters).toEqual({
-      dateFrom: '2026-02-01',
-      dateTo: '2026-03-31',
+      dateFrom: '2026-01-31',
+      dateTo: '2026-04-01',
     });
+  });
+
+  it('keeps the window exact even though the host is asked for a wider one', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '1000',
+          date: '2026-01-31',
+          metadata: ourMetadata('vispera', TransactionKind.expense),
+        }),
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '2000',
+          date: '2026-02-01',
+          metadata: ourMetadata('primer-dia', TransactionKind.expense),
+        }),
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '3000',
+          date: '2026-04-01',
+          metadata: ourMetadata('siguiente', TransactionKind.expense),
+        }),
+      ],
+    });
+
+    const loaded = await loadImportedTransactions(host.ctx, {
+      fromDate: monthStart('2026-02'),
+      toDate: monthEnd('2026-03'),
+    });
+
+    expect(loaded.transactions.map((t) => t.fingerprint)).toEqual(['primer-dia']);
+    expect(loaded.scanned).toBe(1);
+  });
+
+  /** The host slid the window; the first day of the month must still arrive. */
+  it('still reads the first day of the window when the host slides it', async () => {
+    const host = fakeHost({
+      dateFilterShiftDays: 1,
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '2000',
+          date: '2026-02-01',
+          metadata: ourMetadata('primer-dia', TransactionKind.expense),
+        }),
+      ],
+    });
+
+    const loaded = await loadImportedTransactions(host.ctx, {
+      fromDate: monthStart('2026-02'),
+      toDate: monthEnd('2026-03'),
+    });
+
+    expect(loaded.transactions.map((t) => t.fingerprint)).toEqual(['primer-dia']);
   });
 
   it('pairs each movement with the account it lives in', async () => {
