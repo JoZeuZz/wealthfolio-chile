@@ -3,9 +3,15 @@
 #
 #   ./scripts/backup.sh [destino]
 #
-# Produces a timestamped tar.gz of /data (SQLite database + addons). The
+# Produces a timestamped tar.gz of the data volume: the SQLite database, its WAL
+# and shm, and therefore every account, activity and addon storage value. The
 # container is stopped for the duration: copying a live SQLite file can capture
 # a half-written transaction, and a backup you cannot restore is not a backup.
+#
+# It does *not* contain the addon bundles themselves. Those live in a bind mount
+# from the host (WF_ADDONS_DIR), which this container never sees — and which
+# restore never touches either, so a restored instance keeps the addons it had.
+# Rebuild them from source with scripts/deploy-addon.sh.
 #
 # Restore with scripts/restore.sh.
 
@@ -42,7 +48,10 @@ if [[ "$was_running" == true ]]; then
   compose start wealthfolio
 fi
 
-size="$(du -h "$archive" | cut -f1)"
+# --apparent-size, not blocks: on a freshly written file the filesystem may not
+# have allocated them yet, and `du` then reports "512" for a 280 KB archive —
+# which reads exactly like a backup that failed.
+size="$(du -h --apparent-size "$archive" | cut -f1)"
 ok "Respaldo listo: $archive ($size)"
 
 # Retention: keep the 14 most recent. Financial history is small; losing every
