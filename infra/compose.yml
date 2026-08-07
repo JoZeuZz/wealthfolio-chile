@@ -14,7 +14,8 @@ services:
     # Pinned on purpose. `latest` turns an unrelated `docker compose up` into an
     # unplanned upgrade of the app that holds your financial history.
     # Bump deliberately, with a backup taken first — see scripts/backup.sh.
-    image: wealthfolio/wealthfolio:${WF_VERSION:?Set WF_VERSION, e.g. v3.6.2}
+    # Docker Hub tags have no `v` prefix: git `v3.6.2` ships as image `3.6.2`.
+    image: wealthfolio/wealthfolio:${WF_VERSION:?Set WF_VERSION, e.g. 3.6.2}
     container_name: wealthfolio
     restart: unless-stopped
 
@@ -31,7 +32,13 @@ services:
     environment:
       WF_LISTEN_ADDR: '0.0.0.0:8088'
       WF_DB_PATH: '/data/wealthfolio.db'
-      WF_ADDONS_DIR: '/data/addons'
+      # Careful: this is the *parent* of the addons directory, not the addons
+      # directory itself. The server appends `addons/` to it
+      # (`ensure_addons_directory`), so `/data` resolves to `/data/addons`,
+      # which is what the bind mount below provides. Setting it to
+      # `/data/addons` makes the server look in `/data/addons/addons` and no
+      # sideloaded addon is ever found.
+      WF_ADDONS_DIR: '/data'
 
       # Required. Generate with: openssl rand -base64 32
       WF_SECRET_KEY: '${WF_SECRET_KEY:?Set WF_SECRET_KEY}'

@@ -9,8 +9,15 @@ ADDON_DIR="$REPO_ROOT/addon"
 UPSTREAM_DIR="$REPO_ROOT/.upstream/wealthfolio"
 
 # Wealthfolio release this project develops against. Kept in sync with
-# docs/UPSTREAM.md and infra/.env.example.
+# docs/UPSTREAM.md and infra/.env.example. This is the *git* tag; the Docker
+# Hub tag is the same string without the `v` (see infra/.env.example).
 UPSTREAM_VERSION="v3.6.2"
+
+# The upstream image runs the server as this fixed uid:gid (see its Dockerfile).
+# Sideloaded addon files must be owned by it: the server rewrites manifest.json
+# whenever an addon is enabled, disabled, or granted a network host.
+WF_CONTAINER_UID=1000
+WF_CONTAINER_GID=1000
 
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'

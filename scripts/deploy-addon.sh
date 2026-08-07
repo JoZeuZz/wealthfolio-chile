@@ -36,16 +36,39 @@ cp "$ADDON_DIR/manifest.json" "$target/manifest.json"
 cp "$ADDON_DIR/dist/addon.js" "$target/dist/addon.js"
 [[ -f "$ADDON_DIR/README.md" ]] && cp "$ADDON_DIR/README.md" "$target/README.md"
 
-ok "Addon instalado ($(du -h "$target/dist/addon.js" | cut -f1))"
+ok "Addon instalado ($(du -h --apparent-size "$target/dist/addon.js" | cut -f1))"
 
+# The container runs as uid 1000 and rewrites manifest.json on enable/disable.
+# Files copied here belong to whoever ran this script, so without this the host
+# answers the very first toggle with `Failed to write manifest: Permission
+# denied (os error 13)` and the addon can never be turned off again.
+running=false
 if have docker && docker compose version >/dev/null 2>&1 && [[ -f "$INFRA_DIR/.env" ]]; then
-  if compose ps --services --filter status=running 2>/dev/null | grep -q wealthfolio; then
-    info "Reiniciando Wealthfolio para recargar el addon…"
-    compose restart wealthfolio
-    ok "Listo. Abre la app y busca 'Chile' en la barra lateral."
+  compose ps --services --filter status=running 2>/dev/null | grep -q wealthfolio && running=true
+fi
+
+if ! chown -R "$WF_CONTAINER_UID:$WF_CONTAINER_GID" "$target" 2>/dev/null; then
+  # Unprivileged deployer: borrow the daemon's root inside the container.
+  if [[ "$running" == true ]]; then
+    docker exec -u 0:0 wealthfolio \
+      chown -R "$WF_CONTAINER_UID:$WF_CONTAINER_GID" "/data/addons/$addon_id" 2>/dev/null \
+      || warn "No se pudo cambiar el propietario de $target a $WF_CONTAINER_UID:$WF_CONTAINER_GID."
   else
-    warn "Wealthfolio no está corriendo. Levántalo con: ./scripts/stack.sh start"
+    warn "No se pudo cambiar el propietario de $target a $WF_CONTAINER_UID:$WF_CONTAINER_GID."
   fi
+fi
+
+if [[ "$running" == true ]]; then
+  info "Reiniciando Wealthfolio para recargar el addon…"
+  compose restart wealthfolio
+
+  # Post-condition, not decoration: an addon the host cannot write is an addon
+  # the user cannot disable, and the failure only shows up in the UI much later.
+  if ! docker exec wealthfolio test -w "/data/addons/$addon_id/manifest.json"; then
+    die "El host no puede escribir /data/addons/$addon_id/manifest.json. Activar o desactivar el addon fallará con 'Permission denied'. Corrige el propietario a $WF_CONTAINER_UID:$WF_CONTAINER_GID."
+  fi
+
+  ok "Listo. Abre la app y busca 'Chile' en la barra lateral."
 else
-  warn "Docker no disponible: el addon quedó construido en $target, instálalo manualmente."
+  warn "Wealthfolio no está corriendo. Levántalo con: ./scripts/stack.sh start"
 fi
