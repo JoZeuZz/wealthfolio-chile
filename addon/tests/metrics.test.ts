@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildDuplicateIndex } from '../src/core/dedupe/classify';
 import { buildInsights } from '../src/core/insights/rules';
 import {
+  currencyOf,
   findRecurringCharges,
   summarizeAll,
   summarizeMonth,
@@ -343,5 +344,53 @@ describe('metrics over an imported statement', () => {
 
     expect(toDecimalString(summary.income)).toBe(toDecimalString(prepared.totals.income));
     expect(toDecimalString(summary.expenses)).toBe(toDecimalString(prepared.totals.expenses));
+  });
+});
+
+/**
+ * Observed on a real Wealthfolio v3.6.2 container on 2026-08-07: a fresh
+ * instance reports `baseCurrency: 'USD'`, and the panel was handing that to the
+ * metrics as the currency to total CLP movements in. The first import turned
+ * the whole panel into `MoneyError: currency mismatch: USD vs CLP` — a blank
+ * page, no message, for every Chilean user on a default host.
+ *
+ * The totals are sums of the imported movements, so their currency is a fact
+ * about the data. The host's reporting preference is not a vote.
+ */
+describe('the currency the totals are expressed in', () => {
+  it('comes from the movements, not from the caller', () => {
+    const rows = [
+      tx('2026-02-03', 1_000_000, 'SUELDO'),
+      tx('2026-02-04', -100_000, 'SUPERMERCADO'),
+    ];
+
+    expect(currencyOf(rows, 'USD')).toBe('CLP');
+  });
+
+  it('falls back to the caller only when there is nothing to total', () => {
+    expect(currencyOf([], 'USD')).toBe('USD');
+  });
+
+  it('reports mixed currencies instead of picking one', () => {
+    const rows = [
+      tx('2026-02-03', 1_000_000, 'SUELDO'),
+      { ...tx('2026-02-04', -1_000, 'COMPRA EN DOLARES'), amount: money(-1_000, 0, 'USD') },
+    ];
+
+    expect(() => currencyOf(rows, 'CLP')).toThrow(/CLP.*USD|USD.*CLP/);
+  });
+
+  it('totals a CLP month without exploding when the host reports USD', () => {
+    const rows = [
+      tx('2026-02-03', 1_000_000, 'SUELDO'),
+      tx('2026-02-04', -100_000, 'SUPERMERCADO'),
+      tx('2026-02-05', -50_000, 'COMBUSTIBLE'),
+    ];
+
+    const summary = summarizeMonth('2026-02', rows, { currency: currencyOf(rows, 'USD') });
+
+    expect(toDecimalString(summary.income)).toBe('1000000');
+    expect(toDecimalString(summary.expenses)).toBe('150000');
+    expect(toDecimalString(summary.net)).toBe('850000');
   });
 });

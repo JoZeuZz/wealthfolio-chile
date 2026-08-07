@@ -16,6 +16,7 @@ import { addMonthsToKey, formatMonthKey, monthEnd, monthKey, monthStart } from '
 import { buildInsights, type Insight } from '../../core/insights/rules';
 import { buildInstallmentPlans, buildOutlook } from '../../core/installments/plans';
 import {
+  currencyOf,
   findRecurringCharges,
   summarizeMonth,
   totalsByCategory,
@@ -52,7 +53,8 @@ const HISTORY_MONTHS = 13;
 interface DashboardData {
   transactions: NormalizedTransaction[];
   runs: ImportRun[];
-  currency: string;
+  /** Currency to show when there are no movements to take one from. */
+  fallbackCurrency: string;
   /** True when the host held more rows in the window than we could read. */
   truncated: boolean;
 }
@@ -81,7 +83,11 @@ export function DashboardPage() {
         setData({
           transactions: loaded.transactions,
           runs,
-          currency: settings?.baseCurrency ?? 'CLP',
+          // Only the fallback for a panel with nothing in it. The totals are
+          // sums of the movements, so their currency comes from the movements —
+          // see `currencyOf`. A fresh host reports USD, and totalling CLP rows
+          // in USD used to take the whole panel down.
+          fallbackCurrency: settings?.baseCurrency ?? 'CLP',
           truncated: loaded.truncated,
         });
       } catch (err) {
@@ -95,9 +101,14 @@ export function DashboardPage() {
     };
   }, [ctx, month]);
 
-  const view = useMemo(() => {
-    if (!data) return undefined;
-    return buildView(data, month);
+  const [view, viewError] = useMemo<[DashboardView | undefined, string | undefined]>(() => {
+    if (!data) return [undefined, undefined];
+    try {
+      return [buildView(data, month), undefined];
+    } catch (err) {
+      // A panel that renders nothing at all tells the user less than nothing.
+      return [undefined, err instanceof Error ? err.message : String(err)];
+    }
   }, [data, month]);
 
   return (
@@ -122,6 +133,13 @@ export function DashboardPage() {
           </Button>
         </div>
       </header>
+
+      {viewError ? (
+        <Alert variant="destructive">
+          <AlertTitle>No se pudieron calcular los totales</AlertTitle>
+          <AlertDescription>{viewError}</AlertDescription>
+        </Alert>
+      ) : null}
 
       {error ? (
         <Alert variant="destructive">
@@ -424,16 +442,18 @@ function buildView(data: DashboardData, month: string): DashboardView {
   const previousMonth = addMonthsToKey(month, -1);
   const inPrevious = data.transactions.filter((t) => monthKey(t.date) === previousMonth);
 
-  const summary = summarizeMonth(month, inMonth, { currency: data.currency });
-  const previousSummary = summarizeMonth(previousMonth, inPrevious, { currency: data.currency });
+  const currency = currencyOf(data.transactions, data.fallbackCurrency);
 
-  const categories = totalsByCategory(inMonth, { currency: data.currency });
-  const previousCategories = totalsByCategory(inPrevious, { currency: data.currency });
-  const merchants = totalsByMerchant(inMonth, 8, { currency: data.currency });
+  const summary = summarizeMonth(month, inMonth, { currency });
+  const previousSummary = summarizeMonth(previousMonth, inPrevious, { currency });
+
+  const categories = totalsByCategory(inMonth, { currency });
+  const previousCategories = totalsByCategory(inPrevious, { currency });
+  const merchants = totalsByMerchant(inMonth, 8, { currency });
   const recurring = findRecurringCharges(data.transactions);
 
   const plans = buildInstallmentPlans(data.transactions);
-  const outlook = buildOutlook(plans, month, 12, data.currency);
+  const outlook = buildOutlook(plans, month, 12, currency);
 
   const insights = buildInsights({
     month,

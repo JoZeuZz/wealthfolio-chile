@@ -52,6 +52,42 @@ export interface MetricsOptions {
   currency?: string;
 }
 
+/**
+ * The currency a set of movements is expressed in.
+ *
+ * Every total here is a sum of imported movements, so the currency is a fact
+ * about the data, not a display preference. Wealthfolio's `baseCurrency` is the
+ * currency it *reports* in — `USD` on a fresh instance — and handing that to
+ * the metrics as the accumulator's currency turned the whole panel into
+ * `MoneyError: currency mismatch: USD vs CLP` the moment a CLP statement was
+ * imported. Observed on a real v3.6.2 container.
+ *
+ * `fallback` is only for an empty set, where there is nothing to be wrong
+ * about. Mixed currencies throw: summing CLP and USD needs an exchange rate,
+ * and inventing one would put a fabricated number on the user's dashboard.
+ */
+export function currencyOf(
+  transactions: readonly NormalizedTransaction[],
+  fallback: string,
+): string {
+  const currencies = new Set(transactions.map((transaction) => transaction.amount.currency));
+  if (currencies.size === 0) return fallback;
+  if (currencies.size > 1) {
+    throw new MixedCurrencyError([...currencies].sort());
+  }
+  return [...currencies][0] as string;
+}
+
+/** More than one currency in a set that has to be totalled as one number. */
+export class MixedCurrencyError extends Error {
+  constructor(readonly currencies: readonly string[]) {
+    super(
+      `los movimientos vienen en más de una moneda (${currencies.join(', ')}) y no hay tipo de cambio para sumarlos`,
+    );
+    this.name = 'MixedCurrencyError';
+  }
+}
+
 /** Bucket transactions by month, preserving input order within each bucket. */
 export function groupByMonth(
   transactions: readonly NormalizedTransaction[],
