@@ -20,7 +20,7 @@ documentación de terceros.
 | SDK usado | `@wealthfolio/addon-sdk@3.6.2` |
 | Node de upstream | 24 (`.node-version`) |
 | Gestor de paquetes | `pnpm@10.33.4` |
-| Imagen Docker | `wealthfolio/wealthfolio:v3.6.2` (multi-arch amd64/arm64) |
+| Imagen Docker | `wealthfolio/wealthfolio:3.6.2` (multi-arch amd64/arm64) — **sin la `v`**: upstream etiqueta en git con `v3.6.2` y publica en Docker Hub como `3.6.2`. El digest coincide con el del tag `sha-633d3a1be7a…`, el commit del release |
 | Checkout local | `.upstream/wealthfolio` (ignorado por Git) |
 
 Wealthfolio es Tauri + React + Rust. El backend vive en `crates/`, el frontend
@@ -117,8 +117,12 @@ Referencia: `.upstream/wealthfolio/docs/activities/activity-types.md`.
 
 Verificado leyendo `node_modules/@wealthfolio/addon-sdk@3.6.2` y
 `.upstream/wealthfolio` en el commit `633d3a1`, no ejemplos ni documentación de
-terceros. Todavía **sin ejecutar** contra una instancia real: lo de abajo es
-lectura de contrato, no observación de runtime.
+terceros.
+
+> **Ejecutado contra un host real el 2026-08-07.** Lo que sigue mezcla dos
+> fuentes: lectura de contrato (2026-08-06) y observación de runtime
+> (2026-08-07). Donde discreparon, manda el runtime y está marcado. La sesión
+> completa está en [HOST_VALIDATION.md](HOST_VALIDATION.md).
 
 ### `activities.saveMany` — confirmado
 
@@ -182,9 +186,27 @@ Pero el puente pasa el objeto de filtros **verbatim** a
 needsReview, dateFrom, dateTo, instrumentTypes, activityIds
 ```
 
-`dateFrom`/`dateTo` son `YYYY-MM-DD` **inclusive**, y ambos backends los
-resuelven a un rango UTC según la zona horaria del usuario
-(`apps/tauri/src/commands/activity.rs:21`, `apps/server/src/api/activities.rs:62`).
+`dateFrom`/`dateTo` son `YYYY-MM-DD` y ambos backends los resuelven a un rango
+UTC **según la zona horaria de la instancia**
+(`apps/tauri/src/commands/activity.rs:21`, `apps/server/src/api/activities.rs:97`).
+
+> **Corrección por runtime (2026-08-07).** Ese detalle no es cosmético: nuestras
+> fechas de actividad entran como día civil pelado y quedan guardadas a
+> medianoche **UTC**, así que con `TZ=America/Santiago` la ventana entera vuelve
+> corrida un día. Pedir desde el `2026-08-08` **excluye** los movimientos del
+> 08-08; pedir hasta el `2026-08-04` **incluye** los del 08-05.
+>
+> Cae justo sobre el índice de duplicados, que acota su barrido al período de la
+> cartola: un movimiento del primer día de la ventana no llegaba al índice y la
+> importación lo declaraba nuevo. `activityDateFilters` pide ahora un día más por
+> lado y `withinWindow` reimpone la ventana exacta sobre lo que vuelve.
+
+La firma es **posicional**, no un objeto: `search(page, pageSize, filters,
+searchKeyword, sort)`. Pasar un objeto como primer argumento devuelve 422. La
+paginación es **0-indexada** (`offset = page * page_size`,
+`crates/storage-sqlite/src/activities/repository.rs:422`) y `meta.totalRowCount`
+es el total del conjunto filtrado, no el de la página. Las tres cosas verificadas
+en runtime.
 
 > **Error encontrado y corregido.** El addon enviaba `startDate`/`endDate`. Esos
 > nombres no existen en ninguna capa: se ignoraban en silencio y toda consulta
@@ -194,17 +216,33 @@ Como el tipo publicado no los declara, el addon los construye en un único punto
 (`activityDateFilters`) con un cast explícito. Si upstream amplía el tipo, ese
 cast es lo único que hay que borrar.
 
-### Round-trip de metadata — confirmado por contrato
+### Round-trip de metadata — el contrato es asimétrico
 
-`ActivityCreate.metadata` acepta `string | Record<string, unknown>` y
-`ActivityDetails.metadata` lo devuelve como `Record<string, unknown>`
-(`dist/src/data-types.d.ts:186`, `:271`). En el core Rust es
-`Option<Value>`, un blob JSON
-(`crates/core/src/activities/activities_model.rs:149`). `ActivityImport` **no**
-tiene el campo — otra razón para usar `saveMany`.
+`ActivityCreate.metadata` está declarado como `string | Record<string, unknown>`
+y `ActivityDetails.metadata` como `Record<string, unknown>`
+(`dist/src/data-types.d.ts:186`, `:271`). `ActivityImport` **no** tiene el campo
+— otra razón para usar `saveMany`.
 
-Pendiente de verificar en runtime: que el blob sobreviva íntegro (claves
-anidadas, arrays, acentos) a un ciclo escritura → reinicio → lectura.
+> **Corrección por runtime (2026-08-07).** Sólo una de las dos mitades del tipo
+> de escritura es cierta. En el backend, `NewActivity.metadata` es
+> `Option<String>` (`crates/core/src/activities/activities_model.rs:324`): un
+> objeto cuesta un `422 Unprocessable Entity` **antes de escribir una sola
+> fila**. La lectura sí devuelve el blob parseado, porque
+> `ActivityDetails.metadata` es `Option<Value>`
+> (`:818`). Es decir: **se escribe string, se lee objeto.**
+>
+> Esto habría hecho fallar toda importación contra un host real, y ningún test lo
+> detectaba porque el doble estaba construido sobre la misma suposición que el
+> código. `toActivityCreate` serializa; `readChileMetadata` acepta las dos formas.
+
+Verificado en runtime: el blob sobrevive íntegro —claves anidadas, arrays,
+acentos— a escritura → reinicio del contenedor → lectura, y también a un ciclo
+de backup y restore.
+
+**El host escribe en el mismo campo.** Al enlazar una transferencia agrega
+`metadata.flow.is_external` junto a nuestro `wealthfolioChile`, sin tocarlo. La
+convivencia por namespace funciona; ver
+[ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md).
 
 ### Semántica de actividades — la dirección va en el tipo
 
@@ -236,14 +274,39 @@ efecto en caja:
 > `resolveActivityDirection` y docs/IMPORT_PIPELINE.md.
 
 `CREDIT` altera net contribution **según el subtipo**: `BONUS` suma, `REFUND` y
-`REBATE` no. Usamos `CREDIT`/`REFUND`, que es el comportamiento buscado — según
-la documentación. Confirmarlo en runtime sigue pendiente.
+`REBATE` no. Usamos `CREDIT`/`REFUND`, que es el comportamiento buscado.
+Confirmado en runtime el 2026-08-07: el subtipo se guarda y vuelve tal cual, el
+saldo de la cuenta sube el monto, y la devolución no aparece en `contributions`.
 
 ### `storage` — confirmado
 
 Clave ≤ 128 caracteres de `[A-Za-z0-9_.:-]`; valor limitado a ~250 KB y `set`
 rechaza uno mayor (`dist/src/host-api.d.ts:433`). Es por dispositivo replicado,
 no por addon. `ShardedList` respeta el límite con un margen de 200 KB.
+
+Verificado en runtime: el esquema particionado (`wfcl.imports.index` +
+`wfcl.imports.s0`) pasa la validación de charset del host, se lee por
+`GET /api/v1/addons/storage/<addon>/<key>` y sobrevive tanto al reinicio del
+contenedor como a una restauración desde backup. El límite exacto de bytes sigue
+sin medirse: el esquema particionado nunca se acercó, y forzar el fallo a
+propósito no aportaba nada a esta fase.
+
+### Lo que el SDK **no** expone
+
+Comprobado sobre `ActivitiesAPI` en `packages/addon-sdk/src/host-api.ts`. Los
+métodos disponibles son:
+
+```
+getAll  search  create  update  saveMany  import  checkImport
+getImportMapping  saveImportMapping
+```
+
+`POST /activities/link`, `/activities/unlink` y `/activities/transfer-pair`
+existen en la API HTTP del servidor (`apps/server/src/api/activities.rs:459`)
+pero **no tienen equivalente en el SDK**. Un addon de v3.6.2 no puede enlazar los
+dos tramos de una transferencia, que es lo único que hace que el host la trate
+como interna. Consecuencias y decisión en
+[ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md).
 
 ### Permisos declarados vs. usados
 

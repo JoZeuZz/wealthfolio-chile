@@ -4,12 +4,15 @@ Addon de [Wealthfolio](https://wealthfolio.app) para gestión financiera persona
 en Chile: importa cartolas de bancos chilenos, concilia transferencias entre tus
 cuentas, detecta compras en cuotas y responde en qué se te va el sueldo.
 
-> **Estado: 0.1.1 — motor completo, todavía sin validar contra un Wealthfolio
-> real.** 301 tests cubren el motor y la capa de servicios. Los adaptadores de
-> Banco de Chile, BancoEstado y Falabella/CMR están implementados pero derivados
-> de documentación pública, no de cartolas reales. El addon compila a un bundle
-> cargable, pero **nunca se ha ejecutado dentro de Wealthfolio**. Ver la matriz
-> de estado en [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md).
+> **Estado: 0.1.1 — validado contra un Wealthfolio v3.6.2 real, todavía sin
+> cartolas reales.** 318 tests cubren el motor y la capa de servicios, y el
+> 2026-08-07 el addon se ejecutó por primera vez dentro de un Wealthfolio
+> corriendo: se instaló, importó, deduplicó y sobrevivió a un reinicio y a una
+> restauración desde backup. Esa sesión encontró seis errores en la frontera con
+> el host, todos corregidos. Los adaptadores de Banco de Chile, BancoEstado y
+> Falabella/CMR siguen derivados de documentación pública, no de cartolas reales.
+> Evidencia en [docs/HOST_VALIDATION.md](docs/HOST_VALIDATION.md); matriz en
+> [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md).
 
 ### Cómo leer los estados en esta documentación
 
@@ -22,7 +25,8 @@ Cuatro niveles, y no se mezclan:
 | **validado en host** | Se ejecutó contra un Wealthfolio v3.6.2 corriendo |
 | **validado con banco real** | Se ejecutó contra una cartola real de ese banco |
 
-Hoy nada del proyecto pasa de **integrado**.
+Hoy el proyecto llega a **validado en host**. Ningún banco llega a
+**validado con banco real**.
 
 ---
 

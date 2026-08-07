@@ -9,7 +9,7 @@ Documentación completa en la [raíz del repositorio](../README.md).
 
 ```bash
 pnpm install
-pnpm test          # 301 tests
+pnpm test          # 318 tests
 pnpm typecheck
 pnpm lint
 pnpm build         # dist/addon.js

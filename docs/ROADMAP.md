@@ -105,6 +105,7 @@ El motor está testeado pero no conectado.
 
 | Bloqueo | Impacto | Salida |
 | --- | --- | --- |
-| Sin Docker en esta máquina | F2 sin ejecutar; el addon no se ha cargado nunca en una instancia | Instalar Docker |
+| ~~Sin Docker en esta máquina~~ | Resuelto el 2026-08-07: F2 ejecutada contra `wealthfolio/wealthfolio:3.6.2`. Ver [HOST_VALIDATION.md](HOST_VALIDATION.md) | — |
+| Un addon no puede enlazar transferencias | La atribución de rendimiento del host queda `partial` en cuentas con transferencias importadas | [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md); proponer API upstream |
 | Sin cartolas reales | F8–F10 sin validar | Descargar una de cada banco |
 | Sin API de spending en el SDK | Categorización duplicada | [ADR 0003](adr/0003-categorizacion-propia.md); proponer API upstream |
