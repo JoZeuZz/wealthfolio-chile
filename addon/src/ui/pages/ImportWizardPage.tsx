@@ -505,6 +505,7 @@ function DetectionStep({
   busy: boolean;
 }) {
   const { statement, detections, parser } = prepared;
+  const detection = detections.find((entry) => entry.parser === parser.id);
   const unverified = parser.profile.validationStatus === 'pending-real-sample';
   const errors = statement.issues.filter((issue) => issue.level === 'error');
 
@@ -515,7 +516,19 @@ function DetectionStep({
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Banco" value={parser.label} />
+          <Field label="Archivo" value={statement.fileName} />
+          <Field
+            label="Banco"
+            value={parser.label}
+            // How sure the detector was, next to what it decided. A profile
+            // picked at 40 % and one picked at 100 % are not the same claim,
+            // and the number was only visible on the buttons below.
+            hint={
+              detection
+                ? `${Math.round(detection.score * 100)}% de coincidencia`
+                : 'Elegido a mano'
+            }
+          />
           <Field
             label="Cuenta en la cartola"
             value={statement.account.number ? maskAccountNumber(statement.account.number) : '—'}

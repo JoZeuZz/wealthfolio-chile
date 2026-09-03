@@ -75,6 +75,14 @@ describe('una cartola que se leyó entera', () => {
     expect(confirmar).toBeEnabled();
   });
 
+  it('dice qué archivo es y con cuánta seguridad se eligió el banco', async () => {
+    // El porcentaje sólo estaba en los botones de abajo, donde se lee como una
+    // opción y no como el grado de confianza de la decisión que ya se tomó.
+    await openWizardWith(CARTOLA_BUENA, {}, 'febrero.csv');
+    expect(screen.getByText('febrero.csv')).toBeInTheDocument();
+    expect(screen.getByText(/% de coincidencia/)).toBeInTheDocument();
+  });
+
   it('dice que la cartola corresponde a la cuenta elegida', async () => {
     await openWizardWith(CARTOLA_BUENA);
     expect(screen.getByText(/La cartola corresponde a esta cuenta/)).toBeInTheDocument();
