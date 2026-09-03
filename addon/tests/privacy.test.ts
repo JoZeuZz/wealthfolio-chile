@@ -312,3 +312,56 @@ describe('los problemas de una fila no citan la fila', () => {
     expect(issue?.message).toContain('fecha');
   });
 });
+
+describe('la metadata que llega al host', () => {
+  it('no lleva un número de tarjeta en el comercio derivado', async () => {
+    const { toActivityCreate, readChileMetadata } = await import(
+      '../src/core/mapping/activities'
+    );
+    const { makeTransaction } = await import('./fixtures');
+
+    const create = toActivityCreate(
+      makeTransaction({
+        amount: -20000,
+        date: '2026-02-10',
+        description: 'TARJETA 4051 2233 4455 6677 SUPERMERCADO',
+        merchant: 'Tarjeta 4051 2233 4455 6677 Supermercado',
+      }),
+      { accountId: 'acc-1', runId: 'run-1' },
+    );
+
+    expect(readChileMetadata(create.metadata as string)?.merchant).not.toContain('4455 6677');
+  });
+});
+
+describe('verboseLogging', () => {
+  it('produce diagnóstico sólo cuando se pide, y sólo con cifras', async () => {
+    const quiet = fakeHost();
+    const loud = fakeHost();
+
+    const prepared = prepareImport({
+      file: fromText(
+        'cartola.csv',
+        ['Fecha;Descripcion;Cargo;Abono;Saldo', '2026-02-03;COMPRA SUPERMERCADO;10.000;;90.000'].join(
+          '\n',
+        ),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    await runImport({ ctx: quiet.ctx, prepared, accountId: 'acc-1', accountName: 'C' });
+    await runImport({
+      ctx: loud.ctx,
+      prepared,
+      accountId: 'acc-1',
+      accountName: 'C',
+      verboseLogging: true,
+    });
+
+    expect(loud.logs.length).toBeGreaterThan(quiet.logs.length);
+    expect(loud.logs.map((l) => l.message).join('\n')).not.toContain('SUPERMERCADO');
+  });
+});

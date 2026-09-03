@@ -106,6 +106,12 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
     try {
       const result = await ctx.api.activities.saveMany({ creates: batch });
       created += result.created.length;
+      // Counts and positions only, and only when the user asked for
+      // diagnostics. `verboseLogging` was read, passed down and never used by
+      // anything, which made it another setting that promised a behaviour.
+      logger.verbose(
+        `Lote ${batchNumber}/${batches}: ${result.created.length} creados, ${result.errors.length} rechazados.`,
+      );
       for (const error of result.errors) {
         errors.push(error.message);
       }

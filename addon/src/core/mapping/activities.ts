@@ -1,5 +1,6 @@
 import type { ActivityCreate, ActivityType } from '@wealthfolio/addon-sdk';
 import { hashFields } from '../hash';
+import { redactSensitive } from '../privacy';
 import { abs, money, negate, toDecimalString, type Money } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { EnrichedTransaction, NormalizedTransaction } from '../model/transaction';
@@ -147,7 +148,11 @@ export function toActivityCreate(
     kind: transaction.kind,
     dir: transaction.direction,
     ...(transaction.category ? { cat: transaction.category } : {}),
-    ...(transaction.merchant ? { merchant: transaction.merchant } : {}),
+    // Redacted. The merchant is a derived convenience, and one derived from a
+    // glosa like `TARJETA 4051 2233 4455 6677 SUPERMERCADO` carried the card
+    // number into the activity's metadata for no benefit at all. The `comment`
+    // still holds the glosa the bank printed, which is the field meant to.
+    ...(transaction.merchant ? { merchant: redactSensitive(transaction.merchant) } : {}),
     ...(transaction.tags.length > 0 ? { tags: transaction.tags } : {}),
     ...(transaction.installment
       ? { cuota: { n: transaction.installment.current, of: transaction.installment.total } }
