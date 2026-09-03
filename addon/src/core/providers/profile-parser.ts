@@ -13,7 +13,8 @@ import {
 import { detectHeader, normalizeHeader, type ColumnMap } from '../parsing/columns';
 import type { StatementProfile } from '../parsing/profile';
 import { mapRows } from '../parsing/rows';
-import type { Sheet } from '../parsing/tabular';
+import type { NormalizedTransaction } from '../model/transaction';
+import { isBlankRow, type Sheet } from '../parsing/tabular';
 import { pickDataSheet } from '../parsing/workbook';
 import { foldCase } from '../text';
 import type { DetectionHints, ParserInput, StatementParser } from './parser';
@@ -133,6 +134,20 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
   const sheet = pickDataSheet(input.sheets);
   const header = detectHeader(sheet);
   const issues: StatementIssue[] = [];
+
+  // Only one sheet is read. Saying so is the difference between "we read the
+  // statement whole" and "we read the part of it we picked": bank workbooks do
+  // split movements across sheets, by month or by product.
+  const ignoredSheets = input.sheets.filter(
+    (candidate) => candidate.name !== sheet.name && candidate.rows.some((row) => !isBlankRow(row)),
+  );
+  if (ignoredSheets.length > 0) {
+    issues.push({
+      level: 'warning',
+      code: 'multiple-sheets',
+      message: `El archivo tiene ${ignoredSheets.length + 1} hojas con datos y sólo se leyó "${sheet.name}". Si los movimientos están repartidos entre hojas, importa cada una por separado.`,
+    });
+  }
 
   if (header.headerRow < 0) {
     return {
@@ -453,27 +468,72 @@ export function validateStatement(
  */
 const SYSTEMATIC_MISMATCH_RATIO = 0.5;
 
+/**
+ * Steps needed before a *proportion* means anything.
+ *
+ * With one step, any quirk at all is 100 %. Without this floor a two-line
+ * cartola with a single rounded balance is indistinguishable from a statement
+ * read entirely wrong, and gets blocked as if it were.
+ */
+const MIN_STEPS_FOR_SYSTEMATIC = 4;
+
+/**
+ * Walk the declared running balance and see whether the movements explain it.
+ *
+ * Two things this has to get right before it is allowed to block anything, both
+ * of which it originally got wrong:
+ *
+ * **Order.** The walk is over the ledger, not over the file. Banco de Chile and
+ * Santander export newest-first by default, and reading that top to bottom
+ * makes every single step disagree — a correct cartola scoring a 100 %
+ * mismatch. The rows are put in ledger order first, and when they are in no
+ * date order at all the check declines to answer rather than inventing a
+ * failure.
+ *
+ * **Gaps.** Plenty of Chilean cartolas print the balance once per day and leave
+ * it blank on the rows in between. Comparing a balance against only the amount
+ * on its own row drops everything between the two, so almost every step fails.
+ * Amounts accumulate across the gap instead.
+ */
 function checkBalanceWalk(
   statement: ParsedStatement,
   profile: StatementProfile,
   issues: StatementIssue[],
 ): boolean | undefined {
-  const withBalance = statement.transactions.filter((t) => t.balanceAfter !== undefined);
-  if (withBalance.length < 2) return undefined;
-
-  const steps = withBalance.length - 1;
-  let mismatches = 0;
-  for (let i = 1; i < withBalance.length; i += 1) {
-    const previous = withBalance[i - 1];
-    const current = withBalance[i];
-    if (!previous?.balanceAfter || !current?.balanceAfter) continue;
-    const expected = add(previous.balanceAfter, current.amount);
-    if (compare(expected, current.balanceAfter) !== 0) mismatches += 1;
+  const ordered = inLedgerOrder(statement.transactions);
+  if (!ordered) {
+    issues.push({
+      level: 'info',
+      code: 'balance-walk-skipped',
+      message:
+        'Las filas no vienen ordenadas por fecha, así que no se pudo comprobar que el saldo declarado cuadre con los montos.',
+    });
+    return undefined;
   }
 
+  let previousBalance: Money | undefined;
+  let pending: Money | undefined;
+  let steps = 0;
+  let mismatches = 0;
+
+  for (const transaction of ordered) {
+    pending = pending ? add(pending, transaction.amount) : transaction.amount;
+    const balance = transaction.balanceAfter;
+    if (!balance) continue;
+
+    if (previousBalance) {
+      steps += 1;
+      if (compare(add(previousBalance, pending), balance) !== 0) mismatches += 1;
+    }
+    previousBalance = balance;
+    pending = undefined;
+  }
+
+  if (steps === 0) return undefined;
   if (mismatches === 0) return true;
 
-  const systematic = mismatches / steps >= SYSTEMATIC_MISMATCH_RATIO;
+  const systematic =
+    steps >= MIN_STEPS_FOR_SYSTEMATIC && mismatches / steps >= SYSTEMATIC_MISMATCH_RATIO;
 
   if (systematic) {
     issues.push({
@@ -493,6 +553,32 @@ function checkBalanceWalk(
     message: `El saldo declarado no cuadra con los montos en ${mismatches} de ${steps} pasos. Es probable que el signo de los montos o alguna columna estén mal interpretados.`,
   });
   return false;
+}
+
+/**
+ * The rows in the order the account actually moved, or `undefined` when the
+ * file is in no date order at all.
+ *
+ * Reversing a descending export is safe in a way that sorting is not: it keeps
+ * same-day rows in the sequence the bank printed them, which for a cartola in
+ * reverse is also reversed. Sorting by date alone would leave those the wrong
+ * way round and the walk would fail inside every busy day.
+ */
+function inLedgerOrder(
+  transactions: readonly NormalizedTransaction[],
+): readonly NormalizedTransaction[] | undefined {
+  const dates = transactions.map((transaction) => transaction.date);
+  let ascending = true;
+  let descending = true;
+  for (let i = 1; i < dates.length; i += 1) {
+    const previous = dates[i - 1] as string;
+    const current = dates[i] as string;
+    if (current < previous) ascending = false;
+    if (current > previous) descending = false;
+  }
+  if (ascending) return transactions;
+  if (descending) return [...transactions].reverse();
+  return undefined;
 }
 
 /** Sum of every movement, used by the preview totals. */

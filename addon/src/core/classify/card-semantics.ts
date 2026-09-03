@@ -1,6 +1,6 @@
-import { Direction, TransactionKind } from '../model/kinds';
+import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import { StatementProduct } from '../model/statement';
-import { foldCase } from '../text';
+import { normalizeDescription } from '../text';
 
 /**
  * What a credit-card movement means, in one place.
@@ -24,14 +24,23 @@ import { foldCase } from '../text';
  *   silently add it back. Neither is an answer.
  */
 
-/** Wording used on the cash account when a card bill is paid from it. */
+/**
+ * Wording used on the cash account when a card bill is paid from it.
+ *
+ * Every entry has to name a card and nothing else. `PAGO CREDITO` used to be
+ * here and is not: in Chile it is how banks label a consumer or mortgage loan
+ * instalment, so it turned a $350.000 dividendo hipotecario into debt movement
+ * and took it out of the month's spending — the same bug this module exists to
+ * fix, pointing the other way. It was harmless in the reconciler, where it was
+ * one half of a two-sided amount-and-date match; it is not harmless as a
+ * one-sided classifier.
+ */
 export const CASH_SIDE_CARD_PAYMENT_MARKERS: readonly string[] = [
   'PAGO TARJETA',
   'PAGO DE TARJETA',
   'PAGO T CREDITO',
   'PAGO TC',
   'PAGO CMR',
-  'PAGO CREDITO',
   'PAGO AUTOMATICO TARJETA',
   'PAT TARJETA',
   'ABONO A TARJETA',
@@ -71,9 +80,18 @@ export interface DescribedMovement {
   description: string;
 }
 
+/**
+ * Matched against the normalised description, not the raw one.
+ *
+ * The rule engine compares against `normalizedDescription`, so anything
+ * matching raw text here would disagree with it on the same row — a glosa like
+ * `PAGO  DE  TARJETA VISA`, routine in exports derived from fixed-width
+ * reports, matched the rule and missed the classifier. Sharing the constants is
+ * not enough if the two sides read different strings.
+ */
 function mentions(description: string, markers: readonly string[]): boolean {
-  const text = foldCase(description ?? '');
-  return markers.some((marker) => text.includes(marker));
+  const text = normalizeDescription(description ?? '');
+  return markers.some((marker) => text.includes(normalizeDescription(marker)));
 }
 
 export function mentionsCashSideCardPayment(movement: DescribedMovement): boolean {
@@ -89,17 +107,28 @@ export type CardInflowKind = 'payment' | 'reversal' | 'ambiguous';
 /**
  * What an inflow on a card statement is.
  *
- * Payment wins over reversal when a description carries both, and the order is
- * fixed rather than "whichever marker appears first in the string": a glosa
- * like `PAGO RECIBIDO - ANULA CARGO ANTERIOR` is a payment that happens to
- * explain itself, and a classification that flipped with word order would give
- * two different answers for the same statement re-exported with different
- * spacing.
+ * Only the card side's own vocabulary decides "payment". The cash-side list
+ * describes what the *other* account prints and has no authority here:
+ * `ABONO A TARJETA` appears on both sides, so consulting it made
+ * `ABONO A TARJETA POR DEVOLUCION COMERCIO` a payment — precisely the refund
+ * this module was written to stop losing.
+ *
+ * Payment beats reversal when a description carries both, and the order is
+ * fixed rather than "whichever marker appears first": `PAGO RECIBIDO - ANULA
+ * CARGO ANTERIOR` is a payment that happens to explain itself, and a
+ * classification that flipped with word order would answer differently for the
+ * same statement re-exported with different spacing.
+ *
+ * A reversal that also mentions a payment goes back to ambiguous.
+ * `ANULACION DE PAGO` is the opposite of a refund — it undoes a credit — and
+ * calling it one would book it as income. There is no reading of that glosa
+ * safe enough to act on without asking.
  */
 export function classifyCardInflow(description: string): CardInflowKind {
   if (mentions(description, CARD_SIDE_PAYMENT_MARKERS)) return 'payment';
-  if (mentions(description, CASH_SIDE_CARD_PAYMENT_MARKERS)) return 'payment';
-  if (mentions(description, CARD_REVERSAL_MARKERS)) return 'reversal';
+  if (mentions(description, CARD_REVERSAL_MARKERS)) {
+    return normalizeDescription(description ?? '').includes('PAGO') ? 'ambiguous' : 'reversal';
+  }
   return 'ambiguous';
 }
 
@@ -113,12 +142,17 @@ export function classifyCardInflow(description: string): CardInflowKind {
  *
  * `ambiguousCardCredit` tells the caller to attach a warning: the row is not
  * broken, it is unresolved, and the preview should say so.
+ *
+ * `confidence` separates "the glosa said so" from "this is what the product
+ * defaults to". Only the first is `confirmed`; the preview counts everything
+ * else as needing review, and a card payment recognised by name is not a row
+ * anybody has to look at.
  */
 export function defaultKindForRow(input: {
   product: StatementProduct;
   direction: Direction;
   description: string;
-}): { kind: TransactionKind; ambiguousCardCredit: boolean } {
+}): DefaultKind {
   const isCard =
     input.product === StatementProduct.credit_card ||
     input.product === StatementProduct.credit_line;
@@ -127,24 +161,44 @@ export function defaultKindForRow(input: {
     if (input.direction === Direction.out && mentionsCashSideCardPayment(input)) {
       // Without this the purchases charged to the card and the payment that
       // settles them both count as spending: the same money, twice.
-      return { kind: TransactionKind.credit_card_payment, ambiguousCardCredit: false };
+      return named(TransactionKind.credit_card_payment);
     }
-    return {
-      kind: input.direction === Direction.out ? TransactionKind.expense : TransactionKind.income,
-      ambiguousCardCredit: false,
-    };
+    return byProduct(
+      input.direction === Direction.out ? TransactionKind.expense : TransactionKind.income,
+    );
   }
 
   if (input.direction === Direction.out) {
-    return { kind: TransactionKind.credit_card_purchase, ambiguousCardCredit: false };
+    return byProduct(TransactionKind.credit_card_purchase);
   }
 
   switch (classifyCardInflow(input.description)) {
     case 'payment':
-      return { kind: TransactionKind.credit_card_payment, ambiguousCardCredit: false };
+      return named(TransactionKind.credit_card_payment);
     case 'reversal':
-      return { kind: TransactionKind.refund, ambiguousCardCredit: false };
+      return named(TransactionKind.refund);
     default:
-      return { kind: TransactionKind.unknown, ambiguousCardCredit: true };
+      return {
+        kind: TransactionKind.unknown,
+        confidence: Confidence.unknown,
+        ambiguousCardCredit: true,
+      };
   }
+}
+
+export interface DefaultKind {
+  kind: TransactionKind;
+  confidence: Confidence;
+  /** The row is a card credit whose glosa said nothing either way. */
+  ambiguousCardCredit: boolean;
+}
+
+/** The glosa named this movement. */
+function named(kind: TransactionKind): DefaultKind {
+  return { kind, confidence: Confidence.confirmed, ambiguousCardCredit: false };
+}
+
+/** Nothing named it; this is what the product defaults to. */
+function byProduct(kind: TransactionKind): DefaultKind {
+  return { kind, confidence: Confidence.suggested, ambiguousCardCredit: false };
 }

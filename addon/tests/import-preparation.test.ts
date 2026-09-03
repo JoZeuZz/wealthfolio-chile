@@ -285,6 +285,34 @@ describe('cartola inválida', () => {
     expect(blocker?.issues.some((issue) => issue.line === 3)).toBe(true);
   });
 
+  it('dice el problema que realmente hubo, no siempre «filas ilegibles»', async () => {
+    // Un desajuste de saldo bloquea con cero filas ilegibles. Decir «0 de 4
+    // filas no se pudieron leer» y proponer cambiar de banco manda al usuario
+    // a arreglar algo que no está roto.
+    const host = fakeHost();
+
+    const result = await prepareImportFromHost(host.ctx, {
+      file: fromText(
+        'cartola.csv',
+        [
+          'Fecha;Descripcion;Cargo;Abono;Saldo',
+          '03/02/2026;COMPRA UNO;10.000;;90.000',
+          '04/02/2026;COMPRA DOS;5.000;;70.000',
+          '05/02/2026;COMPRA TRES;5.000;;40.000',
+          '06/02/2026;COMPRA CUATRO;1.000;;10.000',
+          '07/02/2026;COMPRA CINCO;1.000;;5.000',
+        ].join('\n'),
+      ),
+      accountId: ACCOUNT,
+      parserId: 'generico.cuenta',
+    });
+
+    const blocker = result.blockers.find((entry) => entry.code === 'statement-invalid');
+    expect(blocker?.message).toMatch(/saldo/i);
+    expect(blocker?.message).not.toMatch(/no se pudieron leer/i);
+    expect(blocker?.remedy).not.toMatch(/hueco/i);
+  });
+
   it('no bloquea por advertencias', async () => {
     const host = fakeHost();
 

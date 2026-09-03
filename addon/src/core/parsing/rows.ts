@@ -2,7 +2,7 @@ import { parseStatementDate, type IsoDate } from '../dates';
 import { detectInstallment } from '../installments/detect';
 import { abs, isZero, negate, parseAmount, sign, type Money } from '../money';
 import { defaultKindForRow } from '../classify/card-semantics';
-import { Confidence, Direction, TransactionKind } from '../model/kinds';
+import { Confidence, Direction } from '../model/kinds';
 import type { RowStats, StatementIssue } from '../model/statement';
 import type { NormalizedTransaction, TransactionWarning } from '../model/transaction';
 import { normalizeDescription } from '../text';
@@ -153,7 +153,7 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     });
   }
 
-  const { kind, ambiguousCardCredit } = defaultKindForRow({
+  const { kind, confidence, ambiguousCardCredit } = defaultKindForRow({
     product: profile.product,
     direction,
     description,
@@ -197,7 +197,10 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
       : {}),
 
     kind,
-    kindConfidence: kind === TransactionKind.unknown ? Confidence.unknown : Confidence.suggested,
+    // From the classifier, not from whether the kind happens to be `unknown`:
+    // a card payment recognised by its glosa is `confirmed`, and the preview's
+    // "needs review" count should not include it.
+    kindConfidence: confidence,
     tags: [],
     ...(installment !== undefined ? { installment } : {}),
 

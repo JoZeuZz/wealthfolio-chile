@@ -249,7 +249,7 @@ export function readDelimited(
   return { sheet: { name, rows: dropTrailingBlankRows(rows) }, delimiter };
 }
 
-function dropTrailingBlankRows(rows: string[][]): string[][] {
+export function dropTrailingBlankRows(rows: string[][]): string[][] {
   let end = rows.length;
   while (end > 0 && isBlankRow(rows[end - 1] as string[])) end -= 1;
   return rows.slice(0, end);
@@ -268,6 +268,15 @@ export function firstContentRow(rows: readonly string[][], from = 0): number {
 }
 
 /** Trim the grid to its used width so ragged exports do not create phantom columns. */
+/**
+ * Drop the empty margin a file carries around its data.
+ *
+ * Both dimensions, and the height matters as much as the width: a spreadsheet's
+ * declared range stretches to wherever formatting reaches, so a three-row
+ * cartola routinely arrives as forty rows of which thirty-seven are empty.
+ * Counting those as rows the parser skipped turns the honest answer to "did we
+ * read this whole?" into a false alarm on every XLSX export.
+ */
 export function trimSheet(sheet: Sheet): Sheet {
   let width = 0;
   for (const row of sheet.rows) {
@@ -280,8 +289,8 @@ export function trimSheet(sheet: Sheet): Sheet {
   }
   return {
     name: sheet.name,
-    rows: sheet.rows.map((row) =>
-      Array.from({ length: width }, (_, i) => (row[i] ?? '').trim()),
+    rows: dropTrailingBlankRows(
+      sheet.rows.map((row) => Array.from({ length: width }, (_, i) => (row[i] ?? '').trim())),
     ),
   };
 }

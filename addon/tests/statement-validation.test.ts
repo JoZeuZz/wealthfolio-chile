@@ -157,6 +157,8 @@ describe('cuadratura de saldos', () => {
   it('un desajuste sistemático es un error de lectura, aunque el perfil no esté validado', () => {
     // Todos los pasos fallan: eso no es una rareza del banco, es que el signo o
     // una columna se están leyendo mal. Importar eso sería importar otra cosa.
+    // Cinco filas, cuatro pasos: la proporción sólo significa algo con muestra
+    // suficiente — ver «no llama sistemático a un solo paso».
     const prepared = prepare(
       [
         'BancoEstado',
@@ -167,6 +169,7 @@ describe('cuadratura de saldos', () => {
         '04/02/2026;COMPRA DOS;5.000;;70.000',
         '05/02/2026;COMPRA TRES;5.000;;40.000',
         '06/02/2026;COMPRA CUATRO;1.000;;10.000',
+        '07/02/2026;COMPRA CINCO;1.000;;5.000',
       ].join('\n'),
       'banco-estado.cuenta',
     );
@@ -186,11 +189,100 @@ describe('cuadratura de saldos', () => {
         '04/02/2026;COMPRA DOS;5.000;;85.000',
         '05/02/2026;COMPRA TRES;5.000;;79.999',
         '06/02/2026;COMPRA CUATRO;1.000;;78.999',
+        '07/02/2026;COMPRA CINCO;1.000;;77.999',
       ]),
     );
 
     const issue = prepared.validation.issues.find((i) => i.code === 'balance-walk-mismatch');
     expect(issue?.level).toBe('error');
     expect(prepared.validation.ok).toBe(false);
+  });
+});
+
+/**
+ * El recorrido de saldos, contra cartolas reales y no contra la que teníamos a
+ * mano.
+ *
+ * Los tres casos de abajo salieron de una revisión adversarial del primer
+ * intento: los tres son cartolas correctas que el chequeo declaraba
+ * ilegibles. Un control de integridad que bloquea archivos buenos no es
+ * conservador, es inservible — el usuario aprende a ignorarlo o abandona.
+ */
+describe('el saldo se recorre en el orden del libro, no en el del archivo', () => {
+  it('acepta una cartola exportada de la más nueva a la más antigua', () => {
+    // Banco de Chile y Santander exportan así por defecto. Recorrer el archivo
+    // de arriba abajo hace que *todos* los pasos fallen, y el desajuste
+    // sistemático bloqueaba la importación entera.
+    const prepared = prepare(
+      [
+        'BancoEstado',
+        'CuentaRUT N: 12345678',
+        '',
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '06/02/2026;COMPRA CUATRO;1.000;;78.999',
+        '05/02/2026;COMPRA TRES;5.000;;79.999',
+        '04/02/2026;COMPRA DOS;5.000;;84.999',
+        '03/02/2026;COMPRA UNO;10.000;;89.999',
+      ].join('\n'),
+      'banco-estado.cuenta',
+    );
+
+    expect(prepared.validation.summary.balanceReconciles).toBe(true);
+    expect(prepared.validation.ok).toBe(true);
+  });
+
+  it('suma los movimientos intermedios cuando sólo algunas filas traen saldo', () => {
+    // Varias cartolas chilenas imprimen el saldo una vez por día. Comparar sólo
+    // contra el monto de la última fila deja fuera los del medio y casi todos
+    // los pasos fallan.
+    const prepared = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA UNO;10.000;;90.000',
+        '03/02/2026;COMPRA DOS;5.000;;',
+        '04/02/2026;COMPRA TRES;5.000;;80.000',
+        '04/02/2026;COMPRA CUATRO;1.000;;',
+        '05/02/2026;COMPRA CINCO;2.000;;77.000',
+      ].join('\n'),
+    );
+
+    expect(prepared.validation.summary.balanceReconciles).toBe(true);
+    expect(prepared.validation.ok).toBe(true);
+  });
+
+  it('no opina cuando el archivo no viene ordenado por fecha', () => {
+    // Sin un orden de libro no hay recorrido posible. Decir "no se pudo
+    // comprobar" es honesto; inventar un desajuste no.
+    const prepared = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '05/02/2026;COMPRA UNO;10.000;;90.000',
+        '03/02/2026;COMPRA DOS;5.000;;85.000',
+        '04/02/2026;COMPRA TRES;5.000;;80.000',
+      ].join('\n'),
+    );
+
+    expect(prepared.validation.summary.balanceReconciles).toBeUndefined();
+    expect(prepared.validation.ok).toBe(true);
+  });
+
+  it('no llama sistemático a un solo paso que no cuadra', () => {
+    // Con dos filas hay un paso: cualquier rareza es el 100 %. Un umbral por
+    // proporción sin mínimo de muestra convierte una cartola de dos líneas en
+    // una importación bloqueada.
+    const prepared = prepare(
+      [
+        'BancoEstado',
+        'CuentaRUT N: 12345678',
+        '',
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA UNO;10.000;;90.000',
+        '04/02/2026;COMPRA DOS;5.000;;80.000',
+      ].join('\n'),
+      'banco-estado.cuenta',
+    );
+
+    expect(prepared.validation.issues.some((i) => i.code === 'balance-walk-systematic')).toBe(false);
+    expect(prepared.validation.ok).toBe(true);
   });
 });

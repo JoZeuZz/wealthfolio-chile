@@ -5,7 +5,9 @@ import {
 import { daysBetween } from '../dates';
 import { abs, equals } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
+import { StatementProduct } from '../model/statement';
 import type { NormalizedTransaction } from '../model/transaction';
+import { getParser } from '../providers/registry';
 import type { ScopedTransaction } from './transfers';
 
 /**
@@ -112,7 +114,25 @@ export function matchCardPayments(
   return matches;
 }
 
+/**
+ * Did this row come off a card statement?
+ *
+ * Asked of the parser that produced it, not of its classification. Keying on
+ * the kind was a proxy that held only while every card credit was classified
+ * `credit_card_payment`: once an unrecognised credit became `unknown`, the
+ * rows this matcher exists to resolve were the exact rows it stopped being
+ * shown. The parser id is recorded on every imported movement and survives the
+ * round trip through the host, so the product is a fact here rather than an
+ * inference.
+ *
+ * The kind stays as the fallback for a row whose parser is not in the registry
+ * — an older bundle, a profile since renamed — where a guess is all there is.
+ */
 function isCardProduct(scoped: ScopedTransaction): boolean {
+  const product = getParser(scoped.transaction.sourceParser)?.profile.product;
+  if (product !== undefined) {
+    return product === StatementProduct.credit_card || product === StatementProduct.credit_line;
+  }
   return (
     scoped.transaction.kind === TransactionKind.credit_card_purchase ||
     scoped.transaction.kind === TransactionKind.credit_card_payment

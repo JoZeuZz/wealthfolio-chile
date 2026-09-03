@@ -142,25 +142,103 @@ describe('vocabulario en un solo lugar', () => {
     expect(classifyCardInflow('PAGO RECIBIDO - ANULA CARGO ANTERIOR')).toBe('payment');
   });
 
-  it('la regla predefinida usa exactamente los mismos marcadores', () => {
+  it('la regla predefinida no repite ningún marcador: se apoya en la clasificación', () => {
+    // Repetir la lista de glosas en la regla le daba un alcance mucho mayor que
+    // al clasificador —disparaba en cualquier dirección y en cualquier
+    // producto— y `stopProcessing` escondía la fila de todas las reglas de
+    // abajo. Condicionar sobre el tipo ya decidido no puede desalinearse.
     const rule = defaultRules().find((candidate) => candidate.id === 'builtin.pago-tarjeta');
-    const markers = rule?.conditions.map((condition) => String(condition.value)).sort();
-    expect(markers).toEqual(
-      [...CASH_SIDE_CARD_PAYMENT_MARKERS, ...CARD_SIDE_PAYMENT_MARKERS].slice().sort(),
-    );
-  });
-
-  it('la regla predefinida ya no decide el tipo, sólo la categoría', () => {
-    // Una lista plana `match: 'any'` no puede decir "uno de estos marcadores Y
-    // además una salida", así que la regla llamaba pago de tarjeta a un
-    // `PAGO RECIBIDO` en una cuenta corriente. Clasificar mira la dirección y
-    // el producto; la regla categoriza.
-    const rule = defaultRules().find((candidate) => candidate.id === 'builtin.pago-tarjeta');
+    expect(rule?.conditions).toEqual([
+      { field: 'kind', operator: 'equals', value: TransactionKind.credit_card_payment },
+    ]);
     expect(rule?.actions.map((action) => action.type)).toEqual(['set_category']);
   });
 
   it('no clasifica lo que no reconoce', () => {
     expect(classifyCardInflow('ABONO')).toBe('ambiguous');
     expect(classifyCardInflow('')).toBe('ambiguous');
+  });
+});
+
+/**
+ * Casos que salieron de una revisión adversarial del primer intento.
+ *
+ * Los cuatro son glosas chilenas corrientes que la primera versión clasificaba
+ * peor que el código que venía a reemplazar. Están aquí para que no vuelvan.
+ */
+describe('el alcance de los marcadores', () => {
+  function prepareChecking(rows: string[]) {
+    return prepareImport({
+      file: fromText('cartola.csv', ['Fecha;Descripcion;Cargo;Abono;Saldo', ...rows].join('\n')),
+      accountId: 'acc-cash',
+      parserId: 'generico.cuenta',
+      rules: defaultRules(),
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+  }
+
+  it('un dividendo hipotecario no es un pago de tarjeta', () => {
+    // `PAGO CREDITO` como subcadena suelta convierte cualquier crédito de
+    // consumo o hipotecario en movimiento de deuda de tarjeta, y lo saca del
+    // gasto del mes: el mismo error que el arreglo venía a corregir, al revés.
+    const prepared = prepareChecking([
+      '05/02/2026;PAGO CREDITO HIPOTECARIO BANCO;350.000;;650.000',
+    ]);
+    expect(prepared.rows[0]?.transaction.kind).toBe(TransactionKind.expense);
+  });
+
+  it('un crédito de consumo tampoco', () => {
+    const prepared = prepareChecking(['05/02/2026;PAGO CREDITO DE CONSUMO;120.000;;880.000']);
+    expect(prepared.rows[0]?.transaction.kind).toBe(TransactionKind.expense);
+  });
+
+  it('un PAT de la luz no se categoriza como pago de tarjeta', () => {
+    const prepared = prepareChecking(['05/02/2026;PAGO PAT ENEL DISTRIBUCION;45.000;;955.000']);
+    expect(prepared.rows[0]?.transaction.category).not.toBe('pago-tarjeta');
+  });
+
+  it('la regla de comisiones sigue alcanzando a una comisión', () => {
+    // La regla de pago de tarjeta corta el resto de las reglas. Si además
+    // dispara de más, se lleva por delante la categorización de todo lo que
+    // venga después.
+    const prepared = prepareChecking(['05/02/2026;COMISION MANTENCION CUENTA;3.500;;996.500']);
+    expect(prepared.rows[0]?.transaction.kind).toBe(TransactionKind.fee);
+  });
+
+  it('un abono a la tarjeta por devolución es una devolución', () => {
+    // `ABONO A TARJETA` es glosa del lado de la cuenta corriente y también algo
+    // que la tarjeta imprime. Consultarla al clasificar un abono de tarjeta
+    // devolvía "pago" justo en el caso que el arreglo existía para separar.
+    const prepared = prepareCard(['06/02/2026;ABONO A TARJETA POR DEVOLUCION COMERCIO;-49.990']);
+    expect(prepared.rows[0]?.transaction.kind).toBe(TransactionKind.refund);
+  });
+
+  it('la anulación de un pago no es una devolución', () => {
+    // Es lo contrario: deshace un abono. Contarla como devolución la sumaría
+    // como ingreso.
+    expect(classifyCardInflow('ANULACION DE PAGO')).toBe('ambiguous');
+    expect(classifyCardInflow('REVERSA PAGO AUTOMATICO')).toBe('ambiguous');
+  });
+
+  it('reconoce la glosa aunque venga con espacios de más', () => {
+    // La regla compara contra `normalizedDescription` y el clasificador contra
+    // la glosa cruda: con doble espacio los dos daban respuestas distintas
+    // sobre la misma fila.
+    const prepared = prepareChecking(['05/02/2026;PAGO  DE  TARJETA VISA;120.000;;880.000']);
+    expect(prepared.rows[0]?.transaction.kind).toBe(TransactionKind.credit_card_payment);
+  });
+
+  it('un pago de tarjeta reconocido por su glosa queda confirmado, no sugerido', () => {
+    // Antes lo confirmaba la regla vía `set_kind`. Al mover la decisión al
+    // clasificador todo pasó a `suggested`, y la vista previa contaba cada pago
+    // de tarjeta como fila «requiere revisión».
+    const prepared = prepareChecking(['2026-02-05;PAGO TARJETA CMR;120.000;;880.000']);
+    expect(prepared.rows[0]?.transaction.kindConfidence).toBe('confirmed');
+    expect(prepared.totals.needsReview).toBe(0);
+  });
+
+  it('lo que sólo sigue el default del producto queda sugerido', () => {
+    const prepared = prepareChecking(['2026-02-05;COMPRA SUPERMERCADO;20.000;;980.000']);
+    expect(prepared.rows[0]?.transaction.kindConfidence).toBe('suggested');
   });
 });

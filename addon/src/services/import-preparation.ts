@@ -73,6 +73,15 @@ export type ImportBlocker =
   | {
       code: 'statement-invalid';
       message: string;
+      /**
+       * What to do about it.
+       *
+       * Carried per blocker rather than kept as fixed copy in the UI: a
+       * statement can be invalid for reasons with opposite remedies, and
+       * telling someone whose rows all parsed that "importing only the readable
+       * rows would leave a gap" describes a problem they do not have.
+       */
+      remedy: string;
       /** The error-level issues that caused it, lines included. */
       issues: StatementIssue[];
     };
@@ -188,7 +197,7 @@ function collectBlockers(
     const issues = prepared.validation.issues.filter((issue) => issue.level === 'error');
     blockers.push({
       code: 'statement-invalid',
-      message: describeInvalidStatement(prepared, issues.length),
+      ...describeInvalidStatement(prepared, issues),
       issues,
     });
   }
@@ -200,16 +209,49 @@ function collectBlockers(
   return blockers;
 }
 
-function describeInvalidStatement(prepared: PreparedImport, errorCount: number): string {
+/**
+ * Name the actual problem.
+ *
+ * "Invalid" covers unrelated failures whose remedies point in opposite
+ * directions: rows that would not parse, and a statement whose every row parsed
+ * and whose declared balance the amounts do not explain. One asks the user to
+ * check the file is the whole cartola; the other says the numbers are being
+ * read wrong and no row in the file can be trusted. A single message for both
+ * sends half the users to fix something that is not broken.
+ */
+function describeInvalidStatement(
+  prepared: PreparedImport,
+  issues: readonly StatementIssue[],
+): { message: string; remedy: string } {
   const { summary } = prepared.validation;
-  if (summary.parsedRows === 0) {
-    return 'No se reconoció ningún movimiento en el archivo.';
+  const codes = new Set(issues.map((issue) => issue.code));
+
+  if (codes.has('balance-walk-systematic') || codes.has('balance-walk-mismatch')) {
+    return {
+      message:
+        issues.find((issue) => issue.code.startsWith('balance-walk'))?.message ??
+        'El saldo declarado no cuadra con los montos del archivo.',
+      remedy:
+        'Los montos no se están interpretando como el banco los escribió, así que ninguna fila de esta cartola es confiable. Prueba con otro perfil de banco en el paso anterior.',
+    };
   }
-  return (
-    `${summary.errorRows} de ${summary.totalRows} filas no se pudieron leer ` +
-    `(${errorCount} problema(s)). Importar sólo las ${summary.parsedRows} filas legibles ` +
-    'dejaría un hueco en la contabilidad sin dejar rastro de que faltan movimientos.'
-  );
+
+  if (summary.parsedRows === 0) {
+    return {
+      message: 'No se reconoció ningún movimiento en el archivo.',
+      remedy:
+        'Revisa que sea la cartola completa y no un resumen, y que el banco elegido sea el correcto.',
+    };
+  }
+
+  return {
+    message:
+      `${summary.errorRows} de ${summary.totalRows} filas no se pudieron leer ` +
+      `(${issues.length} problema(s)).`,
+    remedy:
+      `Importar sólo las ${summary.parsedRows} filas legibles dejaría un hueco en la contabilidad ` +
+      'sin dejar rastro de que faltan movimientos. Revisa que el banco elegido sea el correcto o que el archivo sea la cartola íntegra.',
+  };
 }
 
 type PipelineOutcome =

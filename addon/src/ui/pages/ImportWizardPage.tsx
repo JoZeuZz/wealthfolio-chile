@@ -298,9 +298,11 @@ const BLOCKER_COPY: Record<ImportBlocker['code'], { title: string; consequence: 
       'Importarla aquí dejaría los movimientos en la cuenta equivocada, y la deduplicación no lo detectaría: en otra cuenta esos movimientos son nuevos. Elige la cuenta correcta en el primer paso.',
   },
   'statement-invalid': {
-    title: 'La cartola no se leyó completa',
-    consequence:
-      'Importar sólo las filas legibles escribiría una cartola incompleta que después parece completa. Elige otro banco en el paso anterior, o revisa que el archivo sea la cartola íntegra.',
+    title: 'La cartola no se puede importar tal como se leyó',
+    // Overridden by the blocker's own `remedy`: the reasons a statement is
+    // invalid have opposite remedies, so fixed copy here would be wrong for
+    // roughly half of them.
+    consequence: '',
   },
 };
 
@@ -334,7 +336,11 @@ function ImportBlockedAlert({
               <span className="font-medium">{BLOCKER_COPY[blocker.code]?.title}</span>
             ) : null}
             <span>{blocker.message}</span>
-            <span>{BLOCKER_COPY[blocker.code]?.consequence}</span>
+            <span>
+              {blocker.code === 'statement-invalid'
+                ? blocker.remedy
+                : BLOCKER_COPY[blocker.code]?.consequence}
+            </span>
             {blocker.code === 'statement-invalid' && blocker.issues.length > 0 ? (
               <ul className="list-disc pl-5 text-xs">
                 {blocker.issues.slice(0, 5).map((issue, index) => (

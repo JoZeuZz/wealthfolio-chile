@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { makeTransaction } from './fixtures';
 import { buildDuplicateIndex } from '../src/core/dedupe/classify';
 import { money } from '../src/core/money';
 import { Confidence, Direction, TransactionKind } from '../src/core/model/kinds';
@@ -270,5 +271,75 @@ describe('end-to-end reconciliation across two imported statements', () => {
     expect(transfer).toBeDefined();
     expect(transfer!.confidence).toBe(Confidence.confirmed);
     expect(transfer!.inflow.accountId).toBe('acct-estado');
+  });
+});
+
+/**
+ * El emparejamiento de dos lados sigue viendo el abono de la tarjeta.
+ *
+ * Cuando un abono ambiguo pasó a clasificarse `unknown`, el filtro que elige
+ * candidatos —que adivinaba el producto a partir del tipo— dejó de verlo. El
+ * matcher existe justamente para resolver esas filas, así que quedarse sin
+ * ellas invierte el efecto: el lado de la tarjeta se queda `unknown` para
+ * siempre y el de la cuenta baja de confirmado a sugerido.
+ */
+describe('abonos de tarjeta sin clasificar', () => {
+  const cardParser = 'generico.tarjeta';
+
+  it('empareja un abono `unknown` de la tarjeta con el cargo de la cuenta', () => {
+    const matches = matchCardPayments([
+      {
+        accountId: 'cuenta',
+        transaction: makeTransaction({
+          amount: -120000,
+          date: '2026-02-05',
+          description: 'PAGO TARJETA CMR',
+          kind: TransactionKind.credit_card_payment,
+          sourceParser: 'generico.cuenta',
+        }),
+      },
+      {
+        accountId: 'tarjeta',
+        transaction: makeTransaction({
+          amount: 120000,
+          date: '2026-02-06',
+          description: 'ABONO',
+          kind: TransactionKind.unknown,
+          sourceParser: cardParser,
+        }),
+      },
+    ]);
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.confidence).toBe(Confidence.confirmed);
+    expect(matches[0]?.cardCredit).toBeDefined();
+  });
+
+  it('no confunde un ingreso `unknown` de una cuenta corriente con un abono de tarjeta', () => {
+    const matches = matchCardPayments([
+      {
+        accountId: 'cuenta',
+        transaction: makeTransaction({
+          amount: -120000,
+          date: '2026-02-05',
+          description: 'PAGO TARJETA CMR',
+          kind: TransactionKind.credit_card_payment,
+          sourceParser: 'generico.cuenta',
+        }),
+      },
+      {
+        accountId: 'otra-cuenta',
+        transaction: makeTransaction({
+          amount: 120000,
+          date: '2026-02-06',
+          description: 'ABONO',
+          kind: TransactionKind.unknown,
+          sourceParser: 'generico.cuenta',
+        }),
+      },
+    ]);
+
+    expect(matches[0]?.cardCredit).toBeUndefined();
+    expect(matches[0]?.confidence).toBe(Confidence.suggested);
   });
 });
