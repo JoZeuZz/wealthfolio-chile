@@ -1,9 +1,11 @@
+import {
+  mentionsCardSidePayment,
+  mentionsCashSideCardPayment,
+} from '../classify/card-semantics';
 import { daysBetween } from '../dates';
 import { abs, equals } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
-import { StatementProduct } from '../model/statement';
 import type { NormalizedTransaction } from '../model/transaction';
-import { foldCase } from '../text';
 import type { ScopedTransaction } from './transfers';
 
 /**
@@ -16,30 +18,6 @@ import type { ScopedTransaction } from './transfers';
  * This module recognises the payment leg on both sides and marks it
  * `credit_card_payment`, which every spending aggregate excludes.
  */
-
-/** Wording used by Chilean banks for a card payment on the cash-account side. */
-const PAYMENT_MARKERS = [
-  'PAGO TARJETA',
-  'PAGO DE TARJETA',
-  'PAGO T CREDITO',
-  'PAGO TC',
-  'PAGO CMR',
-  'PAGO CREDITO',
-  'PAGO AUTOMATICO TARJETA',
-  'PAT TARJETA',
-  'ABONO A TARJETA',
-  'PAGO ESTADO DE CUENTA',
-];
-
-/** Wording used on the card statement itself for an incoming payment. */
-const CARD_SIDE_MARKERS = [
-  'PAGO RECIBIDO',
-  'SU PAGO',
-  'PAGO EN LINEA',
-  'ABONO PAGO',
-  'PAGO NORMAL',
-  'GRACIAS POR SU PAGO',
-];
 
 export interface CardPaymentMatch {
   /** The outflow from the cash account. */
@@ -141,14 +119,17 @@ function isCardProduct(scoped: ScopedTransaction): boolean {
   );
 }
 
-export function mentionsCardPayment(transaction: NormalizedTransaction): boolean {
-  const text = foldCase(transaction.description);
-  return PAYMENT_MARKERS.some((marker) => text.includes(marker));
-}
+/**
+ * The reconciler reads the same vocabulary as the row mapper and the built-in
+ * rules; `core/classify/card-semantics` owns it.
+ *
+ * A second copy of these markers is how the preview and the import came to
+ * disagree about what a card credit was.
+ */
+export { mentionsCardSidePayment };
 
-export function mentionsCardSidePayment(transaction: NormalizedTransaction): boolean {
-  const text = foldCase(transaction.description);
-  return CARD_SIDE_MARKERS.some((marker) => text.includes(marker));
+export function mentionsCardPayment(transaction: NormalizedTransaction): boolean {
+  return mentionsCashSideCardPayment(transaction);
 }
 
 /** Reclassify both legs of a decided card payment. */
@@ -162,24 +143,6 @@ export function applyCardPaymentMatch(match: CardPaymentMatch): NormalizedTransa
   return match.cardCredit
     ? [stamp(match.payment.transaction), stamp(match.cardCredit.transaction)]
     : [stamp(match.payment.transaction)];
-}
-
-/**
- * Product-aware default for a card statement row.
- *
- * Used when classifying a statement in isolation: on a card, an inflow is
- * almost always either a payment or a refund, never income.
- */
-export function classifyCardRow(
-  transaction: NormalizedTransaction,
-  product: StatementProduct,
-): TransactionKind {
-  if (product !== StatementProduct.credit_card && product !== StatementProduct.credit_line) {
-    return transaction.kind;
-  }
-  if (transaction.direction === Direction.out) return TransactionKind.credit_card_purchase;
-  if (mentionsCardSidePayment(transaction)) return TransactionKind.credit_card_payment;
-  return TransactionKind.refund;
 }
 
 function identity(scoped: ScopedTransaction): string {

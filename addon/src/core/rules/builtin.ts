@@ -1,3 +1,7 @@
+import {
+  CARD_SIDE_PAYMENT_MARKERS,
+  CASH_SIDE_CARD_PAYMENT_MARKERS,
+} from '../classify/card-semantics';
 import { TransactionKind } from '../model/kinds';
 import type { Rule } from './engine';
 
@@ -48,23 +52,18 @@ const merchantIs = (value: string): Rule['conditions'][number] => ({
 
 export const BUILTIN_RULES: readonly Rule[] = [
   // ── Movements that must never count as spending (highest priority) ───
+  // Categorises only. *Classifying* a card payment is
+  // `core/classify/card-semantics`, which sees the direction and the product
+  // and this rule does not: a flat `match: 'any'` list cannot say "one of these
+  // markers AND an outflow", so the rule used to call `PAGO RECIBIDO` on a
+  // current account a card payment. The markers come from the same constants
+  // the classifier reads, so the two cannot drift apart.
   rule(
     'builtin.pago-tarjeta',
     'Pago de tarjeta de crédito',
     10,
-    [
-      contains('PAGO TARJETA'),
-      contains('PAGO DE TARJETA'),
-      contains('PAGO T CREDITO'),
-      contains('PAGO CMR'),
-      contains('PAGO ESTADO DE CUENTA'),
-      contains('GRACIAS POR SU PAGO'),
-      contains('PAGO RECIBIDO'),
-    ],
-    [
-      { type: 'set_kind', value: TransactionKind.credit_card_payment },
-      { type: 'set_category', value: 'pago-tarjeta' },
-    ],
+    [...CASH_SIDE_CARD_PAYMENT_MARKERS, ...CARD_SIDE_PAYMENT_MARKERS].map(contains),
+    [{ type: 'set_category', value: 'pago-tarjeta' }],
     { stopProcessing: true },
   ),
 

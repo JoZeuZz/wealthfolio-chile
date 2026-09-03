@@ -117,6 +117,7 @@ export interface TransferCandidate {
 
 export type TransactionWarningCode =
   | 'ambiguous-amount-format'
+  | 'ambiguous-card-credit'
   | 'ambiguous-date-format'
   | 'ambiguous-installment'
   | 'missing-balance'

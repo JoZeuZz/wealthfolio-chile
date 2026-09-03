@@ -1,8 +1,9 @@
 import { parseStatementDate, type IsoDate } from '../dates';
 import { detectInstallment } from '../installments/detect';
 import { abs, isZero, negate, parseAmount, sign, type Money } from '../money';
+import { defaultKindForRow } from '../classify/card-semantics';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
-import { StatementProduct, type RowStats, type StatementIssue } from '../model/statement';
+import type { RowStats, StatementIssue } from '../model/statement';
 import type { NormalizedTransaction, TransactionWarning } from '../model/transaction';
 import { normalizeDescription } from '../text';
 import { cell, ColumnRole, type ColumnMap } from './columns';
@@ -152,7 +153,18 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     });
   }
 
-  const kind = baseKind(profile.product, direction);
+  const { kind, ambiguousCardCredit } = defaultKindForRow({
+    product: profile.product,
+    direction,
+    description,
+  });
+  if (ambiguousCardCredit) {
+    warnings.push({
+      code: 'ambiguous-card-credit',
+      message:
+        'Abono en una tarjeta sin glosa que diga si es un pago del estado de cuenta o una devolución. Queda sin clasificar hasta que lo decidas.',
+    });
+  }
 
   return {
     sourceInstitution: profile.institution,
@@ -305,23 +317,6 @@ function readCardLast4(
   if (marked?.[1]) return marked[1];
   if (column !== '' && digits.length >= 4) return digits.slice(-4);
   return undefined;
-}
-
-/**
- * The default classification, from the product alone.
- *
- * Deliberately coarse: this is a starting point that the rule engine, the
- * transfer matcher and the user all refine. Guessing `income` vs
- * `internal_transfer` from a single row is exactly the inference that produces
- * inflated totals, so it is not attempted here.
- */
-function baseKind(product: StatementProduct, direction: Direction): TransactionKind {
-  if (product === StatementProduct.credit_card || product === StatementProduct.credit_line) {
-    return direction === Direction.out
-      ? TransactionKind.credit_card_purchase
-      : TransactionKind.credit_card_payment;
-  }
-  return direction === Direction.out ? TransactionKind.expense : TransactionKind.income;
 }
 
 /**
