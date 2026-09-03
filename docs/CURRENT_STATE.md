@@ -28,8 +28,10 @@ release candidate y no un `0.2.0`.
 ```
 typecheck   ✅  tsc --noEmit, strict + noUncheckedIndexedAccess
 lint        ✅  eslint, 0 errores, 0 warnings, sin `any`
-tests       ✅  574 pasando (34 archivos), incluidos 26 de UI sobre DOM
-build       ✅  dist/addon.js — un solo archivo
+tests       ✅  582 pasando (34 archivos), incluidos 33 de UI sobre DOM
+build       ✅  dist/addon.js — un solo archivo, 797 KB
+package     ✅  wealthfolio-chile-<versión>.zip, 211 KB
+coverage    ✅  93 % de líneas y 87 % de ramas sobre `src/core/`
 ```
 
 `pnpm verify` corre typecheck, lint, tests y build.
