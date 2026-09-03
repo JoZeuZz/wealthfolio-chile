@@ -17,12 +17,13 @@ import { categoryPath } from '../../core/categories/defaults';
 import { buildDuplicateIndex } from '../../core/dedupe/classify';
 import { formatIsoDate } from '../../core/dates';
 import { maskAccountNumber } from '../../core/privacy';
+import type { RowStats } from '../../core/model/statement';
 import { setRowSelection, type PreparedImport, type PreviewRow } from '../../core/pipeline';
 import { listInstitutions, PARSERS } from '../../core/providers/registry';
 import type { SourceFile } from '../../core/parsing/tabular';
 import {
   prepareImportFromHost,
-  type DuplicateIndexStatus,
+  type ImportBlocker,
   type PreparationResult,
 } from '../../services/import-preparation';
 import { runImport } from '../../services/import-runner';
@@ -196,18 +197,6 @@ export function ImportWizardPage() {
         </Alert>
       ) : null}
 
-      {preparation?.parse.status === 'error' ? (
-        <Alert variant="destructive">
-          <AlertTitle>No se pudo leer el archivo</AlertTitle>
-          <AlertDescription className="flex flex-col items-start gap-2">
-            <span>{preparation.parse.message}</span>
-            <Button size="sm" variant="outline" onClick={retry} disabled={busy || !file}>
-              Reintentar
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
       {preparation?.rules.status === 'fallback' ? (
         <Alert>
           <AlertTitle>Reglas no disponibles</AlertTitle>
@@ -215,9 +204,9 @@ export function ImportWizardPage() {
         </Alert>
       ) : null}
 
-      {preparation && preparation.duplicateIndex.status === 'unavailable' && step !== 'done' ? (
-        <DedupeUnavailableAlert
-          status={preparation.duplicateIndex}
+      {preparation && preparation.blockers.length > 0 && step !== 'done' ? (
+        <ImportBlockedAlert
+          blockers={preparation.blockers}
           onRetry={retry}
           busy={busy || !file}
         />
@@ -264,7 +253,7 @@ export function ImportWizardPage() {
         <PreviewStep
           prepared={prepared}
           dedupeAvailable={preparation?.duplicateIndex.status === 'ready'}
-          canImport={preparation?.canImport ?? false}
+          blockers={preparation?.blockers ?? []}
           onToggle={(fingerprint, willImport) =>
             setPreparation((current) =>
               current?.prepared
@@ -289,28 +278,67 @@ export function ImportWizardPage() {
   );
 }
 
+/** Title and consequence for each reason the write is refused. */
+const BLOCKER_COPY: Record<ImportBlocker['code'], { title: string; consequence: string }> = {
+  'parse-failed': {
+    title: 'No se pudo leer el archivo',
+    consequence: 'No hay nada que importar hasta poder leerlo.',
+  },
+  'duplicate-check-unavailable': {
+    title: 'No se puede comprobar si hay duplicados',
+    consequence:
+      'Sin esa comprobación un movimiento ya registrado se guardaría dos veces, así que importar queda deshabilitado.',
+  },
+  'statement-invalid': {
+    title: 'La cartola no se leyó completa',
+    consequence:
+      'Importar sólo las filas legibles escribiría una cartola incompleta que después parece completa. Elige otro banco en el paso anterior, o revisa que el archivo sea la cartola íntegra.',
+  },
+};
+
 /**
- * The blocking case: the preview is real, but we could not check it against
- * what is already stored, so confirming stays out of reach until a retry works.
+ * Why the write is refused, in full.
+ *
+ * The preview stays visible and honest about what the parser produced; what
+ * this removes is the ability to confirm it. Every blocker is listed at once —
+ * fixing one and discovering another is worse than seeing both.
  */
-function DedupeUnavailableAlert({
-  status,
+function ImportBlockedAlert({
+  blockers,
   onRetry,
   busy,
 }: {
-  status: Extract<DuplicateIndexStatus, { status: 'unavailable' }>;
+  blockers: readonly ImportBlocker[];
   onRetry: () => void;
   busy: boolean;
 }) {
   return (
     <Alert variant="destructive">
-      <AlertTitle>No se puede comprobar si hay duplicados</AlertTitle>
-      <AlertDescription className="flex flex-col items-start gap-2">
-        <span>{status.message}</span>
-        <span>
-          Puedes revisar la vista previa, pero importar queda deshabilitado: sin esa comprobación
-          un movimiento ya registrado se guardaría dos veces.
-        </span>
+      <AlertTitle>
+        {blockers.length === 1
+          ? (BLOCKER_COPY[blockers[0]!.code]?.title ?? 'No se puede importar')
+          : `No se puede importar (${blockers.length} motivos)`}
+      </AlertTitle>
+      <AlertDescription className="flex flex-col items-start gap-3">
+        {blockers.map((blocker) => (
+          <div key={blocker.code} className="flex flex-col gap-1">
+            {blockers.length > 1 ? (
+              <span className="font-medium">{BLOCKER_COPY[blocker.code]?.title}</span>
+            ) : null}
+            <span>{blocker.message}</span>
+            <span>{BLOCKER_COPY[blocker.code]?.consequence}</span>
+            {blocker.code === 'statement-invalid' && blocker.issues.length > 0 ? (
+              <ul className="list-disc pl-5 text-xs">
+                {blocker.issues.slice(0, 5).map((issue, index) => (
+                  <li key={`${issue.code}-${issue.line ?? index}`}>{issue.message}</li>
+                ))}
+                {blocker.issues.length > 5 ? (
+                  <li>y {blocker.issues.length - 5} más.</li>
+                ) : null}
+              </ul>
+            ) : null}
+          </div>
+        ))}
         <Button size="sm" variant="outline" onClick={onRetry} disabled={busy}>
           Reintentar
         </Button>
@@ -479,6 +507,7 @@ function DetectionStep({
           <Field
             label="Movimientos"
             value={`${statement.transactions.length} · ${statement.account.currency}`}
+            hint={describeRowStats(statement.rowStats)}
           />
         </div>
 
@@ -552,7 +581,7 @@ function DetectionStep({
 function PreviewStep({
   prepared,
   dedupeAvailable,
-  canImport,
+  blockers,
   onToggle,
   onBack,
   onConfirm,
@@ -560,13 +589,14 @@ function PreviewStep({
 }: {
   prepared: PreparedImport;
   dedupeAvailable: boolean;
-  canImport: boolean;
+  blockers: readonly ImportBlocker[];
   onToggle: (fingerprint: string, willImport: boolean) => void;
   onBack: () => void;
   onConfirm: () => void;
   busy: boolean;
 }) {
   const { totals, rows, installmentPlans } = prepared;
+  const canImport = blockers.length === 0;
   const warnings = useMemo(
     () => prepared.validation.issues.filter((issue) => issue.level === 'warning'),
     [prepared.validation.issues],
@@ -682,7 +712,8 @@ function PreviewStep({
         </Button>
         {!canImport ? (
           <span className="text-muted-foreground text-xs">
-            Importar está deshabilitado hasta poder comprobar los movimientos ya registrados.
+            Importar está deshabilitado:{' '}
+            {blockers.map((blocker) => BLOCKER_COPY[blocker.code]?.title.toLowerCase()).join(' · ')}.
           </span>
         ) : null}
       </div>
@@ -756,13 +787,27 @@ function PreviewRowView({
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function Field({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="flex flex-col gap-1">
       <span className="text-muted-foreground text-xs uppercase tracking-wide">{label}</span>
       <span className="text-sm font-medium">{value}</span>
+      {hint ? <span className="text-muted-foreground text-xs">{hint}</span> : null}
     </div>
   );
+}
+
+/**
+ * What became of every row below the header.
+ *
+ * Shown even when nothing went wrong: "12 leídas de 12" is the sentence that
+ * makes "11 leídas de 12" mean something when it appears.
+ */
+export function describeRowStats(stats: RowStats): string {
+  const parts = [`${stats.mapped} de ${stats.dataRows} filas leídas`];
+  if (stats.skipped > 0) parts.push(`${stats.skipped} omitidas`);
+  if (stats.failed > 0) parts.push(`${stats.failed} con error`);
+  return parts.join(' · ');
 }
 
 const KIND_LABELS: Record<string, string> = {

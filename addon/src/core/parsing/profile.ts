@@ -45,6 +45,23 @@ export interface StatementProfile {
   ignoreRowPatterns?: RegExp[];
 
   /**
+   * How much the running-balance column can be trusted to prove the parse.
+   *
+   * `authoritative` — the balance column is known to walk exactly, so a single
+   * step that does not add up means the file was misread and the import is
+   * blocked.
+   * `advisory` — a balance column exists but nobody has confirmed against a
+   * real export that it walks (banks print partial, rounded or per-page
+   * balances). A mismatch is reported and the user decides.
+   *
+   * The distinction is evidence, not caution: claiming `authoritative` for a
+   * layout we have never seen would turn a bank quirk into a refused import.
+   * A *systematic* mismatch is treated as an error either way — see
+   * `validateStatement`.
+   */
+  balanceCheck: 'authoritative' | 'advisory';
+
+  /**
    * Marks the profile as built from public documentation rather than a real
    * export. The wizard shows a warning and the import history records it, so a
    * miscalibrated mapping is never mistaken for a verified one.

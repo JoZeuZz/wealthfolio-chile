@@ -1,0 +1,196 @@
+import { describe, expect, it } from 'vitest';
+import { prepareImport } from '../src/core/pipeline';
+import { buildDuplicateIndex } from '../src/core/dedupe/classify';
+import { getParser } from '../src/core/providers/registry';
+import { fromText } from './fixtures';
+
+/**
+ * Qué cuenta como "esta cartola se leyó entera".
+ *
+ * Las cifras del resumen de validación no son cosmética: son lo único que le
+ * dice al usuario si el archivo se leyó completo antes de escribir en su
+ * contabilidad. Un `skippedRows: 0` fijo, o un `errorRows` que cuenta
+ * *problemas* en vez de *filas*, convierte una lectura parcial en una lectura
+ * aparentemente perfecta.
+ */
+
+const GENERIC = 'generico.cuenta';
+
+function prepare(text: string, parserId = GENERIC) {
+  return prepareImport({
+    file: fromText('cartola.csv', text),
+    accountId: 'acc-1',
+    parserId,
+    rules: [],
+    duplicateIndex: buildDuplicateIndex([]),
+  });
+}
+
+describe('conteo de filas', () => {
+  it('cuenta las filas de datos, las mapeadas, las omitidas y las fallidas por separado', () => {
+    const prepared = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA SUPERMERCADO;10.000;;90.000',
+        '', // fila en blanco: omitida
+        '04/02/2026;TOTAL DEL PERIODO;;;90.000', // patrón ignorado: omitida
+        '05/02/2026;FILA IMPOSIBLE;5.000;5.000;85.000', // cargo y abono: falla
+        '06/02/2026;PAGO SERVICIO;5.000;;85.000',
+      ].join('\n'),
+    );
+
+    expect(prepared.statement.rowStats).toEqual({
+      dataRows: 5,
+      mapped: 2,
+      skipped: 2,
+      failed: 1,
+    });
+  });
+
+  it('reporta esas mismas cifras en el resumen de validación', () => {
+    const prepared = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA SUPERMERCADO;10.000;;90.000',
+        '',
+        '05/02/2026;FILA IMPOSIBLE;5.000;5.000;85.000',
+      ].join('\n'),
+    );
+
+    const { summary } = prepared.validation;
+    expect(summary.totalRows).toBe(3);
+    expect(summary.parsedRows).toBe(1);
+    expect(summary.skippedRows).toBe(1);
+    expect(summary.errorRows).toBe(1);
+  });
+
+  it('no inventa filas omitidas cuando el archivo se leyó entero', () => {
+    const prepared = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA SUPERMERCADO;10.000;;90.000',
+        '04/02/2026;PAGO SERVICIO;5.000;;85.000',
+      ].join('\n'),
+    );
+
+    expect(prepared.statement.rowStats).toEqual({
+      dataRows: 2,
+      mapped: 2,
+      skipped: 0,
+      failed: 0,
+    });
+    expect(prepared.validation.ok).toBe(true);
+  });
+});
+
+describe('una fila ilegible invalida la cartola', () => {
+  it('marca la validación como fallida', () => {
+    const prepared = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA SUPERMERCADO;10.000;;90.000',
+        '05/02/2026;FILA IMPOSIBLE;5.000;5.000;85.000',
+      ].join('\n'),
+    );
+
+    // Las otras filas se leyeron bien, pero el archivo ya no se entiende
+    // entero: importar el subconjunto deja un hueco silencioso.
+    expect(prepared.validation.ok).toBe(false);
+    expect(prepared.validation.issues.some((issue) => issue.code === 'row-parse-failed')).toBe(true);
+  });
+
+  it('dice en qué línea', () => {
+    const prepared = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA SUPERMERCADO;10.000;;90.000',
+        '05/02/2026;FILA IMPOSIBLE;5.000;5.000;85.000',
+      ].join('\n'),
+    );
+
+    const issue = prepared.validation.issues.find((i) => i.code === 'row-parse-failed');
+    expect(issue?.line).toBe(3);
+  });
+});
+
+describe('cuadratura de saldos', () => {
+  const mismatched = (rows: string[]) =>
+    ['Fecha;Descripcion;Cargo;Abono;Saldo', ...rows].join('\n');
+
+  it('cuadra cuando el saldo declarado sigue a los montos', () => {
+    const prepared = prepare(
+      mismatched([
+        '03/02/2026;COMPRA UNO;10.000;;90.000',
+        '04/02/2026;COMPRA DOS;5.000;;85.000',
+        '05/02/2026;ABONO;;20.000;105.000',
+      ]),
+    );
+
+    expect(prepared.validation.summary.balanceReconciles).toBe(true);
+    expect(prepared.validation.ok).toBe(true);
+  });
+
+  it('un desajuste aislado en un perfil sin cartola real es advertencia, no bloqueo', () => {
+    // El perfil de BancoEstado está `pending-real-sample`: todavía no sabemos si
+    // su columna de saldo es fiable, así que un desajuste puntual no puede
+    // costar la importación entera.
+    const prepared = prepare(
+      [
+        'BancoEstado',
+        'CuentaRUT N: 12345678',
+        '',
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA UNO;10.000;;90.000',
+        '04/02/2026;COMPRA DOS;5.000;;85.000',
+        '05/02/2026;COMPRA TRES;5.000;;79.999',
+        '06/02/2026;COMPRA CUATRO;1.000;;78.999',
+      ].join('\n'),
+      'banco-estado.cuenta',
+    );
+
+    const issue = prepared.validation.issues.find((i) => i.code === 'balance-walk-mismatch');
+    expect(issue?.level).toBe('warning');
+    expect(prepared.validation.summary.balanceReconciles).toBe(false);
+    expect(prepared.validation.ok).toBe(true);
+  });
+
+  it('un desajuste sistemático es un error de lectura, aunque el perfil no esté validado', () => {
+    // Todos los pasos fallan: eso no es una rareza del banco, es que el signo o
+    // una columna se están leyendo mal. Importar eso sería importar otra cosa.
+    const prepared = prepare(
+      [
+        'BancoEstado',
+        'CuentaRUT N: 12345678',
+        '',
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA UNO;10.000;;90.000',
+        '04/02/2026;COMPRA DOS;5.000;;70.000',
+        '05/02/2026;COMPRA TRES;5.000;;40.000',
+        '06/02/2026;COMPRA CUATRO;1.000;;10.000',
+      ].join('\n'),
+      'banco-estado.cuenta',
+    );
+
+    const issue = prepared.validation.issues.find((i) => i.code === 'balance-walk-systematic');
+    expect(issue?.level).toBe('error');
+    expect(prepared.validation.ok).toBe(false);
+  });
+
+  it('en un perfil que declara su saldo autoritativo, un solo desajuste bloquea', () => {
+    const generic = getParser(GENERIC);
+    expect(generic?.profile.balanceCheck).toBe('authoritative');
+
+    const prepared = prepare(
+      mismatched([
+        '03/02/2026;COMPRA UNO;10.000;;90.000',
+        '04/02/2026;COMPRA DOS;5.000;;85.000',
+        '05/02/2026;COMPRA TRES;5.000;;79.999',
+        '06/02/2026;COMPRA CUATRO;1.000;;78.999',
+      ]),
+    );
+
+    const issue = prepared.validation.issues.find((i) => i.code === 'balance-walk-mismatch');
+    expect(issue?.level).toBe('error');
+    expect(prepared.validation.ok).toBe(false);
+  });
+});

@@ -33,6 +33,9 @@ export const BANCO_ESTADO_ACCOUNT: StatementProfile = {
     [ColumnRole.operationType]: ['Canal', 'Tipo Movimiento'],
   },
   ignoreRowPatterns: [/^SALDO\s+(INICIAL|FINAL|ANTERIOR)/i, /^TOTAL/i],
+  // Sin una cartola real no hay evidencia de que la columna de saldo camine
+  // exacta, así que un desajuste aislado se informa y no bloquea.
+  balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes:
     'Falta una cartola real de CuentaRUT. Hay que confirmar el separador (BancoEstado ha usado ";" y tabulaciones), la codificación (Windows-1252 en exportaciones antiguas) y si "Cargo" viene positivo o negativo.',

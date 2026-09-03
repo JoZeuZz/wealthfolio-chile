@@ -1,6 +1,7 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { addDays } from '../core/dates';
 import { buildDuplicateIndex, type DuplicateIndex } from '../core/dedupe/classify';
+import type { StatementIssue } from '../core/model/statement';
 import type { SourceFile } from '../core/parsing/tabular';
 import { prepareImport, type PreparedImport } from '../core/pipeline';
 import { defaultRules } from '../core/rules/builtin';
@@ -19,13 +20,15 @@ import { loadEffectiveRules } from './settings';
  * The separation matters because the three failures have three different
  * consequences:
  *
- * - the file cannot be parsed        → there is nothing to show
- * - the rules cannot be read         → show the preview with the built-ins
+ * - the file cannot be parsed         → there is nothing to show
+ * - the rules cannot be read          → show the preview with the built-ins
  * - existing movements cannot be read → show the preview, refuse to import
+ * - the statement does not validate   → show the preview, refuse to import
  *
- * That last one is the whole point. Importing without a duplicate check can
- * silently double a month of expenses, so "we could not check" must block the
- * write rather than fall back to an empty index and call every row new.
+ * The last two are the point. Importing without a duplicate check can silently
+ * double a month of expenses; importing a statement whose rows did not all
+ * parse writes a subset of the file and reports it as a complete run. Both must
+ * block the write rather than degrade into a plausible-looking result.
  */
 
 /** Days either side of the statement period to scan for existing movements. */
@@ -47,16 +50,36 @@ export type DuplicateIndexStatus =
 
 export type RulesStatus = { status: 'ok' } | { status: 'fallback'; message: string };
 
+/**
+ * A reason the write is refused.
+ *
+ * A list rather than a single verdict: a run can be blocked by two independent
+ * problems at once, and telling the user about one, watching them fix it, and
+ * only then revealing the other is how a person loses trust in a tool.
+ */
+export type ImportBlocker =
+  | { code: 'parse-failed'; message: string }
+  | { code: 'duplicate-check-unavailable'; message: string }
+  | {
+      code: 'statement-invalid';
+      message: string;
+      /** The error-level issues that caused it, lines included. */
+      issues: StatementIssue[];
+    };
+
 export interface PreparationResult {
   /** Present whenever the file could be parsed at all. */
   prepared?: PreparedImport;
   parse: ParseStatus;
   duplicateIndex: DuplicateIndexStatus;
   rules: RulesStatus;
+  /** Every reason importing is refused. Empty means it is allowed. */
+  blockers: ImportBlocker[];
   /**
    * Whether confirming is allowed.
    *
-   * Requires both a preview to approve and a duplicate check we can trust.
+   * Requires a preview to approve, a duplicate check we can trust, and a
+   * statement that validated.
    */
   canImport: boolean;
 }
@@ -82,6 +105,7 @@ export async function prepareImportFromHost(
         message: 'No se revisaron los movimientos existentes porque el archivo no se pudo leer.',
       },
       rules: rulesOutcome.status,
+      blockers: [{ code: 'parse-failed', message: probe.message }],
       canImport: false,
     };
   }
@@ -101,17 +125,61 @@ export async function prepareImportFromHost(
       parse: { status: 'error', message: final.message },
       duplicateIndex: indexOutcome.status,
       rules: rulesOutcome.status,
+      blockers: [{ code: 'parse-failed', message: final.message }],
       canImport: false,
     };
   }
+
+  const blockers = collectBlockers(final.prepared, indexOutcome.status);
 
   return {
     prepared: final.prepared,
     parse: { status: 'ok' },
     duplicateIndex: indexOutcome.status,
     rules: rulesOutcome.status,
-    canImport: indexOutcome.status.status === 'ready',
+    blockers,
+    canImport: blockers.length === 0,
   };
+}
+
+/**
+ * Everything standing between a preview and the write, gathered in one place.
+ *
+ * Order is presentation order, not precedence: none of these overrules another,
+ * and every one of them has to be resolved before anything is written.
+ */
+function collectBlockers(
+  prepared: PreparedImport,
+  index: DuplicateIndexStatus,
+): ImportBlocker[] {
+  const blockers: ImportBlocker[] = [];
+
+  if (!prepared.validation.ok) {
+    const issues = prepared.validation.issues.filter((issue) => issue.level === 'error');
+    blockers.push({
+      code: 'statement-invalid',
+      message: describeInvalidStatement(prepared, issues.length),
+      issues,
+    });
+  }
+
+  if (index.status === 'unavailable') {
+    blockers.push({ code: 'duplicate-check-unavailable', message: index.message });
+  }
+
+  return blockers;
+}
+
+function describeInvalidStatement(prepared: PreparedImport, errorCount: number): string {
+  const { summary } = prepared.validation;
+  if (summary.parsedRows === 0) {
+    return 'No se reconoció ningún movimiento en el archivo.';
+  }
+  return (
+    `${summary.errorRows} de ${summary.totalRows} filas no se pudieron leer ` +
+    `(${errorCount} problema(s)). Importar sólo las ${summary.parsedRows} filas legibles ` +
+    'dejaría un hueco en la contabilidad sin dejar rastro de que faltan movimientos.'
+  );
 }
 
 type PipelineOutcome =

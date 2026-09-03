@@ -226,3 +226,94 @@ describe('rules', () => {
     expect(result.rules.status).toBe('ok');
   });
 });
+
+/**
+ * El segundo gate, junto al de duplicados.
+ *
+ * Hasta 0.1.1 `validation.ok` se calculaba y no lo miraba nadie: una cartola con
+ * filas ilegibles mostraba el resto de las filas, con el botón de confirmar
+ * activo, y escribía en la contabilidad el subconjunto que sí se había podido
+ * leer. El usuario veía "importados: 11" sin forma de saber que el archivo
+ * tenía 12 movimientos.
+ */
+describe('cartola inválida', () => {
+  const brokenStatement = [
+    'Fecha;Descripcion;Cargo;Abono;Saldo',
+    '03/02/2026;COMPRA SUPERMERCADO;10.000;;90.000',
+    '05/02/2026;FILA IMPOSIBLE;5.000;5.000;85.000',
+    '06/02/2026;PAGO SERVICIO;5.000;;80.000',
+  ].join('\n');
+
+  it('bloquea la importación aunque el resto de las filas se hayan leído bien', async () => {
+    const host = fakeHost();
+
+    const result = await prepareImportFromHost(host.ctx, {
+      file: fromText('cartola.csv', brokenStatement),
+      accountId: ACCOUNT,
+      parserId: 'generico.cuenta',
+    });
+
+    expect(result.parse.status).toBe('ok');
+    expect(result.duplicateIndex.status).toBe('ready');
+    expect(result.prepared?.validation.ok).toBe(false);
+    expect(result.canImport).toBe(false);
+  });
+
+  it('sigue mostrando la vista previa para que se vea qué se leyó', async () => {
+    const host = fakeHost();
+
+    const result = await prepareImportFromHost(host.ctx, {
+      file: fromText('cartola.csv', brokenStatement),
+      accountId: ACCOUNT,
+      parserId: 'generico.cuenta',
+    });
+
+    expect(result.prepared?.rows).toHaveLength(2);
+  });
+
+  it('dice por qué está bloqueada, con las filas concretas', async () => {
+    const host = fakeHost();
+
+    const result = await prepareImportFromHost(host.ctx, {
+      file: fromText('cartola.csv', brokenStatement),
+      accountId: ACCOUNT,
+      parserId: 'generico.cuenta',
+    });
+
+    const blocker = result.blockers.find((entry) => entry.code === 'statement-invalid');
+    expect(blocker).toBeDefined();
+    expect(blocker?.issues.some((issue) => issue.line === 3)).toBe(true);
+  });
+
+  it('no bloquea por advertencias', async () => {
+    const host = fakeHost();
+
+    // Perfil sin validar (`profile-unverified`) + fecha ambigua: dos warnings,
+    // ningún error. Advertir e impedir no son lo mismo.
+    const result = await prepareImportFromHost(host.ctx, {
+      file: loadFixture('banco-estado-cuentarut.csv'),
+      accountId: ACCOUNT,
+    });
+
+    expect(result.prepared?.validation.issues.some((i) => i.level === 'warning')).toBe(true);
+    expect(result.prepared?.validation.ok).toBe(true);
+    expect(result.canImport).toBe(true);
+    expect(result.blockers).toHaveLength(0);
+  });
+
+  it('acumula los bloqueos en vez de reportar sólo el primero', async () => {
+    const host = fakeHost();
+    host.searchError = new Error('backend unavailable');
+
+    const result = await prepareImportFromHost(host.ctx, {
+      file: fromText('cartola.csv', brokenStatement),
+      accountId: ACCOUNT,
+      parserId: 'generico.cuenta',
+    });
+
+    expect(result.blockers.map((entry) => entry.code).sort()).toEqual([
+      'duplicate-check-unavailable',
+      'statement-invalid',
+    ]);
+  });
+});

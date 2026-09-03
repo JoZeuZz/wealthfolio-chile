@@ -21,6 +21,9 @@ export const GENERIC_CHECKING_PROFILE: StatementProfile = {
   numberFormat: 'es-CL',
   dateOrder: 'DMY',
   amountSign: 'signed',
+  // Nothing bank-specific to blame: if a file carries a running balance and it
+  // does not walk, the generic mapping read it wrong.
+  balanceCheck: 'authoritative',
   validationStatus: 'verified',
 };
 
@@ -36,6 +39,8 @@ export const GENERIC_CARD_PROFILE: StatementProfile = {
   // product, not in the number.
   amountSign: 'debit-positive',
   dateOrder: 'DMY',
+  // Card statements carry no running balance; the walk never runs.
+  balanceCheck: 'advisory',
   validationStatus: 'verified',
 };
 

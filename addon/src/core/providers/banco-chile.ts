@@ -38,6 +38,9 @@ export const BANCO_CHILE_CHECKING: StatementProfile = {
     [ColumnRole.reference]: ['N Documento', 'Nro Documento', 'Canal o Sucursal'],
   },
   ignoreRowPatterns: [/^SALDO\s+(INICIAL|FINAL)/i, /^TOTAL/i],
+  // Sin una cartola real no hay evidencia de que la columna de saldo camine
+  // exacta, así que un desajuste aislado se informa y no bloquea.
+  balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes:
     'Falta una cartola real (CSV o XLSX) de cuenta corriente para confirmar los nombres exactos de columnas, el separador y si los cargos vienen con signo.',
@@ -60,6 +63,9 @@ export const BANCO_CHILE_CARD: StatementProfile = {
     [ColumnRole.installment]: ['Cuotas', 'Cuota'],
     [ColumnRole.card]: ['Tarjeta', 'N Tarjeta'],
   },
+  // Sin una cartola real no hay evidencia de que la columna de saldo camine
+  // exacta, así que un desajuste aislado se informa y no bloquea.
+  balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes:
     'Falta un estado de cuenta real de tarjeta para confirmar cómo se expresan las cuotas y si los abonos (pagos) vienen en la misma columna con signo.',

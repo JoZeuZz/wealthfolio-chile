@@ -2,7 +2,7 @@ import { parseStatementDate, type IsoDate } from '../dates';
 import { detectInstallment } from '../installments/detect';
 import { abs, isZero, negate, parseAmount, sign, type Money } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
-import { StatementProduct, type StatementIssue } from '../model/statement';
+import { StatementProduct, type RowStats, type StatementIssue } from '../model/statement';
 import type { NormalizedTransaction, TransactionWarning } from '../model/transaction';
 import { normalizeDescription } from '../text';
 import { cell, ColumnRole, type ColumnMap } from './columns';
@@ -32,8 +32,8 @@ export interface MapRowsInput {
 export interface MapRowsResult {
   transactions: NormalizedTransaction[];
   issues: StatementIssue[];
-  skippedRows: number;
-  errorRows: number;
+  /** What became of every row below the header. */
+  stats: RowStats;
 }
 
 export function mapRows(input: MapRowsInput): MapRowsResult {
@@ -43,33 +43,35 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
 
   const transactions: NormalizedTransaction[] = [];
   const issues: StatementIssue[] = [];
-  let skippedRows = 0;
-  let errorRows = 0;
+  let dataRows = 0;
+  let skipped = 0;
+  let failed = 0;
 
   for (let i = firstDataRow; i < sheet.rows.length; i += 1) {
     const row = sheet.rows[i] as string[];
     const line = i + 1;
+    dataRows += 1;
 
     if (isBlankRow(row)) {
-      skippedRows += 1;
+      skipped += 1;
       continue;
     }
 
     const rawDescription = cell(row, map, ColumnRole.description);
     if (ignorePatterns.some((pattern) => pattern.test(rawDescription.trim()))) {
-      skippedRows += 1;
+      skipped += 1;
       continue;
     }
 
     try {
       const transaction = mapRow({ row, line, map, profile, currency, fileHash, accountRef });
       if (transaction === null) {
-        skippedRows += 1;
+        skipped += 1;
         continue;
       }
       transactions.push(transaction);
     } catch (error) {
-      errorRows += 1;
+      failed += 1;
       issues.push({
         level: 'error',
         code: 'row-parse-failed',
@@ -79,7 +81,11 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
     }
   }
 
-  return { transactions, issues, skippedRows, errorRows };
+  return {
+    transactions,
+    issues,
+    stats: { dataRows, mapped: transactions.length, skipped, failed },
+  };
 }
 
 interface MapRowInput {

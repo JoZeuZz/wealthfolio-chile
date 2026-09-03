@@ -35,6 +35,9 @@ export const FALABELLA_CARD: StatementProfile = {
     [ColumnRole.category]: ['Rubro', 'Categoria'],
   },
   ignoreRowPatterns: [/^TOTAL/i, /^CUPO/i, /^PAGO\s+M[IÍ]NIMO/i],
+  // Sin una cartola real no hay evidencia de que la columna de saldo camine
+  // exacta, así que un desajuste aislado se informa y no bloquea.
+  balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes:
     'Falta un estado de cuenta real de CMR. Hay que confirmar si "Monto" es el valor de la cuota o el total de la compra — de eso depende todo el cálculo de deuda comprometida — y cómo se marcan los pagos y las anulaciones.',
@@ -54,6 +57,9 @@ export const FALABELLA_ACCOUNT: StatementProfile = {
     [ColumnRole.debit]: ['Cargo', 'Cargos'],
     [ColumnRole.credit]: ['Abono', 'Abonos'],
   },
+  // Sin una cartola real no hay evidencia de que la columna de saldo camine
+  // exacta, así que un desajuste aislado se informa y no bloquea.
+  balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes: 'Falta una cartola real de cuenta corriente Falabella.',
 };

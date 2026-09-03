@@ -5,6 +5,7 @@ import {
   StatementProduct,
   type DetectionResult,
   type ParsedStatement,
+  type RowStats,
   type StatementIssue,
   type StatementPeriod,
   type ValidationResult,
@@ -44,7 +45,7 @@ export function createProfileParser(
     },
 
     validate(statement: ParsedStatement): ValidationResult {
-      return validateStatement(statement);
+      return validateStatement(statement, profile);
     },
   };
 }
@@ -141,6 +142,7 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
       account: { product: profile.product, currency: profile.defaultCurrency },
       period: {},
       transactions: [],
+      rowStats: { dataRows: 0, mapped: 0, skipped: 0, failed: 0 },
       issues: [
         {
           level: 'error',
@@ -195,6 +197,7 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
     account: { ...account, currency },
     period,
     transactions: mapped.transactions,
+    rowStats: mapped.stats,
     issues,
     fileHash: input.fileHash,
     fileName: input.file.name,
@@ -401,11 +404,14 @@ function derivePeriod(dates: readonly IsoDate[], declared: StatementPeriod): Sta
  * convention or a missed column — and is worth blocking before it reaches the
  * user's ledger.
  */
-export function validateStatement(statement: ParsedStatement): ValidationResult {
+export function validateStatement(
+  statement: ParsedStatement,
+  profile: StatementProfile,
+): ValidationResult {
   const issues: StatementIssue[] = [...statement.issues];
   const { transactions } = statement;
 
-  const balanceReconciles = checkBalanceWalk(statement, issues);
+  const balanceReconciles = checkBalanceWalk(statement, profile, issues);
 
   for (const transaction of transactions) {
     for (const warning of transaction.warnings) {
@@ -418,28 +424,44 @@ export function validateStatement(statement: ParsedStatement): ValidationResult 
     }
   }
 
-  const errorRows = issues.filter((issue) => issue.level === 'error').length;
+  const stats: RowStats = statement.rowStats;
 
   return {
     ok: transactions.length > 0 && !issues.some((issue) => issue.level === 'error'),
     issues,
     summary: {
-      totalRows: transactions.length + errorRows,
-      parsedRows: transactions.length,
-      skippedRows: 0,
-      errorRows,
+      // Straight from the row loop, never inferred from how many issues were
+      // raised: one issue can describe several rows and several issues one row,
+      // so counting prose was reporting a number that meant nothing.
+      totalRows: stats.dataRows,
+      parsedRows: stats.mapped,
+      skippedRows: stats.skipped,
+      errorRows: stats.failed,
       ...(balanceReconciles !== undefined ? { balanceReconciles } : {}),
     },
   };
 }
 
+/**
+ * Share of balance steps that must fail before the mismatch stops being a bank
+ * quirk and starts being a misread file.
+ *
+ * A bank printing one rounded or out-of-order balance is ordinary. Half the
+ * statement failing is not: it means a sign convention or a column is wrong,
+ * and every amount in the file is suspect — including the ones whose steps
+ * happened to add up.
+ */
+const SYSTEMATIC_MISMATCH_RATIO = 0.5;
+
 function checkBalanceWalk(
   statement: ParsedStatement,
+  profile: StatementProfile,
   issues: StatementIssue[],
 ): boolean | undefined {
   const withBalance = statement.transactions.filter((t) => t.balanceAfter !== undefined);
   if (withBalance.length < 2) return undefined;
 
+  const steps = withBalance.length - 1;
   let mismatches = 0;
   for (let i = 1; i < withBalance.length; i += 1) {
     const previous = withBalance[i - 1];
@@ -451,10 +473,24 @@ function checkBalanceWalk(
 
   if (mismatches === 0) return true;
 
+  const systematic = mismatches / steps >= SYSTEMATIC_MISMATCH_RATIO;
+
+  if (systematic) {
+    issues.push({
+      level: 'error',
+      code: 'balance-walk-systematic',
+      message: `El saldo declarado no cuadra con los montos en ${mismatches} de ${steps} pasos. Con esa proporción no es una rareza del banco: el archivo se está leyendo mal (signo, columna o formato de monto), así que ningún movimiento de esta cartola es confiable.`,
+    });
+    return false;
+  }
+
   issues.push({
-    level: 'warning',
+    // `authoritative` means someone confirmed against a real export that this
+    // bank's balance column walks exactly. Only then does a single bad step
+    // prove the parse is wrong; otherwise it is something to look at.
+    level: profile.balanceCheck === 'authoritative' ? 'error' : 'warning',
     code: 'balance-walk-mismatch',
-    message: `El saldo declarado no cuadra con los montos en ${mismatches} de ${withBalance.length - 1} pasos. Es probable que el signo de los montos o alguna columna estén mal interpretados.`,
+    message: `El saldo declarado no cuadra con los montos en ${mismatches} de ${steps} pasos. Es probable que el signo de los montos o alguna columna estén mal interpretados.`,
   });
   return false;
 }

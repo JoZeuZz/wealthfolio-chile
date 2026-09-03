@@ -34,6 +34,25 @@ export interface StatementPeriod {
   to?: IsoDate;
 }
 
+/**
+ * How much of the file the parser actually turned into movements.
+ *
+ * Kept as counts rather than derived from the issue list because the two answer
+ * different questions: one issue can describe several rows, several issues can
+ * describe one, and neither tells you how many rows the file had. "Did we read
+ * this statement whole?" has to be answerable without inspecting prose.
+ */
+export interface RowStats {
+  /** Rows below the header, blank ones included. */
+  dataRows: number;
+  /** Rows that became a movement. */
+  mapped: number;
+  /** Rows deliberately dropped: blank, subtotal, legal footer, no date. */
+  skipped: number;
+  /** Rows that looked like movements and could not be read. */
+  failed: number;
+}
+
 /** A fully parsed statement: the unit the import wizard works with. */
 export interface ParsedStatement {
   /** Institution id, e.g. `banco-estado`. */
@@ -44,6 +63,8 @@ export interface ParsedStatement {
   account: StatementAccount;
   period: StatementPeriod;
   transactions: NormalizedTransaction[];
+  /** What happened to every row below the header. */
+  rowStats: RowStats;
   /** Opening/closing balances when the file reports them — used by validation. */
   openingBalance?: Money;
   closingBalance?: Money;
@@ -96,9 +117,12 @@ export interface ValidationResult {
 }
 
 export interface ValidationSummary {
+  /** Rows below the header, whatever became of them. */
   totalRows: number;
   parsedRows: number;
+  /** Rows dropped on purpose — blanks, subtotals, footers. */
   skippedRows: number;
+  /** Rows that should have been movements and could not be read. */
   errorRows: number;
   /** True when opening + movements === closing, where the file reports balances. */
   balanceReconciles?: boolean;
