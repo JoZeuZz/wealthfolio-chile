@@ -1,6 +1,6 @@
 import { defaultRules } from '../core/rules/builtin';
 import type { Rule } from '../core/rules/engine';
-import { readJson, StorageKeys, writeJson, type KeyValueStore } from './storage';
+import { readJson, StorageKeys, type KeyValueStore } from './storage';
 
 /**
  * Addon settings and the user's rule set.
@@ -61,20 +61,15 @@ export async function loadSettings(store: KeyValueStore): Promise<ChileSettings>
   };
 }
 
-export async function saveSettings(
-  store: KeyValueStore,
-  settings: ChileSettings,
-): Promise<void> {
-  await writeJson(store, StorageKeys.settings, settings);
-}
-
-/** User-authored rules only; built-ins are merged at read time. */
+/**
+ * User-authored rules only; built-ins are merged at read time.
+ *
+ * Read-only for now. There is no rule editor, so nothing writes this key, and a
+ * writer with no caller is one more thing to keep true. It comes back with the
+ * screen that needs it.
+ */
 export async function loadUserRules(store: KeyValueStore): Promise<Rule[]> {
   return readJson<Rule[]>(store, StorageKeys.rules, []);
-}
-
-export async function saveUserRules(store: KeyValueStore, rules: Rule[]): Promise<void> {
-  await writeJson(store, StorageKeys.rules, rules);
 }
 
 /**

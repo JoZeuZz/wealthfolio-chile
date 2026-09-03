@@ -211,13 +211,6 @@ export function toActivityCreate(
   };
 }
 
-export function toActivityCreateBatch(
-  transactions: readonly (EnrichedTransaction | NormalizedTransaction)[],
-  options: MapToActivityOptions,
-): ActivityCreate[] {
-  return transactions.map((transaction) => toActivityCreate(transaction, options));
-}
-
 interface ResolvedType {
   activityType: ActivityType;
   subtype?: string;
@@ -485,7 +478,7 @@ function canonicalAmountText(amount: string | number | null | undefined, currenc
  * `SELL`, `DIVIDEND`, `SPLIT`, `ADJUSTMENT` — become `unknown` rather than
  * being forced into a cash kind.
  */
-export function kindFromActivityType(
+function kindFromActivityType(
   activityType: string,
   subtype?: string | null,
 ): TransactionKind {

@@ -256,8 +256,3 @@ export function cell(row: readonly string[], map: ColumnMap, role: ColumnRole): 
   if (index === undefined) return '';
   return (row[index] ?? '').trim();
 }
-
-/** Roles present in a map, in a stable order — used by the detection panel. */
-export function mappedRoles(map: ColumnMap): ColumnRole[] {
-  return (Object.keys(SYNONYMS) as ColumnRole[]).filter((role) => map[role] !== undefined);
-}

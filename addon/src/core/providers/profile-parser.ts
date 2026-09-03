@@ -1,5 +1,5 @@
 import { isIsoDate, parseStatementDate, type IsoDate } from '../dates';
-import { abs, add, compare, isZero, subtract, zero, type Money } from '../money';
+import { add, compare, type Money } from '../money';
 import {
   DETECTION_FLOOR,
   StatementProduct,
@@ -579,17 +579,6 @@ function inLedgerOrder(
   if (ascending) return transactions;
   if (descending) return [...transactions].reverse();
   return undefined;
-}
-
-/** Sum of every movement, used by the preview totals. */
-export function netAmount(transactions: readonly { amount: Money }[], currency: string): Money {
-  return transactions.reduce<Money>((acc, t) => add(acc, t.amount), zero(currency));
-}
-
-/** Absolute difference between two amounts, for balance diagnostics. */
-export function absoluteDifference(a: Money, b: Money): Money {
-  const difference = subtract(a, b);
-  return isZero(difference) ? difference : abs(difference);
 }
 
 export { DETECTION_FLOOR };

@@ -1,5 +1,5 @@
 import { daysBetween } from '../dates';
-import { abs, sign, toDecimalString } from '../money';
+import { abs, toDecimalString } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { NormalizedTransaction } from '../model/transaction';
 import { normalizeDescription } from '../text';
@@ -564,12 +564,4 @@ export function applyTransferMatch(
     stamp(match.outflow.transaction, match.inflow.transaction),
     stamp(match.inflow.transaction, match.outflow.transaction),
   ];
-}
-
-/** True when a single row looks like a transfer even without a counterpart. */
-export function looksLikeTransfer(transaction: NormalizedTransaction): boolean {
-  return (
-    mentionsWord(normalizeDescription(transaction.description), TRANSFER_MARKERS) &&
-    sign(transaction.amount) !== 0
-  );
 }
