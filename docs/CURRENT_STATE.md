@@ -122,6 +122,12 @@ Tres gates independientes, y los tres se acumulan en vez de reportarse de a uno:
    distinto o una cuenta de instrumentos bloquean. Una cuenta sin número
    registrado no bloquea: se informa que no se pudo verificar.
 
+Una celda de monto que no se puede leer es un **error de fila**, no una celda
+vacía. `parseAmount` se niega a representar un monto que no cabe exactamente en
+vez de redondearlo, y esa negativa se leía como «aquí no hay nada»: la fila se
+contaba como omitida a propósito y el movimiento desaparecía sin que la
+validación se enterara.
+
 El recorrido de saldos es evidencia, no dogma. Un desajuste aislado es error
 sólo en un perfil que declara su columna de saldo `authoritative` —hoy ninguno
 de los bancarios, porque nadie ha visto una exportación real—. Un desajuste
