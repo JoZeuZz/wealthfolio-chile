@@ -283,3 +283,66 @@ describe('índice y shards desincronizados', () => {
     expect(await list.readAll()).toEqual(items(1, 2));
   });
 });
+
+/**
+ * Daño parcial.
+ *
+ * Ninguno de estos casos debería costar todo el historial. La lista es
+ * auxiliar: si se pierde una parte, lo que hay que conservar es el resto y la
+ * capacidad de seguir escribiendo.
+ */
+describe('storage dañado', () => {
+  interface Item {
+    n: number;
+  }
+  const items = (from: number, count: number): Item[] =>
+    Array.from({ length: count }, (_, i) => ({ n: from + i }));
+
+  it('un índice ilegible se reconstruye desde los shards', () => {
+    // Sin reconstrucción, un índice corrupto se lee como «cero shards» y todo
+    // el historial desaparece de la vista, aunque siga escrito.
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+
+    return (async () => {
+      await list.append(items(1, 4));
+      await store.set('wfcl.test.index', 'no soy json');
+
+      expect(await list.readAll()).toEqual(items(1, 4));
+      expect(await list.count()).toBe(4);
+    })();
+  });
+
+  it('un shard perdido en medio no se lleva a los demás', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+
+    await list.append(items(1, 6)); // shards 0, 1, 2
+    await store.delete('wfcl.test.s1');
+
+    // El shard 1 desaparece; los otros dos siguen ahí y se leen.
+    expect(await list.readAll()).toEqual([...items(1, 2), ...items(5, 2)]);
+  });
+
+  it('un shard con JSON válido pero que no es una lista se reporta', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+
+    await list.append(items(1, 4));
+    await store.set('wfcl.test.s1', '{"no":"es una lista"}');
+
+    const health = await list.inspect();
+    expect(health.corruptShards).toEqual([1]);
+  });
+
+  it('se puede seguir escribiendo después de un daño parcial', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+
+    await list.append(items(1, 4));
+    await store.set('wfcl.test.index', 'no soy json');
+    await list.append(items(5, 1));
+
+    expect(await list.readAll()).toEqual(items(1, 5));
+  });
+});
