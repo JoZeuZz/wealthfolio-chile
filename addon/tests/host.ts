@@ -1,4 +1,5 @@
 import type {
+  Account,
   ActivityBulkMutationRequest,
   ActivityBulkMutationResult,
   ActivityDetails,
@@ -72,6 +73,10 @@ export interface FakeHost {
   saveManyCalls: SaveManyCall[];
   invalidatedKeys: (string | string[])[];
   toasts: { level: 'success' | 'error' | 'warning' | 'info'; message: string }[];
+  accounts: Account[];
+  navigatedTo: string[];
+  /** Make `accounts.getAll` throw. */
+  accountsError?: Error;
   logs: { level: 'error' | 'info' | 'warn' | 'debug' | 'trace'; message: string }[];
   /** Make `activities.search` throw. */
   searchError?: Error;
@@ -87,6 +92,8 @@ export interface FakeHost {
 
 export interface FakeHostOptions {
   activities?: ActivityDetails[];
+  /** Accounts `accounts.getAll` returns. Only the wizard reads them. */
+  accounts?: Account[];
   /**
    * Days by which the host slides the `dateFrom`/`dateTo` window.
    *
@@ -104,6 +111,8 @@ export function fakeHost(options: FakeHostOptions = {}): FakeHost {
 
   const host: FakeHost = {
     activities: options.activities ?? [],
+    accounts: options.accounts ?? [],
+    navigatedTo: [],
     searchCalls: [],
     saveManyCalls: [],
     invalidatedKeys: [],
@@ -116,6 +125,17 @@ export function fakeHost(options: FakeHostOptions = {}): FakeHost {
 
   const api = {
     storage: store,
+    accounts: {
+      async getAll(): Promise<Account[]> {
+        if (host.accountsError) throw host.accountsError;
+        return host.accounts;
+      },
+    },
+    navigation: {
+      navigate(path: string) {
+        host.navigatedTo.push(path);
+      },
+    },
     activities: {
       async search(
         page: number,
@@ -216,6 +236,28 @@ function shiftDay(iso: string, days: number): string {
 
 function isoDay(value: Date | string): string {
   return typeof value === 'string' ? value.slice(0, 10) : value.toISOString().slice(0, 10);
+}
+
+/**
+ * A Wealthfolio account, with only the fields the addon reads filled in.
+ *
+ * The rest is cast away for the same reason the context is: mirroring twenty
+ * unused fields turns a test double into a second host to maintain.
+ */
+export function accountStub(input: Partial<Account> & { id: string }): Account {
+  return {
+    name: 'Cuenta de prueba',
+    accountType: 'CASH',
+    currency: 'CLP',
+    isActive: true,
+    isArchived: false,
+    balance: 0,
+    isDefault: false,
+    trackingMode: 'TRANSACTIONS',
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    updatedAt: new Date('2026-01-01T00:00:00Z'),
+    ...input,
+  } as Account;
 }
 
 export interface ActivityStubInput {
