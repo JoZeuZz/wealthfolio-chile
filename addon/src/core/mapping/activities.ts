@@ -1,4 +1,5 @@
 import type { ActivityCreate, ActivityType } from '@wealthfolio/addon-sdk';
+import { hashFields } from '../hash';
 import { abs, money, negate, toDecimalString, type Money } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { EnrichedTransaction, NormalizedTransaction } from '../model/transaction';
@@ -36,13 +37,36 @@ export const METADATA_NAMESPACE = 'wealthfolioChile';
  *   direction) would otherwise come back as an inflow: we write the magnitude,
  *   the host stores it unsigned, and nothing on the way back remembers that the
  *   money left the account.
+ * - `3` — records `proj`, a hash of the activity exactly as we wrote it. It is
+ *   what lets a later read tell "this is still the row we created" from "the
+ *   user changed it in Wealthfolio and our cached identity describes something
+ *   that no longer exists".
  *
- * Readers must keep accepting `1`: an activity written by 0.1.1 is still in the
- * user's ledger and still has to round-trip.
+ * Readers must keep accepting `1` and `2`: activities written by 0.1.x are
+ * still in the user's ledger and still have to round-trip. Without `proj` the
+ * question "was this edited?" falls back to the host's own `isUserModified`.
  */
-export const METADATA_VERSION = 2;
+export const METADATA_VERSION = 3;
 
-/** Metadata written on every activity we create. */
+/**
+ * Metadata written on every activity we create.
+ *
+ * Three categories, and confusing them is how a stale cache starts overruling
+ * the ledger:
+ *
+ * - **Provenance** — `v`, `inst`, `parser`, `parserVersion`, `fileHash`,
+ *   `runId`. Facts about the import event. The host cannot contradict them
+ *   because it never knew them.
+ * - **Cache** — `fp`, `wfp`, `kind`, `dir`, `cat`, `merchant`, `tags`, `cuota`,
+ *   `xfer`. Values derived from the row as it was at import time. Every one of
+ *   them can be made false by editing the activity in Wealthfolio, so none may
+ *   be used without first asking whether the activity still matches `proj`.
+ * - **Witness** — `proj`. Not data about the movement; data about whether the
+ *   rest of this blob is still describing the activity it is attached to.
+ *
+ * Nothing here is authoritative. Wealthfolio holds the financial state; this is
+ * the addon's note about how a row got there.
+ */
 export interface ChileMetadata {
   /** Schema version of this metadata blob. See `METADATA_VERSION`. */
   v: number;
@@ -78,6 +102,12 @@ export interface ChileMetadata {
   cuota?: { n: number; of: number };
   /** Fingerprint of the matched transfer counterpart. */
   xfer?: string;
+  /**
+   * Hash of the activity as this addon wrote it. See {@link activityProjection}.
+   *
+   * Absent on metadata written before schema 3.
+   */
+  proj?: string;
 }
 
 export interface MapToActivityOptions {
@@ -102,6 +132,9 @@ export function toActivityCreate(
   const { activityType, subtype } = resolveActivityType(transaction);
   const magnitude = abs(transaction.amount);
 
+  const comment = buildComment(transaction);
+  const amount = toDecimalString(magnitude);
+
   const metadata: ChileMetadata = {
     v: METADATA_VERSION,
     fp: transaction.fingerprint,
@@ -122,6 +155,18 @@ export function toActivityCreate(
     ...(transaction.transferCandidate?.counterpartFingerprint
       ? { xfer: transaction.transferCandidate.counterpartFingerprint }
       : {}),
+    // Hashed from the fields below, so reading the activity back can tell
+    // "unchanged since we wrote it" from "edited in Wealthfolio, and every
+    // cached value above now describes a movement that is not there any more".
+    proj: activityProjection({
+      accountId: options.accountId,
+      activityType,
+      ...(subtype ? { subtype } : {}),
+      date: transaction.date,
+      amount,
+      currency: transaction.amount.currency,
+      comment,
+    }),
   };
 
   return {
@@ -129,9 +174,9 @@ export function toActivityCreate(
     activityType,
     ...(subtype ? { subtype } : {}),
     activityDate: transaction.date,
-    amount: toDecimalString(magnitude),
+    amount,
     currency: transaction.amount.currency,
-    comment: buildComment(transaction),
+    comment,
     // A JSON *string*, not an object. `NewActivity.metadata` is `Option<String>`
     // in the v3.6.2 backend, so an object costs the whole batch a 422 before a
     // single row is written. Reads are asymmetric — `ActivityDetails.metadata`
@@ -291,6 +336,90 @@ export function activityFlowSign(activityType: string): ActivityFlowSign {
   }
 }
 
+/**
+ * A hash of the fields that make a stored activity the movement it is.
+ *
+ * Computed the same way on both sides of the wire: when the activity is built
+ * (`toActivityCreate`) and when it is read back. If the two differ, something
+ * changed the activity after we wrote it, and every cached value in our
+ * metadata — the fingerprint above all — now describes a movement that is no
+ * longer there.
+ *
+ * Deliberately narrow. It covers what identity depends on (account, day,
+ * magnitude, currency, type, subtype, comment) and nothing else, so a change
+ * the host makes for its own reasons — linking a transfer pair, which flips
+ * `isUserModified` without touching any of these — does not read as an edit.
+ */
+export function activityProjection(activity: ProjectableActivity): string {
+  return hashFields([
+    'proj-v1',
+    activity.accountId ?? '',
+    civilDate(activity.date),
+    canonicalAmountText(activity.amount, activity.currency),
+    activity.currency,
+    activity.activityType,
+    activity.subtype ?? '',
+    activity.comment ?? '',
+  ]);
+}
+
+/** The activity fields {@link activityProjection} reads. */
+export interface ProjectableActivity extends HostActivityAmount {
+  accountId?: string;
+  date: Date | string;
+  comment?: string | null;
+}
+
+/**
+ * One spelling for an amount, whatever spelling the host chose.
+ *
+ * `85400`, `85400.00` and `85400.0` are the same money. Hashing the raw string
+ * would report an edit every time the backend changed how it formats decimals.
+ */
+function canonicalAmountText(amount: string | number | null | undefined, currency: string): string {
+  const parsed = parseHostAmount(amount, currency);
+  const text = toDecimalString(abs(parsed));
+  return text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text;
+}
+
+/**
+ * Our kind for a Wealthfolio activity type, when our own record is missing or
+ * contradicted.
+ *
+ * Coarse on purpose: `WITHDRAWAL` covers both `expense` and
+ * `credit_card_purchase`, and `TRANSFER_OUT` covers `internal_transfer`,
+ * `credit_card_payment` and `investment`. Picking one of those from the type
+ * alone would be a guess, so this returns the plain reading and the caller only
+ * falls back to it when the metadata's finer answer is incompatible with what
+ * the host actually stores. Types our model has no equivalent for — `BUY`,
+ * `SELL`, `DIVIDEND`, `SPLIT`, `ADJUSTMENT` — become `unknown` rather than
+ * being forced into a cash kind.
+ */
+export function kindFromActivityType(
+  activityType: string,
+  subtype?: string | null,
+): TransactionKind {
+  switch (activityType) {
+    case 'DEPOSIT':
+      return TransactionKind.income;
+    case 'WITHDRAWAL':
+      return TransactionKind.expense;
+    case 'TRANSFER_IN':
+    case 'TRANSFER_OUT':
+      return TransactionKind.internal_transfer;
+    case 'CREDIT':
+      return TransactionKind.refund;
+    case 'FEE':
+      return subtype === 'INTEREST_CHARGE' ? TransactionKind.interest : TransactionKind.fee;
+    case 'TAX':
+      return TransactionKind.tax;
+    case 'INTEREST':
+      return TransactionKind.interest;
+    default:
+      return TransactionKind.unknown;
+  }
+}
+
 /** `Direction` implied by an activity type, or `undefined` when it implies none. */
 export function activityDirection(activityType: string): Direction | undefined {
   const flow = activityFlowSign(activityType);
@@ -420,6 +549,7 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
   const amount = activityDetailsToSignedMoney(activity);
   const direction = resolveActivityDirection(activity) ?? directionOfAmount(amount);
   const description = activity.comment ?? '';
+  const kind = reconcileKind(activity, metadata, direction);
 
   return {
     sourceInstitution: metadata.inst,
@@ -433,8 +563,10 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
     ...(metadata.merchant ? { merchant: metadata.merchant } : {}),
     amount,
     direction,
-    kind: (metadata.kind ?? TransactionKind.unknown) as TransactionKind,
-    kindConfidence: Confidence.confirmed,
+    kind,
+    // `suggested` once the host has contradicted us: the row is classified, but
+    // by a coarser reading than the one the import made.
+    kindConfidence: kind === metadata.kind ? Confidence.confirmed : Confidence.suggested,
     ...(metadata.cat ? { category: metadata.cat } : {}),
     tags: metadata.tags ?? [],
     ...(metadata.cuota
@@ -450,6 +582,32 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
     warnings: [],
     rawMetadata: {},
   };
+}
+
+/**
+ * Our kind for a stored activity, with the host holding the casting vote.
+ *
+ * `metadata.kind` is a cache of what the import decided. If the user has since
+ * changed the activity's type in Wealthfolio, that cache is a claim the ledger
+ * contradicts — and a dashboard that keeps counting a `DEPOSIT` as an expense
+ * because our own note says so is reporting a number the user can see is wrong.
+ *
+ * So the cached kind is kept only while it *maps to* the type the host actually
+ * holds. That test is the exact inverse of how the activity was written, which
+ * means it accepts every finer distinction our model makes and the host's type
+ * cannot express — `credit_card_purchase` under `WITHDRAWAL`,
+ * `credit_card_payment` under `TRANSFER_OUT` — and rejects only real
+ * disagreement.
+ */
+function reconcileKind(
+  activity: HostActivity,
+  metadata: ChileMetadata,
+  direction: Direction,
+): TransactionKind {
+  const cached = (metadata.kind ?? TransactionKind.unknown) as TransactionKind;
+  const implied = resolveActivityType({ kind: cached, direction });
+  if (implied.activityType === activity.activityType) return cached;
+  return kindFromActivityType(activity.activityType, activity.subtype);
 }
 
 function directionOfAmount(amount: Money): Direction {

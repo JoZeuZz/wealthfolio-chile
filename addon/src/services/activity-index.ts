@@ -1,7 +1,11 @@
 import type { ActivitySearchFilters, AddonContext } from '@wealthfolio/addon-sdk';
 import { addDays, type IsoDate } from '../core/dates';
 import { buildDuplicateIndex, type DuplicateIndex, type ExistingMovement } from '../core/dedupe/classify';
-import { activityDetailsToSignedMoney, readChileMetadata } from '../core/mapping/activities';
+import {
+  activityDetailsToSignedMoney,
+  activityProjection,
+  readChileMetadata,
+} from '../core/mapping/activities';
 
 /**
  * Rebuilding the duplicate index from Wealthfolio itself.
@@ -80,6 +84,7 @@ export async function loadDuplicateIndexResult(
     for (const activity of response.data) {
       if (!withinWindow(activity.date, options)) continue;
       const metadata = readChileMetadata(activity.metadata);
+      const modified = wasModifiedAfterImport(activity, metadata?.proj);
       movements.push({
         ...(metadata?.fp ? { fingerprint: metadata.fp } : {}),
         ...(metadata?.wfp ? { weakFingerprint: metadata.wfp } : {}),
@@ -87,6 +92,7 @@ export async function loadDuplicateIndexResult(
         date: toIsoDate(activity.date),
         amount: activityDetailsToSignedMoney(activity),
         description: activity.comment ?? '',
+        ...(modified ? { hostModified: true } : {}),
       });
     }
 
@@ -101,6 +107,35 @@ export async function loadDuplicateIndexResult(
     totalRowCount,
     truncated,
   };
+}
+
+/**
+ * Has this activity changed since the addon wrote it?
+ *
+ * Two sources, in order of precision:
+ *
+ * 1. The projection we recorded (metadata schema 3 and later). It hashes only
+ *    the fields identity depends on, so it answers the question exactly: the
+ *    account, day, amount, currency, type, subtype or comment is different from
+ *    what we wrote. It also stays quiet for changes the host makes on its own —
+ *    linking a transfer pair rewrites the row, and `isUserModified` with it,
+ *    without altering a single one of those fields.
+ * 2. Failing that, the host's own `isUserModified`, which is set on any update
+ *    after creation (`ActivityUpdate -> ActivityDB` in upstream sets it to 1).
+ *    Coarser — it cannot say *what* changed — but it is the host's own record
+ *    and it works for the activities 0.1.x wrote with no projection at all.
+ *
+ * When neither is available the answer is "not modified", which is what the
+ * addon assumed before any of this existed.
+ */
+function wasModifiedAfterImport(
+  activity: { isUserModified?: boolean } & Parameters<typeof activityProjection>[0],
+  recordedProjection: string | undefined,
+): boolean {
+  if (recordedProjection !== undefined) {
+    return activityProjection(activity) !== recordedProjection;
+  }
+  return activity.isUserModified === true;
 }
 
 /** Convenience wrapper for callers that only need the index itself. */

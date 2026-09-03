@@ -42,6 +42,13 @@ export interface ExistingMovement {
   date: string;
   amount: Money;
   description: string;
+  /**
+   * The activity changed after this addon created it.
+   *
+   * Its fingerprint is therefore a fingerprint of what *was* imported, not of
+   * what the ledger now holds. See {@link classifyDuplicate}.
+   */
+  hostModified?: boolean;
 }
 
 export interface DuplicateIndex {
@@ -96,6 +103,20 @@ export function classifyDuplicate(
 
   const stored = index.byFingerprint.get(fingerprint);
   if (stored) {
+    if (stored.hostModified) {
+      // The fingerprint says "we imported this row"; the host says "and then it
+      // was changed". Skipping silently would leave the original movement out
+      // of the ledger for good, with nothing anywhere to show it went missing.
+      // Importing silently would sit a second copy next to the edited one.
+      // Neither is ours to decide.
+      return {
+        verdict: 'probable',
+        existingFingerprint: fingerprint,
+        existingActivityId: stored.activityId,
+        reason:
+          'Este movimiento se importó antes, pero la actividad fue editada después en Wealthfolio, así que ya no coincide con la fila del archivo. Decide tú si la fila original falta o si la editada la reemplaza.',
+      };
+    }
     return {
       verdict: 'exact',
       existingFingerprint: fingerprint,
