@@ -66,7 +66,7 @@ export function matchCardPayments(
   const matches: CardPaymentMatch[] = [];
 
   for (const payment of [...cashOutflows].sort(byDate)) {
-    const counterpart = cardCredits
+    const candidates = cardCredits
       .filter((credit) => !used.has(identity(credit)))
       .filter((credit) => equals(abs(credit.transaction.amount), abs(payment.transaction.amount)))
       .filter(
@@ -76,10 +76,22 @@ export function matchCardPayments(
       .sort(
         (a, b) =>
           Math.abs(daysBetween(payment.transaction.date, a.transaction.date)) -
-          Math.abs(daysBetween(payment.transaction.date, b.transaction.date)),
-      )[0];
+          Math.abs(daysBetween(payment.transaction.date, b.transaction.date)) ||
+          (identity(a) < identity(b) ? -1 : 1),
+      );
 
-    if (counterpart) {
+    const counterpart = candidates[0];
+    const runnerUp = candidates[1];
+    // Two card credits the same distance away are indistinguishable. Naming one
+    // of them is a coin flip dressed as evidence — and it is shown to the user
+    // as the reason a movement was reclassified.
+    const indistinguishable =
+      counterpart !== undefined &&
+      runnerUp !== undefined &&
+      Math.abs(daysBetween(payment.transaction.date, counterpart.transaction.date)) ===
+        Math.abs(daysBetween(payment.transaction.date, runnerUp.transaction.date));
+
+    if (counterpart && !indistinguishable) {
       used.add(identity(counterpart));
       matches.push({
         payment,
@@ -87,6 +99,17 @@ export function matchCardPayments(
         confidence: Confidence.confirmed,
         reason:
           'Cargo en cuenta y abono en la tarjeta por el mismo monto, con glosa de pago de tarjeta.',
+      });
+      continue;
+    }
+
+    if (indistinguishable) {
+      // The payment itself is not in doubt — the glosa says so — only which
+      // credit it settles.
+      matches.push({
+        payment,
+        confidence: Confidence.suggested,
+        reason: `Hay ${candidates.length} abonos en la tarjeta igual de cercanos y del mismo monto: no se puede decir cuál corresponde a este pago.`,
       });
       continue;
     }

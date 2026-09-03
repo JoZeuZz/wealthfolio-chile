@@ -130,7 +130,11 @@ describe('internal transfer matching', () => {
     expect(matches[0]!.confidence).toBe(Confidence.suggested);
   });
 
-  it('downgrades to a suggestion when two candidates are equally plausible', () => {
+  it('no adjudica ninguno cuando dos candidatos son igual de plausibles', () => {
+    // Antes bajaba la confianza a `suggested` pero seguía proponiendo un par
+    // concreto, elegido por huella: una moneda al aire presentada como
+    // hallazgo, y `applyTransferMatch` la escribía en la metadata.
+
     const out = tx({
       date: '2026-02-05',
       amount: -100000,
@@ -149,8 +153,14 @@ describe('internal transfer matching', () => {
       sourceInstitution: 'banco-estado',
     });
 
-    const { matches } = matchTransfers([scoped('a', out), scoped('b', first), scoped('c', second)]);
-    expect(matches[0]!.confidence).toBe(Confidence.suggested);
+    const { matches, ambiguous } = matchTransfers([
+      scoped('a', out),
+      scoped('b', first),
+      scoped('c', second),
+    ]);
+    expect(matches).toHaveLength(0);
+    expect(ambiguous).toHaveLength(1);
+    expect(ambiguous[0]!.candidates).toHaveLength(2);
   });
 
   it('is deterministic regardless of input order', () => {
