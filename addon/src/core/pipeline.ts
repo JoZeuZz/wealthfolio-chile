@@ -191,13 +191,7 @@ export function computeTotals(rows: readonly PreviewRow[], currency: string): Pr
     const magnitude = abs(transaction.amount);
 
     if (transaction.kind === TransactionKind.unknown) unknownKind += 1;
-    // `suggested` is the ordinary state of a purchase classified from the
-    // product: counting it here made "requiere revisión" equal to "every row",
-    // which is the same as not marking anything. Only a row nothing could
-    // classify, or one carrying a warning, is worth a person's attention.
-    if (transaction.warnings.length > 0 || transaction.kindConfidence === Confidence.unknown) {
-      needsReview += 1;
-    }
+    if (needsAttention(transaction)) needsReview += 1;
 
     if (transaction.kind === TransactionKind.internal_transfer) {
       if (transaction.direction === Direction.out) {
@@ -237,6 +231,34 @@ export function computeTotals(rows: readonly PreviewRow[], currency: string): Pr
     unknownKind,
     needsReview,
   };
+}
+
+/**
+ * Is this row worth a person's time?
+ *
+ * The count has to stay short or nobody reads it. Counting every `suggested`
+ * row made it equal to "all of them", which is the same as marking nothing —
+ * `suggested` is the ordinary state of a purchase classified from its product.
+ *
+ * Three things earn a look:
+ *
+ * - nothing classified it, so the host will file it as `UNKNOWN` and leave it
+ *   out of every calculation;
+ * - it carries a warning the parser raised about the row itself;
+ * - it was classified as money the user merely moved, on a guess. That last one
+ *   is the case the narrower check lost: a rule marking `GIRO ATM` as an
+ *   internal transfer takes $450.000 out of expenses *and* out of income at
+ *   `suggested` confidence. It is the classification with the most symmetric
+ *   cost in the model, which is why the transfer matcher refuses to confirm one
+ *   without evidence, and it should not be the one row nobody is told to check.
+ */
+function needsAttention(transaction: EnrichedTransaction): boolean {
+  if (transaction.warnings.length > 0) return true;
+  if (transaction.kind === TransactionKind.unknown) return true;
+  const movesExistingMoney =
+    transaction.kind === TransactionKind.internal_transfer ||
+    transaction.kind === TransactionKind.credit_card_payment;
+  return movesExistingMoney && transaction.kindConfidence !== Confidence.confirmed;
 }
 
 /** Toggle one row and return a new preview with totals refreshed. */
