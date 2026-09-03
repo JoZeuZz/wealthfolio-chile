@@ -192,7 +192,6 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
     // finish".
     ...(errors.length > 0
       ? {
-          failureCode: 'host-rejected' as const,
           message: `El host rechazó ${breakdown.failed} de ${breakdown.selected} movimiento(s) aprobados. El detalle estaba en la pantalla de importación.`,
         }
       : {}),

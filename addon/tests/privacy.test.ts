@@ -14,6 +14,7 @@ import {
   redactAmount,
   redactDescription,
   redactSensitive,
+  sanitizeFileName,
 } from '../src/core/privacy';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
@@ -363,5 +364,82 @@ describe('verboseLogging', () => {
 
     expect(loud.logs.length).toBeGreaterThan(quiet.logs.length);
     expect(loud.logs.map((l) => l.message).join('\n')).not.toContain('SUPERMERCADO');
+  });
+});
+
+/**
+ * Segunda vuelta: lo que la verificación posterior al arreglo encontró todavía
+ * abierto.
+ *
+ * Los tres primeros son la misma causa — `\b` no es un límite entre un dígito y
+ * un `_` o una letra, que es exactamente como los bancos chilenos arman los
+ * nombres de archivo.
+ */
+describe('límites de palabra que no lo eran', () => {
+  it('redacta un RUT entre guiones bajos', () => {
+    expect(redactSensitive('RUT_12.345.678-9_FIN')).not.toContain('12.345.678-9');
+  });
+
+  it('redacta una cuenta pegada a letras', () => {
+    expect(redactSensitive('CTA_001234567890')).not.toContain('001234567890');
+    expect(redactSensitive('ID12345678-9')).not.toContain('12345678-9');
+  });
+
+  it('saca del nombre del archivo una cuenta escrita por grupos', () => {
+    // `\d{4,}` sólo ve dígitos contiguos; `001-234-567-890` los tiene separados.
+    expect(sanitizeFileName('Movimientos 001-234-567-890.xlsx')).not.toContain('001-234');
+    expect(sanitizeFileName('Movimientos 001.234.567.890.xlsx')).not.toContain('234.567');
+  });
+
+  it('saca un RUT entre guiones bajos del nombre del archivo', () => {
+    expect(sanitizeFileName('Cartola_123.456-7_feb.csv')).not.toContain('123.456-7');
+  });
+});
+
+describe('el nombre saneado sigue sirviendo para reconocer el archivo', () => {
+  it('conserva el período', () => {
+    // La justificación del cambio era conservar «la palabra del banco, el
+    // período y la extensión». Comerse el año dejaba filas que dicen `….csv`.
+    expect(sanitizeFileName('Cartola feb 2026.csv')).toContain('2026');
+    expect(sanitizeFileName('Cartola_202602.csv')).toContain('202602');
+  });
+
+  it('nunca devuelve algo vacío o sólo puntos suspensivos', () => {
+    for (const name of ['12345678-9', '001234567890.csv', '20260201.csv']) {
+      const cleaned = sanitizeFileName(name);
+      expect(cleaned).not.toBe('');
+      expect(cleaned.replace(/[…\s._-]/g, '')).not.toBe('');
+    }
+  });
+});
+
+describe('una tarjeta se etiqueta como tarjeta', () => {
+  it('reconoce el formato más común, separado por espacios', () => {
+    expect(redactSensitive('Tarjeta 4051 2233 4455 6677 Supermercado')).toBe(
+      'Tarjeta [CARD] Supermercado',
+    );
+  });
+});
+
+describe('los avisos por columna tampoco citan la celda', () => {
+  it('no repite el contenido de una fecha contable ilegible', () => {
+    const prepared = prepareImport({
+      file: fromText(
+        'cartola.csv',
+        [
+          'Fecha;Fecha Contable;Descripcion;Cargo;Abono;Saldo',
+          '2026-02-03;TRANSF JUAN PEREZ 12.345.678-9 CTA 001234567890;COMPRA;10.000;;90.000',
+        ].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    const messages = prepared.validation.issues.map((i) => i.message).join('\n');
+    expect(messages).not.toContain('JUAN PEREZ');
+    expect(messages).not.toContain('12.345.678-9');
+    expect(messages).not.toContain('001234567890');
   });
 });

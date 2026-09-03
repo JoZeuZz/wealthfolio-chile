@@ -161,7 +161,10 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     } catch {
       warnings.push({
         code: 'unparsed-column',
-        message: `No se pudo leer la fecha contable "${rawPosted}".`,
+        // The cell is not quoted. When a column is misaligned this one holds a
+        // whole glosa, name and RUT included, and naming the column is what
+        // makes the problem findable anyway.
+        message: 'No se pudo leer la fecha contable de esta fila.',
       });
     }
   }
@@ -387,7 +390,7 @@ function readAmount(input: ReadAmountInput): Money | null {
   if (parsed.ambiguous) {
     warnings.push({
       code: 'ambiguous-amount-format',
-      message: `El monto "${amountText}" admite más de una lectura; se interpretó como ${parsed.money.minor / 10 ** parsed.money.scale}.`,
+      message: `El monto de esta fila admite más de una lectura; se interpretó como ${parsed.money.minor / 10 ** parsed.money.scale}.`,
     });
   }
 
@@ -414,7 +417,7 @@ function parseOptional(
     if (parsed.ambiguous) {
       warnings.push({
         code: 'ambiguous-amount-format',
-        message: `El monto "${text}" admite más de una lectura.`,
+        message: 'El monto de esta fila admite más de una lectura.',
       });
     }
     return parsed.money;

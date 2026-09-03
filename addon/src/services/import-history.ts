@@ -57,13 +57,11 @@ export interface ImportRun {
 
   status: 'completed' | 'partial' | 'failed';
   /**
-   * What went wrong, as a code.
+   * Counts-only summary of the failure.
    *
-   * The host's own error text is deliberately absent: it can quote the request
-   * back, and the request is a bank statement row. See `import-runner`.
+   * Never the host's own text: it can quote the request back, and the request
+   * is a bank statement row. See `import-runner`.
    */
-  failureCode?: 'host-rejected';
-  /** Counts-only summary of the failure. Never host prose. */
   message?: string;
 }
 

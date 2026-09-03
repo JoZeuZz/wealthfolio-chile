@@ -11,6 +11,18 @@
  */
 
 /**
+ * Boundaries that are not `\b`.
+ *
+ * `\b` treats `_` as a word character and sits happily between a letter and a
+ * digit, so `RUT_12.345.678-9_FIN`, `CTA_001234567890` and `ID12345678-9` all
+ * passed the redactor untouched — and those are precisely how Chilean banks
+ * name their downloads. The only boundary that matters here is "not another
+ * digit".
+ */
+const NOT_DIGIT_BEFORE = '(?<![\\d.])';
+const NOT_DIGIT_AFTER = '(?![\\d])';
+
+/**
  * Chilean national ID.
  *
  * Written every way people actually write it: `12.345.678-9`, `12345678-K`,
@@ -19,8 +31,14 @@
  * `123.456-7` — a real RUT belonging to a real generation of people — passed
  * through a redactor untouched and into the addon's storage.
  */
-const RUT_PATTERN = /\b\d{1,2}[.\s]?\d{3}[.\s]?\d{3}[\s-]{0,3}[\dkK]\b/g;
-const SHORT_RUT_PATTERN = /\b\d{3}[.\s]?\d{3}[\s-]{1,3}[\dkK]\b/g;
+const RUT_PATTERN = new RegExp(
+  `${NOT_DIGIT_BEFORE}\\d{1,2}[.\\s]?\\d{3}[.\\s]?\\d{3}[\\s-]{0,3}[\\dkK]${NOT_DIGIT_AFTER}`,
+  'g',
+);
+const SHORT_RUT_PATTERN = new RegExp(
+  `${NOT_DIGIT_BEFORE}\\d{3}[.\\s]?\\d{3}[\\s-]{1,3}[\\dkK]${NOT_DIGIT_AFTER}`,
+  'g',
+);
 
 /**
  * 13-19 digit card numbers, however they are grouped.
@@ -28,7 +46,10 @@ const SHORT_RUT_PATTERN = /\b\d{3}[.\s]?\d{3}[\s-]{1,3}[\dkK]\b/g;
  * `\d[ -]?` allowed exactly one space or dash between digits, so a statement
  * grouping with `/`, `.` or two spaces defeated it entirely.
  */
-const CARD_PATTERN = /\b(?:\d[ ./-]{0,2}){12,18}\d\b/g;
+const CARD_PATTERN = new RegExp(
+  `${NOT_DIGIT_BEFORE}(?:\\d[ ./-]{0,2}){12,18}\\d${NOT_DIGIT_AFTER}`,
+  'g',
+);
 
 /**
  * Digit groups long enough to be an account number.
@@ -37,8 +58,17 @@ const CARD_PATTERN = /\b(?:\d[ ./-]{0,2}){12,18}\d\b/g;
  * `0012-3456-7890` — and everything under eight digits, which includes plenty
  * of real Chilean account numbers. The separators are counted out and the
  * decision is made on how many digits are actually there.
+ *
+ * This over-redacts a Chilean amount of a million or more written with dot
+ * separators: `ABONO 1.234.567 SUELDO` becomes `ABONO [NUM] SUELDO`. That is
+ * deliberate. The two shapes are genuinely indistinguishable, this output only
+ * ever reaches a log line or a derived merchant label, and losing an amount
+ * there costs nothing next to letting an account number through.
  */
-const ACCOUNT_PATTERN = /\b\d[\d.\-\s]{4,}\d\b/g;
+const ACCOUNT_PATTERN = new RegExp(
+  `${NOT_DIGIT_BEFORE}\\d[\\d.\\-\\s]{4,}\\d${NOT_DIGIT_AFTER}`,
+  'g',
+);
 const MIN_ACCOUNT_DIGITS = 7;
 
 /** Anything shaped like a bearer token or key. */
@@ -93,10 +123,15 @@ export function maskCardNumber(value: string | null | undefined): string {
  * so they get their specific, more readable placeholder.
  */
 export function redactSensitive(input: string): string {
+  // Cards first. A RUT is eight or nine digits and cannot swallow a card, but a
+  // card written `4051 2233 4455 6677` is two RUT-shaped halves, and matching
+  // RUTs first turned the commonest card layout into `[RUT] [RUT]` — safe, but
+  // it meant `CARD_PATTERN` never fired on the format cards are usually
+  // printed in.
   return String(input ?? '')
+    .replace(CARD_PATTERN, '[CARD]')
     .replace(RUT_PATTERN, '[RUT]')
     .replace(SHORT_RUT_PATTERN, '[RUT]')
-    .replace(CARD_PATTERN, '[CARD]')
     .replace(TOKEN_PATTERN, '[TOKEN]')
     .replace(EMAIL_PATTERN, '[EMAIL]')
     .replace(ACCOUNT_PATTERN, (match) =>
@@ -120,12 +155,26 @@ export function redactSensitive(input: string): string {
  */
 export function sanitizeFileName(name: string, maxLength = 60): string {
   const cleaned = String(name ?? '')
+    .replace(CARD_PATTERN, '…')
     .replace(RUT_PATTERN, '…')
     .replace(SHORT_RUT_PATTERN, '…')
-    .replace(/\d{4,}/g, '…')
+    // The same digit-counting rule the redactor uses, so a number written
+    // `001-234-567-890` is caught here too. `\d{4,}` alone saw only contiguous
+    // runs, which is not how a bank writes an account number in a file name.
+    .replace(ACCOUNT_PATTERN, (match) =>
+      match.replace(/\D/g, '').length >= MIN_ACCOUNT_DIGITS ? '…' : match,
+    )
+    .replace(/\d{7,}/g, '…')
     .replace(/…(?:[\s._-]*…)+/g, '…')
     .trim();
-  return cleaned.length <= maxLength ? cleaned : `${cleaned.slice(0, maxLength - 1)}…`;
+
+  // A name reduced to nothing is worse than no name: the history renders this
+  // field bare, and a row reading `….csv` says less than "cartola". Periods
+  // survive on purpose — `2026`, `202602` — because they are what makes an
+  // entry recognisable and they identify nobody.
+  const hasContent = /[\p{L}\p{N}]/u.test(cleaned);
+  const safe = hasContent ? cleaned : 'cartola';
+  return safe.length <= maxLength ? safe : `${safe.slice(0, maxLength - 1)}…`;
 }
 
 /**
