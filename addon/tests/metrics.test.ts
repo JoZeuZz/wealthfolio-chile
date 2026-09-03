@@ -190,13 +190,13 @@ describe('monthly summary', () => {
 
   it('excludes transfers and card payments from income and expenses', () => {
     expect(toDecimalString(summary.income)).toBe('1000000');
-    expect(toDecimalString(summary.expenses)).toBe('400000');
+    expect(toDecimalString(summary.grossSpending)).toBe('400000');
     expect(toDecimalString(summary.internalTransfers)).toBe('200000');
     expect(toDecimalString(summary.cardPayments)).toBe('150000');
   });
 
   it('computes the net flow and savings rate', () => {
-    expect(toDecimalString(summary.net)).toBe('600000');
+    expect(toDecimalString(summary.netCashFlow)).toBe('600000');
     expect(summary.savingsRate).toBeCloseTo(0.6, 5);
   });
 
@@ -343,7 +343,7 @@ describe('metrics over an imported statement', () => {
     );
 
     expect(toDecimalString(summary.income)).toBe(toDecimalString(prepared.totals.income));
-    expect(toDecimalString(summary.expenses)).toBe(toDecimalString(prepared.totals.expenses));
+    expect(toDecimalString(summary.grossSpending)).toBe(toDecimalString(prepared.totals.expenses));
   });
 });
 
@@ -390,7 +390,7 @@ describe('the currency the totals are expressed in', () => {
     const summary = summarizeMonth('2026-02', rows, { currency: currencyOf(rows, 'USD') });
 
     expect(toDecimalString(summary.income)).toBe('1000000');
-    expect(toDecimalString(summary.expenses)).toBe('150000');
-    expect(toDecimalString(summary.net)).toBe('850000');
+    expect(toDecimalString(summary.grossSpending)).toBe('150000');
+    expect(toDecimalString(summary.netCashFlow)).toBe('850000');
   });
 });

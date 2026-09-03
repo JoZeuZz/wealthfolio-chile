@@ -186,11 +186,20 @@ export function DashboardPage() {
         <>
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="Ingresos del mes" value={view.summary.income} tone="positive" />
-            <Stat label="Egresos del mes" value={view.summary.expenses} tone="negative" />
             <Stat
-              label="Flujo neto"
-              value={view.summary.net}
-              tone={view.summary.net.minor < 0 ? 'negative' : 'positive'}
+              label="Gasto neto"
+              value={view.summary.netSpending}
+              tone="negative"
+              hint={
+                view.summary.refunds.minor > 0
+                  ? `${formatCLP(view.summary.grossSpending)} menos ${formatCLP(view.summary.refunds)} devueltos`
+                  : undefined
+              }
+            />
+            <Stat
+              label="Flujo de caja"
+              value={view.summary.netCashFlow}
+              tone={view.summary.netCashFlow.minor < 0 ? 'negative' : 'positive'}
               hint={
                 view.summary.savingsRate !== undefined
                   ? `Tasa de ahorro ${Math.round(view.summary.savingsRate * 100)}%`

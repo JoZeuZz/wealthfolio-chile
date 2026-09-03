@@ -94,7 +94,7 @@ describe('internal transfer matching', () => {
     const summary = summarizeMonth('2026-02', [legA, legB]);
 
     expect(summary.income.minor).toBe(0);
-    expect(summary.expenses.minor).toBe(0);
+    expect(summary.grossSpending.minor).toBe(0);
     expect(summary.internalTransfers.minor).toBe(200000);
   });
 
@@ -247,7 +247,7 @@ describe('credit-card payment matching', () => {
 
     const summary = summarizeMonth('2026-02', [purchase, ...applied]);
 
-    expect(summary.expenses.minor).toBe(80000);
+    expect(summary.grossSpending.minor).toBe(80000);
     expect(summary.cardPayments.minor).toBe(80000);
   });
 });

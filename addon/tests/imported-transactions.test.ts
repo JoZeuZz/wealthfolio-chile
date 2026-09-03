@@ -82,8 +82,8 @@ describe('loadImportedTransactions', () => {
     const summary = summarizeMonth('2026-03', loaded.transactions, { currency: 'CLP' });
 
     expect(summary.income).toEqual(money(1_000_000, 0, 'CLP'));
-    expect(summary.expenses).toEqual(money(150_000, 0, 'CLP'));
-    expect(summary.net).toEqual(money(850_000, 0, 'CLP'));
+    expect(summary.grossSpending).toEqual(money(150_000, 0, 'CLP'));
+    expect(summary.netCashFlow).toEqual(money(850_000, 0, 'CLP'));
   });
 
   it('leaves an internal transfer out of both totals', async () => {
@@ -112,7 +112,7 @@ describe('loadImportedTransactions', () => {
     const summary = summarizeMonth('2026-03', loaded.transactions, { currency: 'CLP' });
 
     expect(summary.income.minor).toBe(0);
-    expect(summary.expenses.minor).toBe(0);
+    expect(summary.grossSpending.minor).toBe(0);
     expect(summary.internalTransfers).toEqual(money(200_000, 0, 'CLP'));
   });
 

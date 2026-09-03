@@ -16,29 +16,72 @@ import { categoryGroup, CategoryGroup } from '../categories/defaults';
  * money the user already had.
  */
 
+/**
+ * Two views of a month, kept apart on purpose.
+ *
+ * A $100.000 purchase with a $20.000 refund has two correct readings:
+ *
+ *   cash     inflow 20.000, outflow 100.000, net -80.000
+ *   spending gross 100.000, refunds 20.000, net 80.000
+ *
+ * Both are true and they answer different questions. Reporting one figure
+ * called "expenses" and another called "income" folded the refund into income,
+ * which inflated income and made the savings rate `(20.000 - 100.000) / 20.000`
+ * — minus four hundred per cent — for a month somebody had a good return in.
+ *
+ * Invariants, all covered by tests:
+ *
+ *   fixedExpenses + variableExpenses === grossSpending
+ *   netSpending                      === grossSpending - refunds
+ *   netCashFlow                      === cashInflows - cashOutflows
+ *
+ * `internal_transfer` and `credit_card_payment` appear in none of them. They
+ * move money the user already had.
+ */
 export interface MonthlySummary {
   month: MonthKey;
+
+  // ── Cash view: what entered and left the accounts ──────────────────
+  /** Everything that increased cash: income, refunds, interest earned. */
+  cashInflows: Money;
+  /** Everything that decreased it: purchases, fees, taxes. */
+  cashOutflows: Money;
+  netCashFlow: Money;
+
+  // ── Spending view: what was consumed ──────────────────────────────
+  /** Purchases, fees and taxes, before anything came back. */
+  grossSpending: Money;
+  /** Money returned from an earlier purchase. Not income. */
+  refunds: Money;
+  /** `grossSpending - refunds`. Can exceed cash outflows in a refund-heavy month. */
+  netSpending: Money;
+
+  // ── Income proper ─────────────────────────────────────────────────
+  /** External money arriving. Refunds are excluded: they are not new money. */
   income: Money;
-  expenses: Money;
-  /** `income - expenses`. Negative means the month consumed savings. */
-  net: Money;
-  /** Share of income not spent, 0..1. Undefined when there was no income. */
+  /** `(income - netSpending) / income`, 0..1. Undefined when there was no income. */
   savingsRate?: number;
-  /** Spending in categories marked as fixed. */
+
+  /** Gross spending in categories marked as fixed. */
   fixedExpenses: Money;
   variableExpenses: Money;
   /** Total moved between the user's own accounts. Excluded from everything above. */
   internalTransfers: Money;
-  /** Total paid towards credit cards. Also excluded from expenses. */
+  /** Total paid towards credit cards. Also excluded. */
   cardPayments: Money;
   transactionCount: number;
 }
 
 export interface CategoryTotal {
   category: string;
+  /** Net spending: `gross - refunds`. Negative when more came back than went out. */
   amount: Money;
+  /** Spending before refunds. */
+  gross: Money;
+  /** Refunds carrying this category. One without a category is attributed to none. */
+  refunds: Money;
   transactionCount: number;
-  /** Share of the month's total expenses, 0..1. */
+  /** Share of the month's net spending, 0..1. */
   share: number;
 }
 
@@ -110,7 +153,8 @@ export function summarizeMonth(
   const currency = options.currency ?? 'CLP';
 
   let income = zero(currency);
-  let expenses = zero(currency);
+  let refunds = zero(currency);
+  let grossSpending = zero(currency);
   let fixedExpenses = zero(currency);
   let variableExpenses = zero(currency);
   let internalTransfers = zero(currency);
@@ -134,13 +178,21 @@ export function summarizeMonth(
       continue;
     }
 
+    // Before the income branch on purpose: a refund raises cash like income
+    // does, and `isIncome` says so, but it is money coming back from a purchase
+    // the user already made — not new money arriving.
+    if (isRefund(transaction)) {
+      refunds = add(refunds, magnitude);
+      continue;
+    }
+
     if (isIncome(transaction.kind, transaction.direction)) {
       income = add(income, magnitude);
       continue;
     }
 
     if (isSpending(transaction.kind, transaction.direction)) {
-      expenses = add(expenses, magnitude);
+      grossSpending = add(grossSpending, magnitude);
       if (categoryGroup(transaction.category) === CategoryGroup.fixed) {
         fixedExpenses = add(fixedExpenses, magnitude);
       } else {
@@ -149,21 +201,35 @@ export function summarizeMonth(
     }
   }
 
-  const net = subtract(income, expenses);
+  const netSpending = subtract(grossSpending, refunds);
+  const cashInflows = add(income, refunds);
   const incomeValue = toNumber(income);
 
   return {
     month,
+    cashInflows,
+    cashOutflows: grossSpending,
+    netCashFlow: subtract(cashInflows, grossSpending),
+    grossSpending,
+    refunds,
+    netSpending,
     income,
-    expenses,
-    net,
-    ...(incomeValue > 0 ? { savingsRate: toNumber(net) / incomeValue } : {}),
+    ...(incomeValue > 0
+      ? { savingsRate: (incomeValue - toNumber(netSpending)) / incomeValue }
+      : {}),
     fixedExpenses,
     variableExpenses,
     internalTransfers,
     cardPayments,
     transactionCount: transactions.length,
   };
+}
+
+/** Money coming back from a purchase the user already made. */
+function isRefund(transaction: NormalizedTransaction): boolean {
+  return (
+    transaction.kind === TransactionKind.refund && transaction.direction === Direction.in
+  );
 }
 
 /** Summaries for every month present in the data, oldest first. */
@@ -178,36 +244,72 @@ export function summarizeAll(
 }
 
 /** Expense totals per category, largest first. */
+/**
+ * Spending per category, net of refunds, largest first.
+ *
+ * A refund is attributed to the category it carries and to no other. One that
+ * arrives without a category cannot be attributed at all — guessing which
+ * purchase it undoes would move somebody's grocery total on a hunch — so it is
+ * absent here and visible in the month's `refunds`.
+ *
+ * A category can come out negative when more came back than went out that
+ * month. It is not clamped: the month really did end with money returned in
+ * that category, and hiding it would stop the categories summing to the total.
+ */
 export function totalsByCategory(
   transactions: readonly NormalizedTransaction[],
   options: MetricsOptions = {},
 ): CategoryTotal[] {
   const currency = options.currency ?? 'CLP';
-  const totals = new Map<string, { amount: Money; count: number }>();
-  let overall = zero(currency);
+  const totals = new Map<string, { gross: Money; refunds: Money; count: number }>();
+
+  const bucket = (key: string) => {
+    const existing = totals.get(key);
+    if (existing) return existing;
+    const created = { gross: zero(currency), refunds: zero(currency), count: 0 };
+    totals.set(key, created);
+    return created;
+  };
 
   for (const transaction of transactions) {
-    if (!isSpending(transaction.kind, transaction.direction)) continue;
     const magnitude = abs(transaction.amount);
-    const key = transaction.category ?? 'sin-categoria';
-    const entry = totals.get(key);
-    if (entry) {
-      entry.amount = add(entry.amount, magnitude);
+
+    if (transaction.kind === TransactionKind.refund && transaction.direction === Direction.in) {
+      if (transaction.category === undefined) continue;
+      const entry = bucket(transaction.category);
+      entry.refunds = add(entry.refunds, magnitude);
       entry.count += 1;
-    } else {
-      totals.set(key, { amount: magnitude, count: 1 });
+      continue;
     }
-    overall = add(overall, magnitude);
+
+    if (!isSpending(transaction.kind, transaction.direction)) continue;
+    const entry = bucket(transaction.category ?? 'sin-categoria');
+    entry.gross = add(entry.gross, magnitude);
+    entry.count += 1;
   }
 
+  const rows = [...totals.entries()].map(([category, entry]) => ({
+    category,
+    amount: subtract(entry.gross, entry.refunds),
+    gross: entry.gross,
+    refunds: entry.refunds,
+    transactionCount: entry.count,
+    share: 0,
+  }));
+
+  // Share is over net spending, and only over the categories that are actually
+  // net positive: a negative one would otherwise push every other share above
+  // 100 %.
+  const overall = rows.reduce(
+    (acc, row) => (row.amount.minor > 0 ? add(acc, row.amount) : acc),
+    zero(currency),
+  );
   const overallValue = toNumber(overall);
 
-  return [...totals.entries()]
-    .map(([category, entry]) => ({
-      category,
-      amount: entry.amount,
-      transactionCount: entry.count,
-      share: overallValue > 0 ? toNumber(entry.amount) / overallValue : 0,
+  return rows
+    .map((row) => ({
+      ...row,
+      share: overallValue > 0 && row.amount.minor > 0 ? toNumber(row.amount) / overallValue : 0,
     }))
     .sort((a, b) => compare(b.amount, a.amount) || (a.category < b.category ? -1 : 1));
 }

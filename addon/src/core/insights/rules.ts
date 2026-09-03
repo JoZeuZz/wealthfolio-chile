@@ -59,28 +59,28 @@ function cashFlowInsights(input: InsightInput): Insight[] {
   const { current, previous } = input;
   const out: Insight[] = [];
 
-  if (toNumber(current.net) < 0) {
+  if (toNumber(current.netCashFlow) < 0) {
     out.push({
       id: 'net-negative',
       severity: 'attention',
-      message: `En ${formatMonthKey(current.month)} gastaste ${formatCLP(subtract(current.expenses, current.income))} más de lo que ingresó.`,
-      detail: `Ingresos ${formatCLP(current.income)} · Egresos ${formatCLP(current.expenses)}`,
+      message: `En ${formatMonthKey(current.month)} gastaste ${formatCLP(subtract(current.netSpending, current.income))} más de lo que ingresó.`,
+      detail: `Ingresos ${formatCLP(current.income)} · Egresos ${formatCLP(current.netSpending)}`,
     });
   } else if (current.savingsRate !== undefined && current.savingsRate >= 0.2) {
     out.push({
       id: 'net-healthy',
       severity: 'positive',
       message: `Ahorraste el ${formatPercent(current.savingsRate)} de tus ingresos en ${formatMonthKey(current.month)}.`,
-      detail: `Flujo neto ${formatCLP(current.net)}`,
+      detail: `Flujo neto ${formatCLP(current.netCashFlow)}`,
     });
   }
 
   if (previous) {
-    const change = relativeChange(previous.expenses, current.expenses);
+    const change = relativeChange(previous.netSpending, current.netSpending);
     if (
       change !== undefined &&
       Math.abs(change) >= SIGNIFICANT_CHANGE &&
-      Math.abs(toNumber(subtract(current.expenses, previous.expenses))) >= SIGNIFICANT_AMOUNT
+      Math.abs(toNumber(subtract(current.netSpending, previous.netSpending))) >= SIGNIFICANT_AMOUNT
     ) {
       out.push({
         id: 'expenses-change',
@@ -89,17 +89,17 @@ function cashFlowInsights(input: InsightInput): Insight[] {
           change > 0
             ? `Tus gastos subieron ${formatPercent(change)} respecto de ${formatMonthKey(previous.month)}.`
             : `Tus gastos bajaron ${formatPercent(Math.abs(change))} respecto de ${formatMonthKey(previous.month)}.`,
-        detail: `${formatCLP(previous.expenses)} → ${formatCLP(current.expenses)}`,
+        detail: `${formatCLP(previous.netSpending)} → ${formatCLP(current.netSpending)}`,
       });
     }
 
-    const netChange = relativeChange(previous.net, current.net);
-    if (netChange !== undefined && toNumber(current.net) < toNumber(previous.net) && Math.abs(netChange) >= SIGNIFICANT_CHANGE) {
+    const netChange = relativeChange(previous.netCashFlow, current.netCashFlow);
+    if (netChange !== undefined && toNumber(current.netCashFlow) < toNumber(previous.netCashFlow) && Math.abs(netChange) >= SIGNIFICANT_CHANGE) {
       out.push({
         id: 'net-declining',
         severity: 'attention',
         message: `Tu flujo neto mensual cayó respecto de ${formatMonthKey(previous.month)}.`,
-        detail: `${formatCLP(previous.net)} → ${formatCLP(current.net)}`,
+        detail: `${formatCLP(previous.netCashFlow)} → ${formatCLP(current.netCashFlow)}`,
       });
     }
   }
@@ -224,8 +224,8 @@ function recurringInsights(input: InsightInput): Insight[] {
 function merchantInsights(input: InsightInput): Insight[] {
   const top = input.merchants[0];
   if (!top || input.merchants.length < 3) return [];
-  const share = toNumber(input.current.expenses) > 0
-    ? toNumber(top.amount) / toNumber(input.current.expenses)
+  const share = toNumber(input.current.netSpending) > 0
+    ? toNumber(top.amount) / toNumber(input.current.netSpending)
     : 0;
   if (share < 0.2) return [];
 
