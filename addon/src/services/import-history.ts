@@ -36,6 +36,11 @@ export interface ImportRun {
   periodFrom?: string;
   periodTo?: string;
 
+  /**
+   * Rows below the header the parser dropped on purpose: blanks, subtotals,
+   * legal footers. Absent on runs recorded before 0.2.
+   */
+  skippedRows?: number;
   /** Rows the parser produced. */
   detectedRows: number;
   /** Rows the user approved. Absent on runs recorded before v0.1.1. */

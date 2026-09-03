@@ -184,6 +184,7 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
     currency: prepared.totals.currency,
     ...(prepared.statement.period.from ? { periodFrom: prepared.statement.period.from } : {}),
     ...(prepared.statement.period.to ? { periodTo: prepared.statement.period.to } : {}),
+    skippedRows: prepared.validation.summary.skippedRows,
     detectedRows: breakdown.detected,
     selectedRows: breakdown.selected,
     importedRows: breakdown.created,

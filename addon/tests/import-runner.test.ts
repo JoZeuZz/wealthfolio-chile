@@ -5,7 +5,7 @@ import { prepareImport, setRowSelection, type PreparedImport } from '../src/core
 import { defaultRules } from '../src/core/rules/builtin';
 import { ImportHistory } from '../src/services/import-history';
 import { buildBreakdown, runImport } from '../src/services/import-runner';
-import { loadFixture } from './fixtures';
+import { fromText, loadFixture } from './fixtures';
 import { fakeHost } from './host';
 
 /**
@@ -340,5 +340,40 @@ describe('buildBreakdown', () => {
 
     const breakdown = buildBreakdown(toggled.rows, 0);
     expect(breakdown.skippedByUser).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('el historial cuenta las filas que el parser descartó', () => {
+  it('guarda cuántas se omitieron por no ser movimientos', async () => {
+    // Sin esto el historial responde «detectados» y «creados» pero no «de
+    // cuántas filas salieron», que es la mitad de la pregunta cuando algo no
+    // cuadra.
+    const host = fakeHost();
+    const prepared = prepareImport({
+      file: fromText(
+        'cartola.csv',
+        [
+          'Fecha;Descripcion;Cargo;Abono;Saldo',
+          '2026-02-03;COMPRA UNO;10.000;;90.000',
+          '',
+          '2026-02-04;TOTAL DEL PERIODO;;;90.000',
+          '2026-02-05;COMPRA DOS;5.000;;85.000',
+        ].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    const result = await runImport({
+      ctx: host.ctx,
+      prepared,
+      accountId: 'acc-1',
+      accountName: 'Cuenta',
+    });
+
+    expect(result.run.skippedRows).toBe(2);
+    expect(result.run.detectedRows).toBe(2);
   });
 });
