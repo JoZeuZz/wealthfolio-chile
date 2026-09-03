@@ -199,3 +199,87 @@ describe('import history at volume', () => {
     expect(StorageKeys.importHistory).toBe('wfcl.imports');
   });
 });
+
+/**
+ * Qué pasa cuando una escritura se corta a la mitad.
+ *
+ * `ShardedList` escribe los shards primero y el índice al final, así que la
+ * ventana peligrosa es exactamente esa: los datos están en el store y el índice
+ * todavía no lo sabe. Sin reparación, el siguiente `append` lee el índice viejo
+ * y **sobrescribe** el shard huérfano: la escritura anterior desaparece sin que
+ * nada falle.
+ */
+describe('índice y shards desincronizados', () => {
+  interface Item {
+    n: number;
+  }
+
+  const items = (from: number, count: number): Item[] =>
+    Array.from({ length: count }, (_, i) => ({ n: from + i }));
+
+  it('recupera un shard que el índice no conoce', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+
+    await list.append(items(1, 4)); // shards 0 y 1
+    // Simula un corte justo antes de escribir el índice.
+    await store.set('wfcl.test.index', JSON.stringify({ shards: 1, total: 2 }));
+
+    expect(await list.readAll()).toEqual(items(1, 4));
+    expect(await list.count()).toBe(4);
+  });
+
+  it('no pisa el shard huérfano en el siguiente append', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+
+    await list.append(items(1, 4));
+    await store.set('wfcl.test.index', JSON.stringify({ shards: 1, total: 2 }));
+
+    await list.append(items(5, 1));
+
+    expect(await list.readAll()).toEqual(items(1, 5));
+  });
+
+  it('deriva el total de los shards en vez de creerle al índice', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+
+    await list.append(items(1, 3));
+    await store.set('wfcl.test.index', JSON.stringify({ shards: 2, total: 99 }));
+
+    expect(await list.count()).toBe(3);
+  });
+
+  it('informa de un shard ilegible en vez de tratarlo como vacío', async () => {
+    // Un shard corrupto que se lee como `[]` es pérdida de datos silenciosa.
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+
+    await list.append(items(1, 4));
+    await store.set('wfcl.test.s0', '{ esto no es json');
+
+    const health = await list.inspect();
+    expect(health.corruptShards).toEqual([0]);
+    expect(health.shards).toBe(2);
+  });
+
+  it('escribe una versión de esquema en el índice', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+    await list.append(items(1, 1));
+
+    const index = JSON.parse((await store.get('wfcl.test.index')) as string) as { v?: number };
+    expect(index.v).toBe(1);
+  });
+
+  it('sigue leyendo un índice escrito antes de que existiera la versión', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+
+    await store.set('wfcl.test.s0', JSON.stringify(items(1, 2)));
+    await store.set('wfcl.test.index', JSON.stringify({ shards: 1, total: 2 }));
+
+    expect(await list.readAll()).toEqual(items(1, 2));
+  });
+});

@@ -1,6 +1,6 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { toActivityCreate } from '../core/mapping/activities';
-import { createRedactingLogger } from '../core/privacy';
+import { createRedactingLogger, redactDescription } from '../core/privacy';
 import type { PreparedImport, PreviewRow } from '../core/pipeline';
 import { ImportHistory, newRunId, type ImportRun } from './import-history';
 
@@ -97,10 +97,12 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
   );
 
   const errors: string[] = [];
+  const batches = Math.ceil(activities.length / BATCH_SIZE);
   let created = 0;
 
   for (let offset = 0; offset < activities.length; offset += BATCH_SIZE) {
     const batch = activities.slice(offset, offset + BATCH_SIZE);
+    const batchNumber = offset / BATCH_SIZE + 1;
     try {
       const result = await ctx.api.activities.saveMany({ creates: batch });
       created += result.created.length;
@@ -112,7 +114,12 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
       // applied write is exactly how duplicates get created.
       const message = error instanceof Error ? error.message : String(error);
       errors.push(message);
-      logger.error(`Falló un lote de importación: ${message}`);
+      // Position and count, never the host's text. A host message can quote the
+      // request back — and the request is a bank statement row, complete with
+      // whatever name, RUT or account number the glosa carried. Redaction is
+      // not enough for that: it strips identifiers with a known shape, and a
+      // counterparty's name has no shape.
+      logger.error(`Falló el lote ${batchNumber} de ${batches} al importar.`);
     }
   }
 
@@ -166,7 +173,13 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
     deselectedRows: breakdown.skippedByUser,
     errorRows: prepared.validation.summary.errorRows,
     status,
-    ...(errors.length > 0 ? { message: errors.slice(0, 3).join(' · ') } : {}),
+    // Redacted and truncated on the way into storage. `errors` above keeps the
+    // full text for the screen the user is looking at right now; the history
+    // outlives that screen, so what it keeps is the shortest thing that still
+    // answers "why did this run not finish".
+    ...(errors.length > 0
+      ? { message: errors.slice(0, 3).map((entry) => redactDescription(entry, 120)).join(' · ') }
+      : {}),
   };
 
   // Recording the run must never undo a successful write, so a storage failure

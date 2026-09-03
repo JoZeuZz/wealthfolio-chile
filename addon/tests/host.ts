@@ -82,7 +82,7 @@ export interface FakeHost {
    * creates only that many rows and reports the rest as errors — the shape a
    * host takes when it accepts some rows and refuses others.
    */
-  saveManyPlan: (('ok' | 'throw') | number)[];
+  saveManyPlan: (('ok' | 'throw') | number | Error)[];
 }
 
 export interface FakeHostOptions {
@@ -137,9 +137,13 @@ export function fakeHost(options: FakeHostOptions = {}): FakeHost {
         host.saveManyCalls.push({ request });
         const creates = request.creates ?? [];
         const plan = host.saveManyPlan[host.saveManyCalls.length - 1] ?? 'ok';
+        // An `Error` instance lets a test choose the message the host throws,
+        // which is what the privacy tests need: the question is what happens to
+        // a host message that quotes the user's data back.
+        if (plan instanceof Error) throw plan;
         if (plan === 'throw') throw new Error('host rejected the batch');
 
-        const createdCount = plan === 'ok' ? creates.length : plan;
+        const createdCount = plan === 'ok' ? creates.length : (plan as number);
         return {
           created: creates.slice(0, createdCount).map((create, index) => ({
             id: `created-${host.saveManyCalls.length}-${index}`,

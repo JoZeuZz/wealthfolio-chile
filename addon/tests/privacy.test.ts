@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { buildDuplicateIndex } from '../src/core/dedupe/classify';
+import { prepareImport } from '../src/core/pipeline';
+import { runImport } from '../src/services/import-runner';
+import { fromText } from './fixtures';
+import { fakeHost } from './host';
 import {
   createRedactingLogger,
   maskAccountNumber,
@@ -126,5 +131,73 @@ describe('repository hygiene', () => {
 
     expect(source).not.toContain('samples/private');
     expect(source).toContain('samples/synthetic');
+  });
+});
+
+/**
+ * Lo que sale del addon durante una importación real.
+ *
+ * `core/privacy` prueba los redactores en aislamiento. Esto prueba el camino
+ * completo: un error del host atraviesa el runner, la UI y el historial, y cada
+ * uno de esos tres destinos tiene reglas distintas.
+ */
+describe('una importación completa no filtra nada', () => {
+  const GLOSA = 'TRANSFERENCIA A JUAN PEREZ RUT 12.345.678-9 CTA 001234567890';
+
+  async function runWithHostError(message: string) {
+    const host = fakeHost();
+    host.saveManyPlan = [new Error(message)];
+
+    const prepared = prepareImport({
+      file: fromText(
+        'cartola-12345678.csv',
+        ['Fecha;Descripcion;Cargo;Abono;Saldo', `03/02/2026;${GLOSA};10.000;;90.000`].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    const result = await runImport({
+      ctx: host.ctx,
+      prepared,
+      accountId: 'acc-1',
+      accountName: 'Cuenta',
+    });
+
+    return { host, result };
+  }
+
+  it('no manda la glosa, el RUT ni el número de cuenta al logger', async () => {
+    const { host } = await runWithHostError(`no se pudo guardar "${GLOSA}"`);
+    const logged = host.logs.map((entry) => entry.message).join('\n');
+
+    expect(logged).not.toContain('JUAN PEREZ');
+    expect(logged).not.toContain('12.345.678-9');
+    expect(logged).not.toContain('001234567890');
+  });
+
+  it('tampoco manda el nombre del archivo, que suele llevar el RUT', async () => {
+    const { host } = await runWithHostError('fallo generico');
+    const logged = host.logs.map((entry) => entry.message).join('\n');
+    expect(logged).not.toContain('cartola-12345678');
+  });
+
+  it('deja el detalle crudo en el resultado, que sólo vive en memoria', async () => {
+    // El usuario tiene que poder leer qué pasó para resolverlo. Eso no obliga a
+    // escribirlo en ninguna parte.
+    const { result } = await runWithHostError(`no se pudo guardar "${GLOSA}"`);
+    expect(result.errors.join(' ')).toContain('JUAN PEREZ');
+  });
+
+  it('redacta lo que sí se persiste en el historial', async () => {
+    const { host, result } = await runWithHostError(`no se pudo guardar "${GLOSA}"`);
+    expect(result.run.message ?? '').not.toContain('12.345.678-9');
+    expect(result.run.message ?? '').not.toContain('001234567890');
+
+    const stored = [...host.store.data.values()].join('\n');
+    expect(stored).not.toContain('12.345.678-9');
+    expect(stored).not.toContain('001234567890');
   });
 });
