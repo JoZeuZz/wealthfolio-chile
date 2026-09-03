@@ -85,9 +85,11 @@ Detalle completo en [IMPORT_PIPELINE.md](IMPORT_PIPELINE.md).
 | `dates.ts` | Fechas civiles sobre strings `YYYY-MM-DD`; nunca `Date` con zona horaria |
 | `text.ts` | Normalización de descripciones — la forma que comparan todos los matchers |
 | `hash.ts` | SHA-256 propio, síncrono, idéntico en navegador y Node |
-| `privacy.ts` | Enmascarado y redacción; envoltorio del logger |
+| `privacy.ts` | Enmascarado, redacción y saneado de nombres de archivo; envoltorio del logger |
+| `accounts/` | Compara la cartola con la cuenta de destino antes de escribir |
+| `classify/` | Qué significa un movimiento de tarjeta. Vocabulario chileno en un solo lugar |
 | `model/` | El modelo canónico: `TransactionKind`, `NormalizedTransaction`, `ParsedStatement`, `InstallmentPlan` |
-| `parsing/` | Lectores de archivo, detección de cabecera, mapeo de filas |
+| `parsing/` | Lectores de archivo, detección de cabecera, mapeo de filas, orden de campos de fecha |
 | `providers/` | Un perfil declarativo por banco + el motor genérico que los ejecuta |
 | `dedupe/` | Huellas e idempotencia |
 | `reconcile/` | Transferencias internas y pagos de tarjeta |
@@ -95,7 +97,7 @@ Detalle completo en [IMPORT_PIPELINE.md](IMPORT_PIPELINE.md).
 | `categories/` | Árbol de categorías por defecto |
 | `rules/` | Motor de reglas condición→acción + reglas predefinidas |
 | `installments/` | Detección de cuotas y reconstrucción de planes |
-| `metrics/` | Agregados mensuales, categorías, comercios, recurrentes |
+| `metrics/` | Agregados mensuales por moneda: caja y gasto por separado, categorías, comercios, recurrentes |
 | `insights/` | Frases deterministas a partir de esos agregados |
 | `mapping/` | Traducción al modelo de actividades de Wealthfolio |
 | `pipeline.ts` | Orquestador puro de todo lo anterior |
@@ -116,7 +118,12 @@ Detalle completo en [IMPORT_PIPELINE.md](IMPORT_PIPELINE.md).
 ### `ui/` — React
 
 Páginas: panel (`/addons/wealthfolio-chile`), wizard (`…/importar`), historial
-(`…/importaciones`). Componentes de `@wealthfolio/ui`, provistos por el host.
+(`…/importaciones`) y conciliación (`…/conciliacion`). Componentes de
+`@wealthfolio/ui`, provistos por el host.
+
+La página de conciliación es de **sólo lectura** por una razón de contrato, no
+de alcance: aplicar un par exige enlazar dos actividades, y el Addon SDK 3.7.0
+no lo expone. Ver [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md).
 
 ---
 
@@ -195,14 +202,24 @@ de vuelta al buscar. Un ledger paralelo en `storage` se desincronizaría en
 cuanto el usuario borrara una actividad a mano, y el addon se negaría a
 reimportar un movimiento que ya no existe.
 
-### 6. Nada infla ingresos ni gastos
+### 6. Caja y gasto son dos preguntas
+
+Una compra de $100.000 con una devolución de $20.000 tiene dos lecturas
+correctas y distintas: en caja entraron 20.000 y salieron 100.000; en gasto el
+bruto fue 100.000, la devolución 20.000 y el neto 80.000. Reportar una cifra
+llamada «ingresos» y otra llamada «egresos» metía la devolución en los ingresos
+y hacía que la tasa de ahorro saliera −400 %. `MonthlySummary` lleva las dos
+vistas con nombres que no se pueden confundir. Ver
+[ADR 0006](adr/0006-caja-y-gasto.md).
+
+### 7. Nada infla ingresos ni gastos
 
 `internal_transfer` y `credit_card_payment` están excluidos por construcción de
 todo agregado de ingreso y gasto — en `core/metrics`, en los totales de la vista
 previa, y en el mapeo a Wealthfolio (van como `TRANSFER_*`, que netea a cero a
 nivel de portafolio).
 
-### 7. Determinista primero, IA después
+### 8. Determinista primero, IA después
 
 Reglas y parsers antes que modelos. Las frases del panel son aritmética con
 plantilla fija. Un número plausible pero incorrecto es peor que ninguna frase.

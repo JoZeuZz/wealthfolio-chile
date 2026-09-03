@@ -54,9 +54,36 @@ fecha + descripción + algo de monto.
 El mapeo va por pasadas — exacta, prefijo, contiene — para que un encabezado
 preciso nunca pierda contra uno laxo, y una columna no puede tomar dos roles.
 
-Roles: `date`, `postedDate`, `description`, `amount`, `debit`, `credit`,
-`balance`, `reference`, `operationType`, `currency`, `installment`, `card`,
-`category`, `directionFlag`.
+Roles: `date`, `postedDate`, `description`, `amount`, `installmentAmount`,
+`purchaseAmount`, `debit`, `credit`, `balance`, `reference`, `operationType`,
+`currency`, `installment`, `card`, `category`, `directionFlag`.
+
+`installmentAmount` y `purchaseAmount` existen porque en un estado de cuenta de
+tarjeta `MONTO TOTAL` y `VALOR CUOTA` son números distintos. Estaban listados
+como sinónimos del mismo rol, así que ganaba la columna que apareciera primero:
+una compra de $299.940 en seis cuotas se cargaba entera cada mes y el total
+derivado salía seis veces mayor que la compra.
+
+### El orden de los campos de una fecha
+
+`core/parsing/date-order.ts`
+
+`03/09/2026` admite dos lecturas. La ambigüedad es del **archivo**, no de la
+fila: un banco no mezcla órdenes dentro de una exportación, así que una sola
+fila con un campo mayor que 12 lo resuelve para todas las demás. El orden se
+decide una vez, antes de mapear ninguna fila, mirando la columna de fecha *y* la
+de fecha contable.
+
+Sólo votan las filas que van a convertirse en movimientos. Una línea
+`TOTAL DEL PERIODO` con `12/25/2026` alcanzaba para declarar —con la confianza
+más alta que tiene el detector— que una cartola chilena es `MM/DD/AAAA`, y
+recorría todas las fechas reales del archivo.
+
+Cuando el archivo se demuestra a sí mismo, el orden del archivo **gana al del
+perfil**: el archivo es evidencia y el perfil una expectativa. Cuando no
+demuestra nada, se usa el del perfil y se advierte una vez, con el número de
+filas afectadas — no una advertencia por fila, que era la mitad de una cartola
+real y dejaba de significar nada.
 
 ---
 
@@ -198,14 +225,50 @@ parcial.
 
 Se muestran: ingresos, egresos, flujo neto, transferencias propias, pagos de
 tarjeta, duplicados, ignorados, filas a revisar y planes de cuotas detectados.
+La cabecera dice además qué pasó con **cada fila bajo la cabecera** —leídas,
+omitidas, con error— porque «¿leímos esta cartola entera?» tiene que ser
+respondible sin leer prosa.
 
 Marcar o desmarcar una fila recalcula todo. **Nada se ha escrito todavía.**
+
+### Los tres gates
+
+`services/import-preparation.ts` reúne cada razón por la que escribir está
+prohibido, y las reporta **todas a la vez**: arreglar una y descubrir la
+siguiente es cómo se pierde la confianza en una herramienta.
+
+| Código | Cuándo | Por qué bloquea |
+| --- | --- | --- |
+| `parse-failed` | El archivo no se pudo leer | No hay nada que importar |
+| `statement-invalid` | `validation.ok === false` | Una fila que debía ser un movimiento no se pudo leer, o el saldo declarado no cuadra de forma sistemática. Importar el subconjunto legible deja un hueco que después parece completo |
+| `duplicate-check-unavailable` | La lectura de movimientos existentes falló o quedó truncada | «No se pudo comprobar» y «no hay duplicados» son respuestas distintas |
+| `account-mismatch` | Moneda distinta, número de cuenta distinto, o cuenta de instrumentos | Ningún otro control lo detecta: las huellas van scoped por cuenta, así que en la cuenta equivocada los movimientos *son* nuevos |
+
+`statement-invalid` explica cuál de sus causas ocurrió: decirle a alguien que
+«0 de 4 filas no se pudieron leer» cuando lo que falló fue el recorrido de
+saldos lo manda a arreglar algo que no está roto.
+
+Un desajuste de saldo aislado es error sólo si el perfil declara su columna
+`authoritative` —hoy ninguno de los bancarios—. Un desajuste **sistemático**
+(≥50 % de los pasos, mínimo 4 pasos) es error siempre: a esa proporción no es
+una rareza del banco, es que el archivo se está leyendo mal. El recorrido se
+hace en orden de libro, no de archivo, y acumula los montos entre dos saldos
+declarados, porque hay cartolas que exportan de la más nueva a la más antigua y
+cartolas que imprimen el saldo una vez por día.
 
 ---
 
 ## Paso 10 — Escribir
 
 `core/mapping/activities.ts` → `services/import-runner.ts`
+
+El mapeo recibe el **tipo de la cuenta de destino**. Wealthfolio sólo acepta
+`WITHDRAWAL`, `TRANSFER_IN`, `CREDIT`, `FEE` e `INTEREST` en una cuenta
+`CREDIT_CARD`, y rechaza el lote entero por una fila que no esté en la lista; en
+esas cuentas el mapeo sustituye por el tipo permitido más cercano y deja
+constancia en `metadata.subst`, para que una relectura no confunda la
+sustitución con una reclasificación del usuario. Ver
+[UPSTREAM.md](UPSTREAM.md).
 
 Cada transacción se traduce a `ActivityCreate` con el monto como magnitud
 positiva (el tipo lleva la dirección) y nuestra metadata bajo la clave
