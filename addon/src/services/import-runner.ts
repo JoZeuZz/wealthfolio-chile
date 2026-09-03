@@ -1,6 +1,6 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { toActivityCreate } from '../core/mapping/activities';
-import { createRedactingLogger, redactDescription } from '../core/privacy';
+import { createRedactingLogger, sanitizeFileName } from '../core/privacy';
 import type { PreparedImport, PreviewRow } from '../core/pipeline';
 import { ImportHistory, newRunId, type ImportRun } from './import-history';
 
@@ -152,7 +152,11 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
   const run: ImportRun = {
     id: runId,
     timestamp: new Date().toISOString(),
-    fileName: prepared.statement.fileName,
+    // Sanitised, not stored as downloaded. Chilean banks name the file after
+    // whatever identifies the account — `CartolaCuentaRut_12345678-9_202602.csv`
+    // — and this goes into a store that replicates across the user's paired
+    // devices. The hash below is what actually identifies the file.
+    fileName: sanitizeFileName(prepared.statement.fileName),
     fileHash: prepared.fileHash,
     institution: prepared.statement.institution,
     parser: prepared.statement.parser,
@@ -173,12 +177,18 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
     deselectedRows: breakdown.skippedByUser,
     errorRows: prepared.validation.summary.errorRows,
     status,
-    // Redacted and truncated on the way into storage. `errors` above keeps the
-    // full text for the screen the user is looking at right now; the history
-    // outlives that screen, so what it keeps is the shortest thing that still
-    // answers "why did this run not finish".
+    // Counts and a code, never the host's own text. Redaction only removes what
+    // has a shape, and a counterparty's name has none — the message that
+    // reached storage in testing said `no se pudo guardar "TRANSFERENCIA A JUAN
+    // PEREZ ..."` with the name intact. The full text stays in `errors`, which
+    // is in memory and on the screen the user is looking at; the history
+    // outlives that screen and keeps only what answers "why did this not
+    // finish".
     ...(errors.length > 0
-      ? { message: errors.slice(0, 3).map((entry) => redactDescription(entry, 120)).join(' · ') }
+      ? {
+          failureCode: 'host-rejected' as const,
+          message: `El host rechazó ${breakdown.failed} de ${breakdown.selected} movimiento(s) aprobados. El detalle estaba en la pantalla de importación.`,
+        }
       : {}),
   };
 

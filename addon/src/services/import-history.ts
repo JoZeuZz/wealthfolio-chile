@@ -18,6 +18,7 @@ export interface ImportRun {
   /** ISO timestamp of when the import was confirmed. */
   timestamp: string;
 
+  /** File name with identifiers stripped — see `core/privacy.sanitizeFileName`. */
   fileName: string;
   /** SHA-256 of the file bytes — how a re-upload of the same file is spotted. */
   fileHash: string;
@@ -55,7 +56,14 @@ export interface ImportRun {
   errorRows: number;
 
   status: 'completed' | 'partial' | 'failed';
-  /** User-facing error summary when the run did not complete cleanly. */
+  /**
+   * What went wrong, as a code.
+   *
+   * The host's own error text is deliberately absent: it can quote the request
+   * back, and the request is a bank statement row. See `import-runner`.
+   */
+  failureCode?: 'host-rejected';
+  /** Counts-only summary of the failure. Never host prose. */
   message?: string;
 }
 

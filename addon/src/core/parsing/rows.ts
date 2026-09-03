@@ -1,10 +1,11 @@
-import { parseStatementDate, type IsoDate } from '../dates';
+import { DateParseError, parseStatementDate, type IsoDate } from '../dates';
 import { detectInstallment } from '../installments/detect';
-import { abs, isZero, negate, parseAmount, sign, type Money } from '../money';
+import { abs, isZero, MoneyError, negate, parseAmount, sign, type Money } from '../money';
 import { defaultKindForRow } from '../classify/card-semantics';
 import { Confidence, Direction } from '../model/kinds';
 import type { RowStats, StatementIssue } from '../model/statement';
 import type { NormalizedTransaction, TransactionWarning } from '../model/transaction';
+import { redactDescription } from '../privacy';
 import { normalizeDescription } from '../text';
 import { cell, ColumnRole, type ColumnMap } from './columns';
 import { resolveDateOrder, type DateOrderEvidence } from './date-order';
@@ -112,7 +113,7 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
       issues.push({
         level: 'error',
         code: 'row-parse-failed',
-        message: `Fila ${line}: ${(error as Error).message}`,
+        message: `Fila ${line}: ${describeRowFailure(error)}`,
         line,
       });
     }
@@ -254,6 +255,26 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     warnings,
     rawMetadata: buildRawMetadata(row, map),
   };
+}
+
+/**
+ * Why a row could not be read, without quoting the row.
+ *
+ * `parseStatementDate` and `parseAmount` interpolate the offending cell into
+ * the error they throw, and when a column is misaligned that cell is a whole
+ * glosa — counterparty name and RUT included. Redaction is not enough: it
+ * removes what has a shape, and `MARIA FERNANDA GONZALEZ` has none.
+ *
+ * The line number and the column are what make the problem findable, and
+ * neither identifies anybody. Anything unrecognised falls back to a redacted,
+ * truncated message rather than nothing, because an unknown failure with no
+ * description is a support case with no thread to pull.
+ */
+function describeRowFailure(error: unknown): string {
+  if (error instanceof DateParseError) return 'no se pudo leer la fecha.';
+  if (error instanceof MoneyError) return 'no se pudo leer el monto.';
+  const message = error instanceof Error ? error.message : String(error);
+  return redactDescription(message, 80);
 }
 
 /**

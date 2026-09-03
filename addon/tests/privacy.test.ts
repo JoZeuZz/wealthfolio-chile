@@ -191,6 +191,38 @@ describe('una importación completa no filtra nada', () => {
     expect(result.errors.join(' ')).toContain('JUAN PEREZ');
   });
 
+  it('no persiste el nombre del archivo, que suele llevar el RUT', async () => {
+    // Las descargas chilenas se llaman `CartolaCuentaRut_<rut>_<periodo>` o
+    // `Movimientos_<cuenta>`. El historial guardaba el nombre tal cual.
+    const host = fakeHost();
+    host.saveManyPlan = ['ok'];
+
+    const prepared = prepareImport({
+      file: fromText(
+        'Cartola_12345678-9_CtaCte_001234567890_feb2026.csv',
+        ['Fecha;Descripcion;Cargo;Abono;Saldo', '2026-02-03;COMPRA;10.000;;90.000'].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    await runImport({ ctx: host.ctx, prepared, accountId: 'acc-1', accountName: 'Cuenta' });
+
+    const stored = [...host.store.data.values()].join('\n');
+    expect(stored).not.toContain('12345678-9');
+    expect(stored).not.toContain('001234567890');
+  });
+
+  it('no persiste el nombre de la contraparte', async () => {
+    // `redactSensitive` sólo quita lo que tiene forma. Un nombre no la tiene, y
+    // el historial guardaba el mensaje del host completo.
+    const { host } = await runWithHostError(`no se pudo guardar "${GLOSA}"`);
+    const stored = [...host.store.data.values()].join('\n');
+    expect(stored).not.toContain('JUAN PEREZ');
+  });
+
   it('redacta lo que sí se persiste en el historial', async () => {
     const { host, result } = await runWithHostError(`no se pudo guardar "${GLOSA}"`);
     expect(result.run.message ?? '').not.toContain('12.345.678-9');
@@ -199,5 +231,84 @@ describe('una importación completa no filtra nada', () => {
     const stored = [...host.store.data.values()].join('\n');
     expect(stored).not.toContain('12.345.678-9');
     expect(stored).not.toContain('001234567890');
+  });
+});
+
+/**
+ * Formatos chilenos reales que `redactSensitive` dejaba pasar enteros.
+ *
+ * Cada fila salió de una auditoría independiente que corrió el redactor contra
+ * ellas y observó la salida idéntica a la entrada.
+ */
+describe('formatos que se escapaban', () => {
+  const cases: Array<[string, string, string]> = [
+    ['RUT de seis dígitos', 'Pago a RUT 123.456-7', '123.456-7'],
+    ['RUT de seis dígitos sin puntos', 'Pago a RUT 123456-7', '123456-7'],
+    ['RUT separado por espacios', 'RUT 12 345 678 9', '12 345 678 9'],
+    ['tarjeta con doble espacio', 'Tarjeta 4051  2233  4455  6677', '6677'],
+    ['tarjeta separada por barras', 'Tarjeta 4051/2233/4455/6677', '4051/2233'],
+    ['cuenta de siete dígitos', 'Cuenta corriente 0012345', '0012345'],
+    ['cuenta con puntos', 'Cuenta 001.234.567.890', '001.234.567.890'],
+    ['cuenta con guiones', 'Cuenta 0012-3456-7890', '0012-3456-7890'],
+    ['correo con acento', 'Contacto josé@correo.cl', 'josé@correo.cl'],
+  ];
+
+  for (const [name, input, mustNotSurvive] of cases) {
+    it(`redacta ${name}`, () => {
+      expect(redactSensitive(input)).not.toContain(mustNotSurvive);
+    });
+  }
+
+  it('no destruye texto que no es un identificador', () => {
+    expect(redactSensitive('COMPRA SUPERMERCADO LIDER')).toBe('COMPRA SUPERMERCADO LIDER');
+    expect(redactSensitive('CUOTA 2 DE 6')).toBe('CUOTA 2 DE 6');
+  });
+});
+
+describe('máscaras cortas', () => {
+  it('no muestra casi todo un número corto', () => {
+    // `maskAccountNumber('12345')` devolvía `•2345`: cuatro de cinco dígitos.
+    expect(maskAccountNumber('12345')).not.toContain('2345');
+  });
+
+  it('un RUT de seis dígitos no cae en la máscara genérica', () => {
+    expect(maskRut('123.456-7')).not.toContain('4567');
+  });
+});
+
+/**
+ * Celdas crudas dentro de mensajes de error.
+ *
+ * `parseStatementDate` y `parseAmount` interpolan el valor de la celda en el
+ * mensaje que lanzan. Si la columna de fecha viene corrida, esa celda es una
+ * glosa completa — con nombre y RUT — y el mensaje viaja hasta
+ * `StatementIssue.message`, que la UI muestra y que cualquier llamador podría
+ * loguear.
+ */
+describe('los problemas de una fila no citan la fila', () => {
+  it('redacta la celda que hizo fallar el parseo', () => {
+    const prepared = prepareImport({
+      file: fromText(
+        'cartola.csv',
+        [
+          'Fecha;Descripcion;Cargo;Abono;Saldo',
+          '2026-02-03;COMPRA;10.000;;90.000',
+          'RUT 123456-7 MARIA GONZALEZ;TRANSFERENCIA;12.340;;77.660',
+        ].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    const issue = prepared.validation.issues.find((i) => i.code === 'row-parse-failed');
+    expect(issue).toBeDefined();
+    expect(issue?.message).not.toContain('MARIA GONZALEZ');
+    expect(issue?.message).not.toContain('123456-7');
+    // Sigue diciendo dónde mirar: la línea y la columna, que no identifican a
+    // nadie.
+    expect(issue?.message).toContain('Fila 3');
+    expect(issue?.message).toContain('fecha');
   });
 });
