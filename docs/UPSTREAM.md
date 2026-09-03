@@ -4,7 +4,8 @@ Qué versión de Wealthfolio usamos, qué nos ofrece su SDK de addons y cómo
 actualizamos.
 
 Investigado el **2026-08-05** contra el código real del repositorio, no contra
-documentación de terceros.
+documentación de terceros. Actualizado a **v3.7.0** el 2026-09-03, verificando
+cada afirmación contra el checkout en el tag `v3.7.0` y contra un host real.
 
 ---
 
@@ -13,14 +14,14 @@ documentación de terceros.
 | Dato | Valor |
 | --- | --- |
 | Repositorio | `wealthfolio/wealthfolio` |
-| Release estable | **v3.6.2** (2026-07-13) |
+| Release estable | **v3.7.0** (2026-08-19) |
 | Licencia del core | **AGPL-3.0** |
 | Licencia de `@wealthfolio/addon-sdk` | **MIT** |
 | Licencia de `@wealthfolio/ui` | **MIT** |
-| SDK usado | `@wealthfolio/addon-sdk@3.6.2` |
+| SDK usado | `@wealthfolio/addon-sdk@3.7.0` |
 | Node de upstream | 24 (`.node-version`) |
 | Gestor de paquetes | `pnpm@10.33.4` |
-| Imagen Docker | `wealthfolio/wealthfolio:3.6.2` (multi-arch amd64/arm64) — **sin la `v`**: upstream etiqueta en git con `v3.6.2` y publica en Docker Hub como `3.6.2`. El digest coincide con el del tag `sha-633d3a1be7a…`, el commit del release |
+| Imagen Docker | `wealthfolio/wealthfolio:3.7.0` (multi-arch amd64/arm64) — **sin la `v`**: upstream etiqueta en git con `v3.7.0` y publica en Docker Hub como `3.7.0` |
 | Checkout local | `.upstream/wealthfolio` (ignorado por Git) |
 
 Wealthfolio es Tauri + React + Rust. El backend vive en `crates/`, el frontend
@@ -29,7 +30,75 @@ en `apps/frontend`, el servidor web en `apps/server` y los paquetes públicos en
 
 ---
 
-## Cómo funciona un addon (v3.6)
+## Qué cambió de v3.6.2 a v3.7.0
+
+Leído en el diff real de `packages/addon-sdk` entre los dos tags:
+
+| Cambio | Nos afecta |
+| --- | --- |
+| Nuevo `AddonContext.assets` (`list/has/getBlob/getUrl`) para archivos empaquetados bajo `assets/**` | No lo usamos |
+| `enable()` y el `disable` devuelto pueden ser `async` | No lo necesitamos |
+| `QueryAPI.getClient()` pasa a estar **scoped al sandbox**: su caché ya no se comparte con la app principal, aunque `invalidate`/`refetch` sí se replican | Sólo llamamos `invalidateQueries` |
+| `AccountValuation.calculationMethod` suma `UNPRICED_HOLDINGS_TRANSITION` | No lo leemos |
+| `HOST_DEPENDENCIES` sube a `^3.7.0` | Sí: `manifest.json` y `package.json` |
+| Build target fijado a `chrome107, edge107, firefox104, safari16` | Sí: `vite.config.ts` lo declara explícitamente |
+
+Lo que **no** cambió, y sigue condicionando el diseño:
+
+- `ActivitySearchFilters` sigue sin declarar `dateFrom`/`dateTo`.
+- El desfase de zona horaria de los filtros de fecha sigue igual
+  (`local_date_range_utc_bounds`). Reverificado en runtime el 2026-09-03: una
+  actividad del 2026-09-01 sólo aparece pidiendo la ventana `2026-08-31`.
+- `NewActivity.metadata` sigue siendo `Option<String>` y `ActivityDetails.metadata`
+  `Option<Value>`. Reverificado: mandar un objeto devuelve
+  `422 invalid type: map, expected a string`.
+- `ActivitiesAPI` sigue sin `link`, `unlink` ni `transfer-pair`, ni en el paquete
+  publicado ni en el puente del sandbox. [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md)
+  sigue vigente sin cambios.
+- `ExchangeRatesAPI` sigue siendo `getAll`/`update`/`add`: tipos vigentes, **no
+  históricos**. No hay forma pública de convertir un movimiento a la fecha en que
+  ocurrió.
+- No hay `ctx.api.spending`. [ADR 0003](adr/0003-categorizacion-propia.md) sigue
+  vigente.
+
+`minWealthfolioVersion` es el **único gate duro** del host
+(`enforce_min_wealthfolio_version`, `crates/core/src/addons/service.rs`).
+`sdkVersion` y `hostDependencies` sólo producen warnings
+(`validateAddonCompatibility`, `apps/frontend/src/addons/addons-core.ts`).
+
+---
+
+## Tipos de actividad permitidos por tipo de cuenta
+
+Encontrado contra un host real el 2026-09-03, no leyendo el SDK: importar un
+estado de cuenta de tarjeta con un abono sin glosa reconocible devolvió
+
+```
+Activity error: Invalid data: UNKNOWN activities are not supported for
+credit card accounts
+```
+
+y como `saveMany` valida el lote completo antes de escribir, esa única fila costó
+los cinco movimientos: no se guardó ninguno.
+
+La regla vive en `account_activity_validation_message`
+(`crates/core/src/activities/activities_service.rs`). En una cuenta
+`CREDIT_CARD` sólo se aceptan:
+
+```
+WITHDRAWAL   TRANSFER_IN   CREDIT   FEE   INTEREST
+```
+
+Cualquier otro tipo —incluidos `UNKNOWN`, `DEPOSIT`, `TRANSFER_OUT` y `TAX`— se
+rechaza. `core/mapping/activities.ts` recibe ahora el tipo de la cuenta destino y
+sustituye por el tipo permitido más cercano, dejando constancia en
+`metadata.subst` para que una relectura no confunda la sustitución con una
+reclasificación del usuario. Hay un test que recorre todos los `TransactionKind`
+en ambas direcciones y falla si alguno produce un tipo que el host rechazaría.
+
+---
+
+## Cómo funciona un addon (v3.6 y v3.7)
 
 Un addon es un módulo ES que exporta una función `enable(ctx)`. Lo relevante
 para nuestro diseño:

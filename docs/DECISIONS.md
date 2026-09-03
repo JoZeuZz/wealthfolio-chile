@@ -7,7 +7,7 @@ justificación larga tienen su propio ADR en [`adr/`](adr/).
 
 ## D1 — Addon, no fork
 
-**Decisión.** Construir sobre el Addon SDK 3.6.2. No tocar el core.
+**Decisión.** Construir sobre el Addon SDK (3.6.2 al decidirlo, 3.7.0 hoy). No tocar el core.
 
 **Por qué.** Todo lo que necesita el MVP es alcanzable: crear actividades
 (`activities.saveMany`), leerlas (`activities.search`), persistir estado propio

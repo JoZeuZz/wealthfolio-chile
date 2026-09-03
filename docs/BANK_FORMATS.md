@@ -3,7 +3,7 @@
 Estado real del soporte por banco y formato, y **exactamente qué falta** para
 dar cada uno por validado.
 
-Última revisión: 2026-08-05.
+Última revisión: 2026-09-03.
 
 ---
 
@@ -20,6 +20,43 @@ fixtures sintéticos. Lo que no se puede garantizar sin un archivo real es que
 los **nombres de columna y la convención de signo** coincidan con lo que el
 banco emite hoy. El wizard lo advierte en pantalla y el historial de
 importaciones guarda la versión del parser usada.
+
+### Madurez, por evidencia
+
+Cuatro preguntas distintas, y la tabla las separa porque responderlas juntas es
+como se infla el estado de un banco:
+
+| Perfil | Parser | Fixture sintético | Test que lo parsea | Validado en host 3.7.0 | Cartola real |
+| --- | --- | --- | --- | --- | --- |
+| `generico.cuenta` | ✅ | n/a | ✅ | ✅ indirecto | n/a |
+| `generico.tarjeta` | ✅ | n/a | ✅ | ⬜ | n/a |
+| `banco-chile.cuenta-corriente` | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| `banco-chile.tarjeta` | ✅ | ✅ | ✅ | ⬜ | ⬜ |
+| `banco-estado.cuenta` | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| `banco-falabella.cmr` | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| `banco-falabella.cuenta` | ✅ | ✅ | ✅ | ⬜ | ⬜ |
+
+«Validado en host» significa que una cartola **sintética** de ese perfil se
+importó contra un Wealthfolio real y las actividades resultantes se verificaron
+una por una. No dice nada sobre si el mapeo coincide con lo que el banco emite:
+para eso está la última columna, y hoy está vacía entera.
+
+### Lo que sigue sin evidencia en CMR
+
+La pregunta que decide todo el cálculo de deuda comprometida: en una fila en
+cuotas, **¿una columna `Monto` sin etiquetar es el valor de la cuota o el total
+de la compra?** Las dos lecturas difieren por un factor igual al largo del plan.
+
+Mientras no haya un estado de cuenta real:
+
+- si el archivo trae una columna etiquetada (`Valor Cuota`, `Monto Cuota`), esa
+  manda y no hay ambigüedad;
+- si sólo trae `Monto` junto a un marcador de cuotas, la fila se marca
+  `ambiguous-installment-amount`, el plan baja a `suggested` y **no se deriva el
+  total de la compra**. Lo que sí se proyecta es lo que falta por pagar, porque
+  eso es el cargo repetido y no depende de cuál lectura sea la correcta.
+
+Falta también confirmar cómo CMR marca los avances en efectivo.
 
 ---
 

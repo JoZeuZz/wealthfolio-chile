@@ -11,7 +11,7 @@ soportadas.
 │                    Wealthfolio (host)                       │
 │   cuentas · actividades · patrimonio · inversiones          │
 └───────────────────────────┬─────────────────────────────────┘
-                            │  Addon SDK 3.6.2
+                            │  Addon SDK 3.7.0
                             │  (iframe sandbox, allow-scripts)
 ┌───────────────────────────▼─────────────────────────────────┐
 │                    Wealthfolio Chile                        │
@@ -215,7 +215,7 @@ plantilla fija. Un número plausible pero incorrecto es peor que ninguna frase.
 Proxmox
 └── LXC / VM con Docker
     └── docker compose (infra/compose.yml)
-        └── wealthfolio/wealthfolio:v3.6.2
+        └── wealthfolio/wealthfolio:3.7.0
             ├── volumen wealthfolio-data → /data (SQLite)
             └── bind mount              → /data/addons
                 └── wealthfolio-chile/

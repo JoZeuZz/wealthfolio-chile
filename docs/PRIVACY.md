@@ -76,6 +76,28 @@ movimiento tan bien como un ID.
 
 ---
 
+## Lo que se guarda del archivo
+
+Del archivo importado se conserva su **SHA-256** y un nombre **saneado**: se le
+quitan las secuencias de dígitos largas y cualquier cosa con forma de RUT, y
+queda lo que hace reconocible la fila del historial —la palabra del banco, el
+período, la extensión—. Los bancos chilenos bautizan sus descargas con el RUT o
+el número de cuenta (`CartolaCuentaRut_12345678-9_202602.csv`,
+`Movimientos_001234567890.xlsx`), y `ctx.api.storage` se replica entre los
+dispositivos emparejados del usuario, así que guardar el nombre tal cual era
+guardar el identificador.
+
+El resumen de una importación que falló guarda **cifras y un código**, nunca el
+texto del host. Un mensaje del host puede citar la petición de vuelta, y la
+petición es una fila de cartola. La redacción no alcanza para eso: quita lo que
+tiene forma —RUT, tarjeta, cuenta, token, correo— y el nombre de una persona no
+la tiene. El texto completo vive en memoria, en la pantalla que el usuario está
+mirando, y muere con ella.
+
+Por la misma razón, un problema de parseo dice **qué columna** falló y en qué
+línea, y no cita la celda: cuando una columna viene corrida, esa celda es una
+glosa entera.
+
 ## Cartolas reales y Git
 
 ```

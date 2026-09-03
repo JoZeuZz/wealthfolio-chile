@@ -2,7 +2,7 @@
 
 Qué funciona **hoy**, verificado, y qué no.
 
-Actualizado: 2026-08-07 · Wealthfolio v3.6.2 · addon v0.1.1
+Actualizado: 2026-09-03 · Wealthfolio v3.7.0 · addon 0.2.0-rc.1
 
 ---
 
@@ -14,11 +14,12 @@ Cuatro niveles distintos, que esta documentación no mezcla:
 | --- | --- |
 | **implementado** | El código existe y sus tests unitarios pasan |
 | **integrado** | Está enganchado al flujo real del addon, no sólo disponible |
-| **validado en host** | Se ejecutó contra un Wealthfolio v3.6.2 corriendo |
+| **validado en host** | Se ejecutó contra un Wealthfolio v3.7.0 corriendo |
 | **validado con banco real** | Se ejecutó contra una cartola real de ese banco |
 
-**El proyecto llegó a *validado en host* el 2026-08-07.** Falta el último nivel:
-ninguna cartola real ha tocado este código.
+**El proyecto está en *validado en host* contra 3.7.0.** Falta el último nivel:
+ninguna cartola real ha tocado este código, y por eso la versión es un
+release candidate y no un `0.2.0`.
 
 ---
 
@@ -27,167 +28,162 @@ ninguna cartola real ha tocado este código.
 ```
 typecheck   ✅  tsc --noEmit, strict + noUncheckedIndexedAccess
 lint        ✅  eslint, 0 errores, 0 warnings, sin `any`
-tests       ✅  318 pasando (17 archivos)
-build       ✅  dist/addon.js — 749 KB (195 KB gzip), un solo archivo
+tests       ✅  574 pasando (34 archivos), incluidos 26 de UI sobre DOM
+build       ✅  dist/addon.js — un solo archivo
 ```
 
-`./scripts/test.sh` corre las cuatro.
+`pnpm verify` corre typecheck, lint, tests y build.
 
 ---
 
-## Matriz de validación
+## Compatibilidad
 
-`Unit` = tests automatizados. `Host` = ejecutado contra un Wealthfolio real.
-`Restart` = sobrevive a reiniciar el contenedor.
-
-Sesión completa, con la evidencia de cada celda:
-[HOST_VALIDATION.md](HOST_VALIDATION.md).
-
-| Componente | Unit | Host | Restart | Estado |
-| --- | --- | --- | --- | --- |
-| Parser (core) | PASS | PASS | n/a | Sintético; sin cartolas reales |
-| Money | PASS | n/a | n/a | Integrado |
-| Fechas | PASS | PASS | n/a | Corregido el desfase de zona horaria del host |
-| Perfil bancario sintético | PASS | PASS | n/a | 3 bancos `pending-real-sample` |
-| Stack Docker | n/a | PASS | PASS | `wealthfolio/wealthfolio:3.6.2`, healthy |
-| Carga del addon | n/a | PASS | PASS | Detectado, habilitado, sidebar «Chile» |
-| Enable / disable | n/a | PASS | PASS | Requirió arreglar la propiedad de los archivos |
-| Rutas / navegación | n/a | PASS | PASS | Las tres, en ambos sentidos, con recarga |
-| API `accounts` | PASS | PASS | n/a | 3 cuentas, campos verificados uno a uno |
-| `activities.search` | PASS | PASS | n/a | Firma posicional, paginación 0-indexada |
-| Filtros de fecha | PASS | PASS | n/a | **Venían corridos un día**; corregido y reverificado |
-| `activities.saveMany` | PASS | PASS | n/a | **`metadata` debe ser string**; corregido |
-| Round-trip de metadata | PASS | PASS | PASS | 11 casos, campo por campo |
-| Metadata `dir` v2 | PASS | PASS | PASS | `UNKNOWN` en ambas direcciones |
-| Deduplicación exacta | PASS | PASS | PASS | 12/12 en la reimportación, también tras reiniciar |
-| Deduplicación probable | PASS | PASS | PASS | 11 exactos + 1 probable |
-| Importación end-to-end | PASS | PASS | n/a | 12 detectados, 12 creados, 0 fallidos |
-| Historial de importaciones | PASS | PASS | PASS | Sobrevive reinicio y restauración |
-| Storage del addon | PASS | PASS | PASS | Esquema particionado aceptado por el host real |
-| Panel | PASS | PASS | PASS | **Se caía por la moneda base del host**; corregido |
-| Semántica de caja | PASS | PASS | n/a | 1.000.000 / 150.000 / 850.000 |
-| Semántica de transferencia | PASS | PASS | n/a | Netea a 0. Hallazgo: ver ADR 0005 |
-| Semántica de tarjeta de crédito | PASS | PASS | n/a | Aparece como *liability*; la hipótesis se sostuvo |
-| Semántica de devolución | PASS | PASS | n/a | `CREDIT/REFUND` sube caja, no mueve contribución |
-| Backup | NOT TESTED | PASS | n/a | 282 K, contenedor detenido durante la copia |
-| Restore | NOT TESTED | PASS | PASS | 9 actividades y una cuenta recuperadas |
-| Privacidad en runtime | PASS | PASS | n/a | 0 filtraciones, 0 peticiones a otro origen |
-| **Cartolas reales** | n/a | **NOT TESTED** | n/a | Fase siguiente |
-
----
-
-## Errores encontrados en la validación en host (0.2)
-
-Seis, todos en la frontera con el host, y **ninguno detectable por los 301 tests
-que ya existían**. Cinco de los seis habrían impedido usar el addon.
-
-| # | Error | Consecuencia real |
-| --- | --- | --- |
-| 1 | `WF_VERSION=v3.6.2` no resuelve en Docker Hub | El stack no levantaba: `manifest unknown` |
-| 2 | `WF_ADDONS_DIR` apuntaba un nivel de más | El addon era invisible, **sin error en ninguna parte** |
-| 3 | Los archivos del addon quedaban con el propietario equivocado | Activarlo o desactivarlo devolvía `Permission denied` para siempre |
-| 4 | `metadata` se enviaba como objeto | **Toda importación fallaba** con 422 sin escribir una fila |
-| 5 | Los filtros de fecha del host vienen corridos un día | El índice de duplicados perdía el primer día de la ventana; el usuario terminaba con movimientos repetidos |
-| 6 | El panel sumaba CLP sobre un acumulador en USD | `MoneyError` no capturado: **panel en blanco, sin mensaje**, tras la primera importación |
-
-Los seis están corregidos, cubiertos por tests de regresión donde era posible, y
-**reverificados contra el host después del arreglo**.
-
-Lo que estos seis tienen en común vale más que los seis por separado: eran fallos
-de la frontera, y el doble de test estaba construido sobre las mismas
-suposiciones que el código que probaba. Un mock que le da la razón al código no
-prueba nada. Los tests nuevos parten de lo que el host hizo, no de lo que
-creíamos que hacía —incluido un doble que sabe reproducir el desfase de fechas.
-
----
-
-## Errores encontrados en la auditoría 0.1.1
-
-Cinco, en la misma frontera, todos corregidos y con test de regresión:
-
-| # | Error | Consecuencia real |
-| --- | --- | --- |
-| 1 | El signo se perdía al releer una actividad | **Ningún duplicado probable se detectaba jamás** |
-| 2 | `startDate`/`endDate` no existen en v3.6.2 | Los filtros de fecha se ignoraban; toda consulta escaneaba la cuenta completa |
-| 3 | El wizard quedaba en blanco si fallaba leer duplicados | Estado inconsistente |
-| 4 | Una importación parcial mostraba el toast verde | El usuario creía que se guardó todo |
-| 5 | Un fallo al guardar el historial anulaba la importación | Los movimientos ya estaban escritos |
-
----
-
-## Hallazgos de arquitectura
-
-**Un addon no puede marcar una transferencia como interna.** El host sólo trata
-un par `TRANSFER_OUT`/`TRANSFER_IN` como interno cuando los dos tramos están
-enlazados, y `link`/`transfer-pair` no están expuestos en el SDK. Nuestras
-métricas no dependen de eso —netean desde nuestra propia metadata—, pero la
-atribución de rendimiento de *Wealthfolio* queda `partial` en las cuentas con
-transferencias importadas. Ver
-[ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md).
-
-**El panel Chile y Wealthfolio cuentan cosas distintas, y ambos tienen razón.**
-El panel responde «cuánto entró y salió este mes», en pesos y por mes,
-excluyendo transferencias y pagos de tarjeta. Wealthfolio responde «cuánto tengo
-y cuánto aporté», acumulado a hoy y convertido a la moneda base. No cambiamos el
-modelo por esto; sí lo documentamos, en
-[HOST_VALIDATION.md](HOST_VALIDATION.md) § 11.
-
-**El *Spending Tracker* nativo mostró $0** con nuestras actividades cargadas.
-Entender por qué es trabajo aparte y no bloquea nada.
-
----
-
-## Funciona (verificado por tests y contra el host)
-
-### Motor (`core/`)
-
-| Área | Estado |
+| Dato | Valor |
 | --- | --- |
-| Aritmética exacta de dinero | ✅ 26 tests |
-| Fechas civiles sin zona horaria | ✅ 25 tests |
-| Lectura CSV / TXT / XLSX / XLS | ✅ 21 tests |
-| Detección de delimitador y codificación | ✅ incl. Windows-1252 |
-| Detección de cabecera y mapeo de columnas | ✅ |
-| Selección de parser por evidencia estructural | ✅ 23 tests, con regresión |
-| Modelo canónico | ✅ |
-| Huellas e idempotencia | ✅ 14 tests |
-| Traducción a actividades de Wealthfolio (ida y vuelta) | ✅ 35 tests, verificada contra el host |
-| Conciliación de transferencias internas | ✅ 11 tests |
-| Conciliación de pagos de tarjeta | ✅ |
-| Normalización de comercios | ✅ |
-| Motor de reglas + reglas predefinidas | ✅ |
-| Detección de cuotas y planes | ✅ 20 tests |
-| Métricas mensuales, categorías, comercios, recurrentes | ✅ 28 tests |
-| Insights deterministas | ✅ |
-| Redacción y enmascarado | ✅ 15 tests |
+| Host | Wealthfolio **3.7.0** |
+| `@wealthfolio/addon-sdk` | 3.7.0 |
+| `@wealthfolio/ui` | 3.7.0 |
+| `@wealthfolio/addon-dev-tools` | 3.7.0 |
+| `minWealthfolioVersion` | 3.7.0 |
+| Build target | chrome107, edge107, firefox104, safari16 |
 
-### Servicios (`services/`)
+El addon no usa ninguna API exclusiva de 3.7 (`ctx.assets`, `enable` async).
+`minWealthfolioVersion` está en 3.7.0 igualmente porque es el único host contra
+el que se ha verificado, y declarar soporte de una versión que nadie corrió es
+la clase de afirmación que este proyecto no hace. Ver
+[UPSTREAM.md](UPSTREAM.md).
 
-| Área | Estado |
-| --- | --- |
-| Índice de duplicados desde el host | ✅ 16 tests, verificado contra el host |
-| Escritura por `saveMany` y desglose del resultado | ✅ 17 tests |
-| Preparación del preview y bloqueo de importación | ✅ 11 tests |
-| Relectura de movimientos importados | ✅ 11 tests |
-| Storage particionado e historial a volumen | ✅ 17 tests |
+---
 
-### Flujo de importación
+## Validación contra host real (2026-09-03, Wealthfolio 3.7.0)
 
-De punta a punta contra un Wealthfolio real, con fixtures sintéticos:
+Diez escenarios, todos con datos sintéticos, ejecutados por la UI dentro del
+iframe del host y verificados además por la API HTTP.
 
-1. Archivo por drag & drop o selector, dentro del sandbox.
-2. Detección de banco con puntaje y razones visibles.
-3. Selección manual de banco si hace falta.
-4. Lectura de los movimientos ya registrados en la cuenta, acotada al período de
-   la cartola. **Si esa lectura falla, importar queda bloqueado.**
-5. Vista previa con totales, advertencias y por-fila.
-6. Marcado/desmarcado por fila, con totales recalculados.
-7. Escritura por `activities.saveMany({ creates })`.
-8. Resumen que distingue creados, fallidos, duplicados, ignorados y desmarcados.
-9. Registro en el historial de importaciones.
+| # | Escenario | Resultado |
+| --- | --- | --- |
+| 1 | Importar una cartola válida | 5 movimientos creados, tipos y metadata v3 correctos |
+| 2 | Reimportar el mismo archivo | 5/5 duplicados exactos, confirmar deshabilitado en 0 |
+| 3 | Editar una actividad en Wealthfolio y reimportar | sólo esa fila baja a «posible duplicado», con el motivo visible; las otras 4 siguen siendo duplicados exactos |
+| 4 | Cartola con una fila ilegible | importación bloqueada, **cero escrituras** (33 actividades antes y después) |
+| 5 | Cartola CLP en una cuenta USD | bloqueada, con la razón concreta (moneda) y la que no se pudo comprobar (número de cuenta) |
+| 6 | Devolución en tarjeta | `CREDIT/REFUND`, **no** pago de tarjeta |
+| 7 | Pago recibido en tarjeta | `TRANSFER_IN`, clasificado como pago de tarjeta |
+| 8 | Fechas ambiguas | orden resuelto para el archivo entero; ninguna advertencia por fila |
+| 9 | Dos monedas en el mismo mes | métricas separadas por moneda, nunca sumadas |
+| 10 | Conciliación | 2 pares confirmados, 2 sugeridos, 0 ambiguos, 3 pagos de tarjeta con su evidencia |
 
-**Reimportar el mismo archivo produce cero movimientos nuevos**, también después
-de reiniciar el contenedor. Verificado contra el host.
+El escenario 6 **falló la primera vez** y ese fallo es el hallazgo más
+importante de la sesión: Wealthfolio rechaza `UNKNOWN` en una cuenta de tarjeta
+de crédito, y como `saveMany` valida el lote completo antes de escribir, una
+sola fila sin clasificar costó los cinco movimientos. Ningún test unitario podía
+verlo, porque el doble de test no modelaba la regla. Corregido y reverificado;
+ver [UPSTREAM.md](UPSTREAM.md) § *Tipos de actividad permitidos por tipo de
+cuenta*.
+
+Los datos sintéticos de esta validación se eliminaron del host al terminar.
+
+---
+
+## Madurez por institución
+
+| Institución / perfil | Parser | Fixture sintético | Test que lo parsea | Validado en host | Cartola real |
+| --- | --- | --- | --- | --- | --- |
+| Genérico — cuenta | ✅ | n/a | ✅ | ✅ (indirecto) | n/a |
+| Genérico — tarjeta | ✅ | n/a | ✅ | ⬜ | n/a |
+| Banco de Chile — cuenta corriente | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| Banco de Chile — tarjeta | ✅ | ✅ | ✅ | ⬜ | ⬜ |
+| BancoEstado — CuentaRUT | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| Falabella / CMR — tarjeta | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| Falabella — cuenta corriente | ✅ | ✅ | ✅ | ⬜ | ⬜ |
+
+`samples/private/` está vacío. **Ninguna institución tiene validación con
+cartola real**, y los cinco perfiles bancarios siguen `pending-real-sample`: el
+wizard lo advierte y el historial lo registra. Ver
+[BANK_FORMATS.md](BANK_FORMATS.md).
+
+---
+
+## Qué decide el import antes de escribir
+
+Tres gates independientes, y los tres se acumulan en vez de reportarse de a uno:
+
+1. **La cartola se leyó entera.** Una fila que debía ser un movimiento y no se
+   pudo leer bloquea la importación. Importar el subconjunto legible deja un
+   hueco que después parece completo. `rowStats` cuenta filas de datos,
+   mapeadas, omitidas y fallidas por separado, y el resumen las reporta tal
+   cual.
+2. **Se pudo comprobar si hay duplicados.** Si la lectura de los movimientos ya
+   registrados falla o queda truncada, importar queda deshabilitado: «no se pudo
+   comprobar» y «no hay duplicados» son respuestas distintas.
+3. **La cartola corresponde a la cuenta.** Moneda distinta, número de cuenta
+   distinto o una cuenta de instrumentos bloquean. Una cuenta sin número
+   registrado no bloquea: se informa que no se pudo verificar.
+
+El recorrido de saldos es evidencia, no dogma. Un desajuste aislado es error
+sólo en un perfil que declara su columna de saldo `authoritative` —hoy ninguno
+de los bancarios, porque nadie ha visto una exportación real—. Un desajuste
+**sistemático** (≥50 % de los pasos, con un mínimo de 4) es error en cualquier
+perfil: a esa proporción no es una rareza del banco, es que el archivo se está
+leyendo mal.
+
+---
+
+## Wealthfolio es la fuente de verdad
+
+El addon escribe metadata en cada actividad que crea. Desde el esquema 3 esa
+metadata incluye `proj`, un hash de la actividad tal como se escribió, así que
+una relectura puede distinguir «esto sigue siendo lo que creamos» de «el usuario
+lo cambió y nuestra huella describe algo que ya no está».
+
+- Un duplicado exacto contra una actividad editada baja a **probable**, con el
+  motivo escrito en la fila. Saltarla en silencio perdería el movimiento
+  original; importarla pondría una copia al lado de la editada.
+- Al releer, el **tipo de actividad del host manda**. La clasificación cacheada
+  sobrevive sólo mientras siga correspondiendo al tipo que el host realmente
+  tiene, lo que conserva las distinciones que nuestro modelo hace y el tipo del
+  host no puede expresar, y descarta sólo el desacuerdo real.
+- Las filas escritas por 0.1.x no traen `proj`; para ellas la pregunta cae en
+  `isUserModified`, que es el propio registro del host.
+
+---
+
+## Semántica del panel
+
+Flujo de caja y gasto son preguntas distintas y se reportan por separado:
+
+```
+compra 100.000, devolución 20.000
+
+caja    → entró 20.000, salió 100.000, neto −80.000
+gasto   → bruto 100.000, devoluciones 20.000, neto 80.000
+```
+
+`income` significa dinero externo que entra; una devolución **no** es ingreso.
+La tasa de ahorro es `(income − netSpending) / income`. Las categorías reportan
+bruto, devoluciones y neto, y una devolución sin categoría no se atribuye a
+ninguna.
+
+Con más de una moneda en el mes el panel muestra un bloque por moneda y dice por
+qué no las suma: `ExchangeRatesAPI` no publica tipos históricos, y convertir un
+movimiento de hace ocho meses al tipo de hoy sería un número inventado más
+difícil de detectar que el error que reemplaza.
+
+---
+
+## Conciliación
+
+El motor empareja transferencias entre cuentas propias y pagos de tarjeta. Un
+par se acepta sólo cuando la elección es **mutua** y las rondas se repiten hasta
+que una no resuelve nada nuevo, porque las preferencias cambian a medida que se
+consumen tramos. Lo que queda es un nudo genuino y se reporta una vez, con todos
+sus tramos y sin proponer ninguno.
+
+Hay una pantalla de revisión (`/addons/wealthfolio-chile/conciliacion`) que
+distingue confirmados, sugeridos y sin decidir, con la evidencia de cada uno.
+**Es de sólo lectura**: Wealthfolio no expone todavía a los addons una forma de
+enlazar los dos tramos, y construir un ledger de pares propio es justo lo que
+[ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md) descarta.
 
 ---
 
@@ -195,47 +191,23 @@ de reiniciar el contenedor. Verificado contra el host.
 
 | Qué | Por qué |
 | --- | --- |
-| **Perfiles bancarios validados** | No hay cartolas reales. Los tres bancos tienen adaptador completo, marcado `pending-real-sample`. Ver [BANK_FORMATS.md](BANK_FORMATS.md) |
-| **Enlazado de transferencias en el host** | El SDK no lo expone. Ver [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md) |
-| **Conciliación multi-cuenta integrada** | El motor y la fachada están listos y testeados; falta la pantalla de revisión |
-| **UI de reglas** | Las reglas predefinidas se aplican; no hay editor |
-| **Editor de categorías** | Mismo caso |
-| **Servicio importador** | Decisión D11: no aporta hasta que los perfiles estén validados |
-| **IA / MCP propio** | Decisiones D10 y D12 |
-| **Fintoc** | Sin credenciales; sólo existe la abstracción conceptual |
-| **Licencia** | Decisión pendiente del propietario. Todo declara `UNLICENSED`. Ver D13 |
-
----
-
-## MVP: 15 de 15
-
-| # | Criterio | Estado |
-| --- | --- | --- |
-| 1 | Wealthfolio se levanta localmente | ✅ ejecutado, healthy |
-| 2 | El addon se carga | ✅ detectado, habilitado, sidebar |
-| 3 | Se puede seleccionar un archivo | ✅ |
-| 4 | Se detecta o elige el banco | ✅ 100 % en el fixture |
-| 5 | Se transforma al modelo canónico | ✅ |
-| 6 | Existe vista previa | ✅ |
-| 7 | Se calculan ingresos y egresos | ✅ verificado contra el host |
-| 8 | Se detectan duplicados | ✅ exactos y probables |
-| 9 | El usuario confirma | ✅ |
-| 10 | Llega por APIs soportadas | ✅ `saveMany({ creates })` |
-| 11 | Reimportar no duplica | ✅ también tras reiniciar |
-| 12 | Hay historial | ✅ sobrevive restart y restore |
-| 13 | Hay tests | ✅ 318 |
-| 14 | Hay documentación | ✅ |
-| 15 | No se filtran datos en logs | ✅ verificado sobre 4.416 líneas reales |
+| **Perfiles bancarios validados** | No hay cartolas reales. Los cinco perfiles bancarios siguen `pending-real-sample` |
+| **Aplicar una conciliación** | El SDK 3.7.0 no expone `link`/`transfer-pair`. Ver ADR 0005 |
+| **Editor de reglas y de categorías** | El motor y las 24 reglas predefinidas se aplican; no hay UI |
+| **Pantalla de ajustes** | `verboseLogging`, `transferWindowDays` y las reglas desactivadas se leen de `storage`; no hay dónde editarlas |
+| **Conversión de moneda** | El SDK no publica tipos de cambio históricos |
+| **Servicio importador, IA/MCP propio, Fintoc** | Decisiones D10-D12; ver [DECISIONS.md](DECISIONS.md) |
+| **Licencia** | Decisión pendiente del propietario. Todo declara `UNLICENSED` |
 
 ---
 
 ## Siguiente paso recomendado
 
-Calibrar BancoEstado, Banco de Chile y Falabella/CMR con cartolas reales
-privadas, siguiendo [BANK_FORMATS.md](BANK_FORMATS.md) § *Cómo calibrar un
-perfil*. Los tres perfiles siguen `pending-real-sample`, y hasta que dejen de
-estarlo ninguno puede marcarse como verificado.
+Calibrar los perfiles con cartolas reales privadas, siguiendo
+[BANK_FORMATS.md](BANK_FORMATS.md) § *Cómo calibrar un perfil*. Es lo único que
+separa este release candidate de un `0.2.0`.
 
-Con esas cartolas a la vista se resuelve también **D14** —si un movimiento
-`unknown` debe venir marcado o no—, que se pospuso por no tener con qué
-decidirla.
+Para CMR sigue abierta la pregunta que decide todo el cálculo de deuda
+comprometida: si una columna `Monto` sin etiquetar es el valor de la cuota o el
+total de la compra. Mientras no haya evidencia, la fila se marca
+`ambiguous-installment-amount` y el plan no deriva el total de la compra.

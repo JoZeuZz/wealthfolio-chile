@@ -233,7 +233,7 @@ Se escribe con `activities.saveMany({ creates })` en lotes de 100. Un lote que
 falla se reporta, **no se reintenta**: reintentar una escritura parcialmente
 aplicada es justo como se crean duplicados.
 
-En v3.6.2 `bulk_mutate_activities` valida la petición completa antes de escribir
+En v3.6.2 y en v3.7.0 `bulk_mutate_activities` valida la petición completa antes de escribir
 y, si algo falla, devuelve `created` vacío sin persistir nada. Por eso **cada
 entrada de `result.errors` corresponde siempre a filas que no se crearon**, y una
 fila mala cuesta su lote entero — que es el costo que acota el tamaño 100.
