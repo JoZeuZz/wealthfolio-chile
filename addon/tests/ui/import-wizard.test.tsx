@@ -211,6 +211,34 @@ describe('duplicados', () => {
     expect(harness.host.saveManyCalls[0]?.request.creates).toHaveLength(1);
   });
 
+  it('explica en texto visible por qué es sólo un posible duplicado', async () => {
+    // La razón vivía únicamente en un atributo `title`: invisible en táctil,
+    // invisible con teclado, y es la única frase que le dice a alguien que un
+    // movimiento puede estar faltando de su contabilidad.
+    const { activity } = alreadyImported();
+    const harness = await openWizardWith(CARTOLA_BUENA, {
+      accounts: [CUENTA],
+      activities: [{ ...activity, amount: '99999' }],
+    });
+    await goToPreview(harness);
+
+    const fila = screen.getByText('COMPRA SUPERMERCADO').closest('tr');
+    expect(within(fila as HTMLElement).getByText(/fue editada después en Wealthfolio/)).toBeVisible();
+  });
+
+  it('resume el motivo también arriba, donde se decide continuar', async () => {
+    const { activity } = alreadyImported();
+    const harness = await openWizardWith(CARTOLA_BUENA, {
+      accounts: [CUENTA],
+      activities: [{ ...activity, amount: '99999' }],
+    });
+    await goToPreview(harness);
+
+    expect(
+      screen.getByText(/1 movimiento\(s\) fueron editados en Wealthfolio/),
+    ).toBeInTheDocument();
+  });
+
   it('degrada a posible duplicado cuando la actividad fue editada en Wealthfolio', async () => {
     // La huella describe lo que se importó; si el usuario cambió el monto, ya
     // no describe lo que hay. Saltarlo en silencio perdería el movimiento

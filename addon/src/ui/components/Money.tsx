@@ -27,7 +27,18 @@ export function Amount({
   );
 }
 
-/** A labelled figure for the dashboard's summary row. */
+/**
+ * A labelled figure for a summary row.
+ *
+ * A description-list pair rather than two anonymous `div`s, so the label and
+ * its number reach the accessibility tree as a pair. They previously did not
+ * reach it at all: the whole preview summary — income, expenses, how many
+ * movements were about to be written — was invisible to a screen reader and to
+ * any tool that reads the page semantically.
+ *
+ * The caller supplies the surrounding `<dl>`; several of these in a grid are
+ * one list, not one list each.
+ */
 export function Stat({
   label,
   value,
@@ -43,11 +54,11 @@ export function Stat({
     tone === 'positive' ? 'text-success' : tone === 'negative' ? 'text-destructive' : '';
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-muted-foreground text-xs uppercase tracking-wide">{label}</span>
-      <span className={`text-2xl font-semibold tabular-nums ${toneClass}`.trim()}>
+      <dt className="text-muted-foreground text-xs uppercase tracking-wide">{label}</dt>
+      <dd className={`text-2xl font-semibold tabular-nums ${toneClass}`.trim()}>
         {typeof value === 'string' ? value : formatCLP(value)}
-      </span>
-      {hint ? <span className="text-muted-foreground text-xs">{hint}</span> : null}
+        {hint ? <span className="text-muted-foreground block text-xs font-normal">{hint}</span> : null}
+      </dd>
     </div>
   );
 }

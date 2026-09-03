@@ -7,6 +7,7 @@ import type { RowStats, StatementIssue } from '../model/statement';
 import type { NormalizedTransaction, TransactionWarning } from '../model/transaction';
 import { normalizeDescription } from '../text';
 import { cell, ColumnRole, type ColumnMap } from './columns';
+import { resolveDateOrder, type DateOrderEvidence } from './date-order';
 import { COMMON_IGNORE_PATTERNS, type StatementProfile } from './profile';
 import { isBlankRow, type Sheet } from './tabular';
 
@@ -42,8 +43,15 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
   const currency = (input.currency ?? profile.defaultCurrency).toUpperCase();
   const ignorePatterns = [...COMMON_IGNORE_PATTERNS, ...(profile.ignoreRowPatterns ?? [])];
 
+  // Settled once for the whole file, before any row is mapped: the field order
+  // of a numeric date is a property of the export, not of the row being read.
+  const dateOrder = resolveDateOrder(
+    sheet.rows.slice(firstDataRow).map((row) => cell(row as string[], map, ColumnRole.date)),
+    profile.dateOrder,
+  );
+
   const transactions: NormalizedTransaction[] = [];
-  const issues: StatementIssue[] = [];
+  const issues: StatementIssue[] = [...describeDateOrder(dateOrder, profile)];
   let dataRows = 0;
   let skipped = 0;
   let failed = 0;
@@ -65,7 +73,16 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
     }
 
     try {
-      const transaction = mapRow({ row, line, map, profile, currency, fileHash, accountRef });
+      const transaction = mapRow({
+        row,
+        line,
+        map,
+        profile,
+        currency,
+        fileHash,
+        accountRef,
+        dateOrder: dateOrder.order,
+      });
       if (transaction === null) {
         skipped += 1;
         continue;
@@ -97,6 +114,8 @@ interface MapRowInput {
   currency: string;
   fileHash: string;
   accountRef?: string;
+  /** Settled for the whole file by {@link resolveDateOrder}. */
+  dateOrder: StatementProfile['dateOrder'];
 }
 
 /**
@@ -104,25 +123,21 @@ interface MapRowInput {
  * movement (a zero-amount separator line, for instance).
  */
 function mapRow(input: MapRowInput): NormalizedTransaction | null {
-  const { row, line, map, profile, currency, fileHash, accountRef } = input;
+  const { row, line, map, profile, currency, fileHash, accountRef, dateOrder } = input;
   const warnings: TransactionWarning[] = [];
 
   const rawDate = cell(row, map, ColumnRole.date);
   if (rawDate === '') return null;
 
-  const parsedDate = parseStatementDate(rawDate, { order: profile.dateOrder });
-  if (parsedDate.ambiguous) {
-    warnings.push({
-      code: 'ambiguous-date-format',
-      message: `La fecha "${rawDate}" es ambigua; se interpretó como ${parsedDate.date}.`,
-    });
-  }
+  // No per-row ambiguity warning: the order was settled for the file, and a
+  // flag that fires on every row with a day of 12 or less stops being read.
+  const parsedDate = parseStatementDate(rawDate, { order: dateOrder });
 
   let postedDate: IsoDate | undefined;
   const rawPosted = cell(row, map, ColumnRole.postedDate);
   if (rawPosted !== '') {
     try {
-      postedDate = parseStatementDate(rawPosted, { order: profile.dateOrder }).date;
+      postedDate = parseStatementDate(rawPosted, { order: dateOrder }).date;
     } catch {
       warnings.push({
         code: 'unparsed-column',
@@ -207,6 +222,63 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     warnings,
     rawMetadata: buildRawMetadata(row, map),
   };
+}
+
+/**
+ * What, if anything, to say about how the dates were read.
+ *
+ * One statement-level issue instead of one per row. `date-order-differs` is the
+ * one worth reading twice: the file proved an order its profile did not expect,
+ * which means either the bank changed its export or the wrong profile is
+ * selected — and both produce movements dated wrong in a way nothing else
+ * catches.
+ */
+function describeDateOrder(
+  evidence: DateOrderEvidence,
+  profile: StatementProfile,
+): StatementIssue[] {
+  if (evidence.source === 'file' && evidence.order !== profile.dateOrder) {
+    return [
+      {
+        level: 'warning',
+        code: 'date-order-differs',
+        message: `El archivo demuestra que sus fechas vienen en formato ${describeOrder(evidence.order)}, aunque el perfil de ${profile.institutionLabel} espera ${describeOrder(profile.dateOrder)}. Se leyeron como dice el archivo; revisa que el banco elegido sea el correcto.`,
+      },
+    ];
+  }
+
+  if (evidence.source === 'conflict') {
+    return [
+      {
+        level: 'warning',
+        code: 'date-order-conflict',
+        message: `Hay fechas que sólo se entienden como ${describeOrder('DMY')} y otras que sólo se entienden como ${describeOrder('MDY')}. Se usó ${describeOrder(profile.dateOrder)}; las filas que no se puedan leer así aparecerán como error.`,
+      },
+    ];
+  }
+
+  if (evidence.source === 'profile' && evidence.ambiguousRows > 0) {
+    return [
+      {
+        level: 'warning',
+        code: 'ambiguous-date-order',
+        message: `${evidence.ambiguousRows} fecha(s) del archivo admiten dos lecturas y nada en él prueba cuál es. Se interpretaron como ${describeOrder(profile.dateOrder)}, que es lo que declara el perfil de ${profile.institutionLabel}.`,
+      },
+    ];
+  }
+
+  return [];
+}
+
+function describeOrder(order: StatementProfile['dateOrder']): string {
+  switch (order) {
+    case 'MDY':
+      return 'MM/DD/AAAA';
+    case 'YMD':
+      return 'AAAA/MM/DD';
+    default:
+      return 'DD/MM/AAAA';
+  }
 }
 
 interface ReadAmountInput {

@@ -2,7 +2,7 @@ import { computeFileHash, computeWeakFingerprint, withFingerprints } from './ded
 import { dedupeBatch, type DedupeBatchResult, type DuplicateIndex } from './dedupe/classify';
 import { buildInstallmentPlans } from './installments/plans';
 import { abs, add, zero, type Money } from './money';
-import { Direction, isIncome, isSpending, TransactionKind } from './model/kinds';
+import { Confidence, Direction, isIncome, isSpending, TransactionKind } from './model/kinds';
 import type { InstallmentPlan } from './model/installment';
 import type { DetectionResult, ParsedStatement, ValidationResult } from './model/statement';
 import type { EnrichedTransaction } from './model/transaction';
@@ -57,6 +57,15 @@ export interface PreviewTotals {
   toImport: number;
   exactDuplicates: number;
   probableDuplicates: number;
+  /**
+   * Probable duplicates that are only probable because the activity was edited
+   * in Wealthfolio after this addon wrote it.
+   *
+   * Counted apart because it is the one skip reason the user caused and can
+   * resolve, and the only one where the honest answer might be "import it
+   * again".
+   */
+  hostModifiedDuplicates: number;
   ignored: number;
   income: Money;
   expenses: Money;
@@ -182,7 +191,11 @@ export function computeTotals(rows: readonly PreviewRow[], currency: string): Pr
     const magnitude = abs(transaction.amount);
 
     if (transaction.kind === TransactionKind.unknown) unknownKind += 1;
-    if (transaction.warnings.length > 0 || transaction.kindConfidence !== 'confirmed') {
+    // `suggested` is the ordinary state of a purchase classified from the
+    // product: counting it here made "requiere revisión" equal to "every row",
+    // which is the same as not marking anything. Only a row nothing could
+    // classify, or one carrying a warning, is worth a person's attention.
+    if (transaction.warnings.length > 0 || transaction.kindConfidence === Confidence.unknown) {
       needsReview += 1;
     }
 
@@ -213,6 +226,8 @@ export function computeTotals(rows: readonly PreviewRow[], currency: string): Pr
     toImport: selected.length,
     exactDuplicates: rows.filter((row) => row.duplicate.verdict === 'exact').length,
     probableDuplicates: rows.filter((row) => row.duplicate.verdict === 'probable').length,
+    hostModifiedDuplicates: rows.filter((row) => row.duplicate.reason_code === 'host-modified')
+      .length,
     ignored: rows.filter((row) => row.ignoredByRule).length,
     income,
     expenses,

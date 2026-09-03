@@ -22,8 +22,25 @@ import { computeFingerprint, computeWeakFingerprint, type FingerprintScope } fro
 
 export type DuplicateVerdict = 'exact' | 'probable' | 'none';
 
+/**
+ * Why the verdict came out the way it did.
+ *
+ * A code rather than only the prose, because callers need to *count* these and
+ * to style them: "one row is a possible duplicate because you edited it in
+ * Wealthfolio" and "one row looks like something already there" are different
+ * things to tell someone, and matching on the message text to tell them apart
+ * is how copy edits silently change behaviour.
+ */
+export type DuplicateReason =
+  | 'exact-fingerprint'
+  | 'repeated-within-file'
+  | 'host-modified'
+  | 'similar'
+  | 'new';
+
 export interface DuplicateFinding {
   verdict: DuplicateVerdict;
+  reason_code: DuplicateReason;
   /** Fingerprint of the movement already present, when known. */
   existingFingerprint?: string;
   /** Wealthfolio activity id of the existing movement, when known. */
@@ -111,6 +128,7 @@ export function classifyDuplicate(
       // Neither is ours to decide.
       return {
         verdict: 'probable',
+        reason_code: 'host-modified',
         existingFingerprint: fingerprint,
         existingActivityId: stored.activityId,
         reason:
@@ -119,6 +137,7 @@ export function classifyDuplicate(
     }
     return {
       verdict: 'exact',
+      reason_code: 'exact-fingerprint',
       existingFingerprint: fingerprint,
       existingActivityId: stored.activityId,
       reason: 'Ya fue importado antes (huella idéntica).',
@@ -129,6 +148,7 @@ export function classifyDuplicate(
   if (inBatch) {
     return {
       verdict: 'exact',
+      reason_code: 'repeated-within-file',
       existingFingerprint: fingerprint,
       reason: 'El archivo contiene esta misma fila dos veces.',
     };
@@ -149,13 +169,14 @@ export function classifyDuplicate(
   if (best && best.score >= similarityThreshold) {
     return {
       verdict: 'probable',
+      reason_code: 'similar',
       existingActivityId: best.movement.activityId,
       score: best.score,
       reason: `Coincide en fecha y monto con un movimiento existente (descripción ${Math.round(best.score * 100)}% similar).`,
     };
   }
 
-  return { verdict: 'none', reason: 'Movimiento nuevo.' };
+  return { verdict: 'none', reason_code: 'new', reason: 'Movimiento nuevo.' };
 }
 
 export interface DedupeResult {

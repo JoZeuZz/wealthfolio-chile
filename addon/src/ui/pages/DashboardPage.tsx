@@ -184,7 +184,7 @@ export function DashboardPage() {
 
       {view ? (
         <>
-          <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="Ingresos del mes" value={view.summary.income} tone="positive" />
             <Stat label="Egresos del mes" value={view.summary.expenses} tone="negative" />
             <Stat
@@ -202,7 +202,7 @@ export function DashboardPage() {
               value={view.outlook.committedTotal}
               hint={`${view.outlook.openPlans.length} compra(s) activa(s)`}
             />
-          </section>
+          </dl>
 
           <section className="grid gap-4 lg:grid-cols-2">
             <Card>

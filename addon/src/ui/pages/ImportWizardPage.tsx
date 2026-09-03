@@ -655,7 +655,7 @@ function PreviewStep({
           <CardTitle>3. Resumen de lo que se va a importar</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="Ingresos" value={totals.income} tone="positive" />
             <Stat label="Egresos" value={totals.expenses} tone="negative" />
             <Stat
@@ -668,9 +668,9 @@ function PreviewStep({
               value={`${totals.toImport} de ${totals.rows}`}
               hint={`${totals.exactDuplicates} duplicados · ${totals.probableDuplicates} probables · ${totals.ignored} ignorados`}
             />
-          </div>
+          </dl>
 
-          <div className="grid gap-4 sm:grid-cols-3">
+          <dl className="grid gap-4 sm:grid-cols-3">
             <Stat
               label="Transferencias propias"
               value={totals.internalTransfers}
@@ -686,7 +686,20 @@ function PreviewStep({
               value={String(totals.needsReview)}
               hint={`${totals.unknownKind} sin clasificar`}
             />
-          </div>
+          </dl>
+
+          {totals.hostModifiedDuplicates > 0 ? (
+            <Alert>
+              <AlertTitle>
+                {totals.hostModifiedDuplicates} movimiento(s) fueron editados en Wealthfolio
+              </AlertTitle>
+              <AlertDescription>
+                Se importaron antes y después alguien cambió la actividad, así que ya no coinciden
+                con la fila del archivo. No se marcan para importar: decide fila por fila si falta
+                el movimiento original o si la versión editada lo reemplaza.
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           {installmentPlans.length > 0 ? (
             <Alert>
@@ -809,22 +822,34 @@ function PreviewRowView({
       </td>
       <td className="text-muted-foreground p-2 text-xs">{categoryPath(transaction.category)}</td>
       <td className="p-2 text-xs">
+        {/*
+          Reasons are rendered, not hidden in a `title`. A tooltip is invisible
+          on touch and to a keyboard, and "this movement may be missing from
+          your ledger" is not a footnote.
+        */}
         {!dedupeAvailable ? (
-          <Badge variant="outline" title="No se pudieron leer los movimientos ya registrados">
-            Sin verificar
-          </Badge>
+          <div className="flex flex-col gap-1">
+            <Badge variant="outline">Sin verificar</Badge>
+            <span className="text-muted-foreground">
+              No se pudieron leer los movimientos ya registrados.
+            </span>
+          </div>
         ) : row.duplicate.verdict === 'exact' ? (
           <Badge variant="outline">Duplicado</Badge>
         ) : row.duplicate.verdict === 'probable' ? (
-          <Badge variant="outline" title={row.duplicate.reason}>
-            Posible duplicado
-          </Badge>
+          <div className="flex flex-col gap-1">
+            <Badge variant="outline">Posible duplicado</Badge>
+            <span className="text-muted-foreground max-w-xs">{row.duplicate.reason}</span>
+          </div>
         ) : row.ignoredByRule ? (
           <Badge variant="outline">Ignorado por regla</Badge>
         ) : transaction.warnings.length > 0 ? (
-          <Badge variant="outline" title={transaction.warnings.map((w) => w.message).join(' · ')}>
-            Revisar
-          </Badge>
+          <div className="flex flex-col gap-1">
+            <Badge variant="outline">Revisar</Badge>
+            <span className="text-muted-foreground max-w-xs">
+              {transaction.warnings.map((w) => w.message).join(' · ')}
+            </span>
+          </div>
         ) : (
           <span className="text-muted-foreground">Nuevo</span>
         )}
