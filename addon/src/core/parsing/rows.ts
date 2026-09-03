@@ -168,6 +168,19 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     });
   }
 
+  // The row says it is part of a plan, and the amount came from a column the
+  // statement did not label. `MONTO` next to `2 de 6` is either this month's
+  // instalment or the whole purchase repeated, and the two readings differ by a
+  // factor of the plan length. Nobody has seen a real CMR export, so the
+  // uncertainty travels with the row instead of being resolved by assumption.
+  if (installment !== undefined && map.installmentAmount === undefined) {
+    warnings.push({
+      code: 'ambiguous-installment-amount',
+      message:
+        'La fila es una cuota y el estado de cuenta no dice si el monto es el de la cuota o el de la compra completa. El cargo del mes se toma tal cual; el total de la compra no se calcula.',
+    });
+  }
+
   const { kind, confidence, ambiguousCardCredit } = defaultKindForRow({
     product: profile.product,
     direction,
@@ -299,6 +312,16 @@ interface ReadAmountInput {
 function readAmount(input: ReadAmountInput): Money | null {
   const { row, map, profile, currency, warnings } = input;
   const format = profile.numberFormat;
+
+  // A labelled instalment column settles what is charged this period, so it
+  // wins over any general amount column on the same row.
+  if (map.installmentAmount !== undefined) {
+    const text = cell(row, map, ColumnRole.installmentAmount);
+    if (text !== '') {
+      const parsed = parseAmount(text, { currency, format, allowDebitCreditSuffix: true });
+      return profile.amountSign === 'debit-positive' ? negate(parsed.money) : parsed.money;
+    }
+  }
 
   const debitText = cell(row, map, ColumnRole.debit);
   const creditText = cell(row, map, ColumnRole.credit);

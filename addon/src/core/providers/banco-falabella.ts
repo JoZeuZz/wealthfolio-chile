@@ -29,7 +29,13 @@ export const FALABELLA_CARD: StatementProfile = {
   columnSynonyms: {
     [ColumnRole.date]: ['Fecha', 'Fecha Compra', 'Fecha Transaccion'],
     [ColumnRole.description]: ['Descripcion', 'Comercio', 'Detalle Movimiento'],
-    [ColumnRole.amount]: ['Monto', 'Monto Total', 'Valor Cuota', 'Monto Operacion'],
+    // `Monto Total` and `Valor Cuota` used to be listed here as synonyms of the
+    // same role, so on a statement carrying both, whichever column came first
+    // became the charge. They are different numbers — the whole purchase and
+    // this month's instalment — and now have roles of their own.
+    [ColumnRole.amount]: ['Monto', 'Monto Operacion'],
+    [ColumnRole.installmentAmount]: ['Valor Cuota', 'Monto Cuota'],
+    [ColumnRole.purchaseAmount]: ['Monto Total', 'Monto Compra'],
     [ColumnRole.installment]: ['Cuotas', 'Cuota', 'N Cuotas'],
     [ColumnRole.card]: ['Tarjeta', 'N Tarjeta'],
     [ColumnRole.category]: ['Rubro', 'Categoria'],
@@ -40,7 +46,7 @@ export const FALABELLA_CARD: StatementProfile = {
   balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes:
-    'Falta un estado de cuenta real de CMR. Hay que confirmar si "Monto" es el valor de la cuota o el total de la compra — de eso depende todo el cálculo de deuda comprometida — y cómo se marcan los pagos y las anulaciones.',
+    'Falta un estado de cuenta real de CMR. Sigue sin confirmarse si una columna "Monto" sin etiquetar es el valor de la cuota o el total de la compra; mientras tanto la fila se marca con `ambiguous-installment-amount` y el plan no deriva el total de la compra. Falta también confirmar cómo se marcan los pagos, las anulaciones y los avances en efectivo.',
 };
 
 export const FALABELLA_ACCOUNT: StatementProfile = {

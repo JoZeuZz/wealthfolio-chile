@@ -111,9 +111,18 @@ function buildPlan(id: string, charges: NormalizedTransaction[]): InstallmentPla
   const firstObserved = Math.min(...observed);
   const startDate = addMonths(first.date, -(firstObserved - 1));
 
-  const confidence = sorted.some((t) => t.installment?.confidence === Confidence.confirmed)
-    ? Confidence.confirmed
-    : Confidence.suggested;
+  // A charge whose amount column the statement never labelled could be this
+  // month's instalment or the whole purchase. Multiplying it by the plan length
+  // to get the purchase back is only right under the first reading, and wrong
+  // by a factor of the plan length under the second.
+  const amountIsUncertain = sorted.some((t) =>
+    t.warnings.some((warning) => warning.code === 'ambiguous-installment-amount'),
+  );
+
+  const confidence =
+    !amountIsUncertain && sorted.some((t) => t.installment?.confidence === Confidence.confirmed)
+      ? Confidence.confirmed
+      : Confidence.suggested;
 
   const merchant = first.merchant ?? normalizeMerchant(first.description).merchant ?? 'Sin comercio';
 
@@ -125,7 +134,10 @@ function buildPlan(id: string, charges: NormalizedTransaction[]): InstallmentPla
     ...(first.sourceAccountRef !== undefined
       ? { sourceAccountRef: first.sourceAccountRef }
       : {}),
-    originalAmount: multiplyInt(installmentAmount, total),
+    // Omitted rather than guessed when the charge amount's meaning is unknown.
+    // `remainingAmount` below stays: what is left to pay is the charge repeated,
+    // whatever the charge turns out to represent.
+    ...(amountIsUncertain ? {} : { originalAmount: multiplyInt(installmentAmount, total) }),
     installmentAmount,
     totalInstallments: total,
     currentInstallment: current,

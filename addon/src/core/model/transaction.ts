@@ -120,6 +120,7 @@ export type TransactionWarningCode =
   | 'ambiguous-card-credit'
   | 'ambiguous-date-format'
   | 'ambiguous-installment'
+  | 'ambiguous-installment-amount'
   | 'missing-balance'
   | 'unparsed-column'
   | 'zero-amount'

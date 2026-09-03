@@ -17,6 +17,18 @@ export const ColumnRole = {
   description: 'description',
   /** One signed column carrying both directions. */
   amount: 'amount',
+  /**
+   * The amount charged *this period* for an installment purchase.
+   *
+   * Separate from `amount` because on a card statement `MONTO TOTAL` and
+   * `VALOR CUOTA` are different numbers and both used to map to the same role,
+   * so whichever column came first won. Charging the whole purchase every month
+   * overstates the month by a factor of the plan length, and deriving the
+   * purchase back out of it overstates that by the same factor again.
+   */
+  installmentAmount: 'installmentAmount',
+  /** The full purchase an installment charge belongs to. */
+  purchaseAmount: 'purchaseAmount',
   /** Outflow-only column (cargo / débito / giro). */
   debit: 'debit',
   /** Inflow-only column (abono / crédito / depósito). */
@@ -87,6 +99,20 @@ const SYNONYMS: Record<ColumnRole, string[]> = {
     'MONTO $',
     'AMOUNT',
   ],
+  installmentAmount: [
+    'VALOR CUOTA',
+    'MONTO CUOTA',
+    'VALOR DE LA CUOTA',
+    'MONTO DE LA CUOTA',
+    'CUOTA MENSUAL',
+  ],
+  purchaseAmount: [
+    'MONTO TOTAL',
+    'MONTO COMPRA',
+    'MONTO ORIGINAL',
+    'VALOR COMPRA',
+    'MONTO OPERACION ORIGINAL',
+  ],
   debit: ['CARGO', 'CARGOS', 'DEBITO', 'DEBE', 'GIRO', 'GIROS', 'MONTO CARGO', 'DEBIT'],
   credit: [
     'ABONO',
@@ -128,7 +154,11 @@ const SYNONYMS: Record<ColumnRole, string[]> = {
  */
 function isPlausibleHeader(map: ColumnMap): boolean {
   const hasAmount =
-    map.amount !== undefined || map.debit !== undefined || map.credit !== undefined;
+    map.amount !== undefined ||
+    map.installmentAmount !== undefined ||
+    map.purchaseAmount !== undefined ||
+    map.debit !== undefined ||
+    map.credit !== undefined;
   return map.date !== undefined && map.description !== undefined && hasAmount;
 }
 
