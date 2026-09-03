@@ -45,8 +45,27 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
 
   // Settled once for the whole file, before any row is mapped: the field order
   // of a numeric date is a property of the export, not of the row being read.
+  //
+  // Only rows that will actually become movements get a vote. A `TOTAL DEL
+  // PERIODO` footer is not a movement, and its date cell was enough to re-date
+  // the whole statement at the highest confidence the detector has. Both date
+  // columns count: a statement can leave every transaction date ambiguous and
+  // settle the question in its posted-date column, and reading one row's two
+  // dates under two different orders is how a movement ends up posted three
+  // months before it happened.
+  const votingRows = sheet.rows
+    .slice(firstDataRow)
+    .filter((row) => !isBlankRow(row as string[]))
+    .filter((row) => {
+      const description = cell(row as string[], map, ColumnRole.description);
+      return !ignorePatterns.some((pattern) => pattern.test(description.trim()));
+    });
+
   const dateOrder = resolveDateOrder(
-    sheet.rows.slice(firstDataRow).map((row) => cell(row as string[], map, ColumnRole.date)),
+    votingRows.flatMap((row) => [
+      cell(row as string[], map, ColumnRole.date),
+      cell(row as string[], map, ColumnRole.postedDate),
+    ]),
     profile.dateOrder,
   );
 
@@ -265,7 +284,7 @@ function describeDateOrder(
       {
         level: 'warning',
         code: 'date-order-conflict',
-        message: `Hay fechas que sólo se entienden como ${describeOrder('DMY')} y otras que sólo se entienden como ${describeOrder('MDY')}. Se usó ${describeOrder(profile.dateOrder)}; las filas que no se puedan leer así aparecerán como error.`,
+        message: `Hay fechas que sólo se entienden como ${describeOrder('DMY')} y otras que sólo se entienden como ${describeOrder('MDY')}. Se usó ${describeOrder(profile.dateOrder)} donde se pudo y la otra lectura donde no, así que hay filas leídas con un criterio y filas leídas con otro. Revisa las fechas de la vista previa una por una, o prueba con otro banco.`,
       },
     ];
   }

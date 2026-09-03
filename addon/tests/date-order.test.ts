@@ -18,9 +18,12 @@ import { fromText } from './fixtures';
  * entero es ambiguo queda algo que advertir — una vez, no cien.
  */
 
-function prepare(rows: string[], parserId = 'generico.cuenta') {
+function prepare(rows: string[] | string, parserId = 'generico.cuenta', rawFile = false) {
+  const text = rawFile
+    ? (rows as string)
+    : ['Fecha;Descripcion;Cargo;Abono;Saldo', ...(rows as string[])].join('\n');
   return prepareImport({
-    file: fromText('cartola.csv', ['Fecha;Descripcion;Cargo;Abono;Saldo', ...rows].join('\n')),
+    file: fromText('cartola.csv', text),
     accountId: 'acc-1',
     parserId,
     rules: [],
@@ -147,5 +150,77 @@ describe('en el pipeline', () => {
     expect(prepared.rows[0]?.transaction.date).toBe('2026-09-25');
     expect(prepared.rows[1]?.transaction.date).toBe('2026-09-03');
     expect(prepared.validation.issues.some((i) => i.code === 'date-order-differs')).toBe(true);
+  });
+});
+
+/**
+ * Qué filas y qué columnas tienen voto.
+ *
+ * Los tres casos salieron de una revisión adversarial: en los tres, una sola
+ * celda decidía cómo se leen las fechas de toda la cartola, y en dos de ellos
+ * ni siquiera era una celda de un movimiento.
+ */
+describe('la evidencia sale de los movimientos, no de cualquier celda', () => {
+  it('reconoce una fecha con hora', () => {
+    // `parseStatementDate` acepta el sufijo horario desde siempre; el detector
+    // de orden lo rechazaba, así que un archivo con hora no probaba nada *ni*
+    // avisaba de nada. Silencioso en los dos sentidos.
+    expect(resolveDateOrder(['05/02/2026 10:31', '13/02/2026 18:02'], 'DMY')).toEqual({
+      order: 'DMY',
+      source: 'file',
+      ambiguousRows: 0,
+    });
+    expect(resolveDateOrder(['02/05/2026 10:00', '02/13/2026 10:00'], 'DMY')).toMatchObject({
+      order: 'MDY',
+      source: 'file',
+    });
+  });
+
+  it('una fila ignorada no vota', () => {
+    // `TOTAL DEL PERIODO` no es un movimiento y el pipeline lo descarta. Su
+    // fecha llegaba igual al detector y podía redatar la cartola entera.
+    const prepared = prepare([
+      '05/02/2026;COMPRA UNO;10.000;;90.000',
+      '07/02/2026;COMPRA DOS;5.000;;85.000',
+      '09/02/2026;COMPRA TRES;5.000;;80.000',
+      '12/25/2026;TOTAL DEL PERIODO;0;;80.000',
+    ]);
+
+    expect(prepared.rows.map((row) => row.transaction.date)).toEqual([
+      '2026-02-05',
+      '2026-02-07',
+      '2026-02-09',
+    ]);
+    expect(prepared.validation.issues.some((i) => i.code === 'date-order-differs')).toBe(false);
+  });
+
+  it('una fila en blanco tampoco', () => {
+    const prepared = prepare([
+      '05/02/2026;COMPRA UNO;10.000;;90.000',
+      '',
+      '07/02/2026;COMPRA DOS;5.000;;85.000',
+    ]);
+    expect(prepared.rows[0]?.transaction.date).toBe('2026-02-05');
+  });
+
+  it('la columna de fecha contable también prueba el orden', () => {
+    // Una cartola con `28/02/2026` en la fecha contable ya demostró que es
+    // DD/MM. Ignorarlo dejaba la fila con una fecha de mayo y una fecha
+    // contable de febrero: contabilizada tres meses antes de ocurrir.
+    const prepared = prepare(
+      [
+        'Fecha;Fecha Contable;Descripcion;Cargo;Abono;Saldo',
+        '05/02/2026;28/02/2026;SUPERMERCADO;12.500;;90.000',
+        '07/02/2026;28/02/2026;FARMACIA;8.300;;81.700',
+      ].join('\n'),
+      'generico.cuenta',
+      true,
+    );
+
+    expect(prepared.rows[0]?.transaction.date).toBe('2026-02-05');
+    expect(prepared.rows[0]?.transaction.postedDate).toBe('2026-02-28');
+    // Con `28/02` en la columna contable el archivo ya se demostró a sí mismo:
+    // no queda nada ambiguo que advertir.
+    expect(prepared.validation.issues.some((i) => i.code === 'ambiguous-date-order')).toBe(false);
   });
 });

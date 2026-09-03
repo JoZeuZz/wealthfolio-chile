@@ -43,6 +43,16 @@ export interface DateOrderEvidence {
 /** `d/m/y` or `m/d/y`, the only shape with two readings. */
 const NUMERIC = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/;
 
+/**
+ * A clock suffix, dropped the same way `parseStatementDate` drops it.
+ *
+ * Without this an export that stamps `05/02/2026 10:31` matched nothing here:
+ * the file proved no order *and* raised no ambiguity, because every row was
+ * skipped and the "nothing proved it" branch only speaks when it counted
+ * ambiguous rows. Silent in both directions, which is the worst of the three.
+ */
+const TIME_SUFFIX = /[T\s]+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?.*$/i;
+
 export function resolveDateOrder(
   rawDates: readonly string[],
   declared: DateFieldOrder,
@@ -52,7 +62,7 @@ export function resolveDateOrder(
   let ambiguousRows = 0;
 
   for (const raw of rawDates) {
-    const match = NUMERIC.exec(String(raw ?? '').trim());
+    const match = NUMERIC.exec(String(raw ?? '').trim().replace(TIME_SUFFIX, '').trim());
     if (!match) continue;
     const a = Number(match[1]);
     const b = Number(match[2]);
