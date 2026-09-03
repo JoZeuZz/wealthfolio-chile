@@ -14,10 +14,19 @@ import { normalizeDescription } from '../src/core/text';
  * git-ignored and never read from a test — see docs/PRIVACY.md.
  */
 
-const SYNTHETIC_DIR = fileURLToPath(new URL('../../samples/synthetic/', import.meta.url));
+/**
+ * Resolved lazily.
+ *
+ * At module scope this ran under every environment that imports the file,
+ * including the DOM one the React tests use, where `import.meta.url` is not a
+ * `file:` URL and `fileURLToPath` throws before a single test collects.
+ */
+function syntheticDir(): string {
+  return fileURLToPath(new URL('../../samples/synthetic/', import.meta.url));
+}
 
 export function loadFixture(name: string): SourceFile {
-  const bytes = new Uint8Array(readFileSync(`${SYNTHETIC_DIR}${name}`));
+  const bytes = new Uint8Array(readFileSync(`${syntheticDir()}${name}`));
   return { name, bytes };
 }
 

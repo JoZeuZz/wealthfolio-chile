@@ -5,11 +5,12 @@ import { AddonProvider } from './ui/context';
 import { DashboardPage } from './ui/pages/DashboardPage';
 import { ImportHistoryPage } from './ui/pages/ImportHistoryPage';
 import { ImportWizardPage } from './ui/pages/ImportWizardPage';
+import { ReconciliationPage } from './ui/pages/ReconciliationPage';
 
 /**
  * Wealthfolio Chile — addon entry point.
  *
- * The sidebar entry and the three routes are declared in `manifest.json`, so
+ * The sidebar entry and the four routes are declared in `manifest.json`, so
  * the host renders navigation without executing any of this. `enable` runs the
  * first time the user opens one of the routes, and its only job is to register
  * which component renders each one.
@@ -36,6 +37,7 @@ function withProviders(Page: () => ReactElement) {
 const DashboardRoute = withProviders(DashboardPage);
 const ImportRoute = withProviders(ImportWizardPage);
 const HistoryRoute = withProviders(ImportHistoryPage);
+const ReconciliationRoute = withProviders(ReconciliationPage);
 
 const enable: AddonEnableFunction = (ctx) => {
   addonCtx = ctx;
@@ -58,6 +60,12 @@ const enable: AddonEnableFunction = (ctx) => {
     id: 'wealthfolio-chile-history',
     path: '/addons/wealthfolio-chile/importaciones',
     component: HistoryRoute,
+  });
+
+  ctx.router.add({
+    id: 'wealthfolio-chile-reconciliacion',
+    path: '/addons/wealthfolio-chile/conciliacion',
+    component: ReconciliationRoute,
   });
 
   ctx.api.logger.info('Wealthfolio Chile habilitado.');
