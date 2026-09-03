@@ -16,7 +16,7 @@ import { addMonthsToKey, formatMonthKey, monthEnd, monthKey, monthStart } from '
 import { buildInsights, type Insight } from '../../core/insights/rules';
 import { buildInstallmentPlans, buildOutlook } from '../../core/installments/plans';
 import {
-  currencyOf,
+  summarizeByCurrency,
   findRecurringCharges,
   summarizeMonth,
   totalsByCategory,
@@ -101,15 +101,18 @@ export function DashboardPage() {
     };
   }, [ctx, month]);
 
-  const [view, viewError] = useMemo<[DashboardView | undefined, string | undefined]>(() => {
-    if (!data) return [undefined, undefined];
+  const [views, viewError] = useMemo<[CurrencyView[], string | undefined]>(() => {
+    if (!data) return [[], undefined];
     try {
-      return [buildView(data, month), undefined];
+      return [buildViews(data, month), undefined];
     } catch (err) {
       // A panel that renders nothing at all tells the user less than nothing.
-      return [undefined, err instanceof Error ? err.message : String(err)];
+      return [[], err instanceof Error ? err.message : String(err)];
     }
   }, [data, month]);
+
+  const view = views[0]?.view;
+  const otherCurrencies = views.slice(1);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-6">
@@ -184,6 +187,20 @@ export function DashboardPage() {
 
       {view ? (
         <>
+          {otherCurrencies.length > 0 ? (
+            <Alert>
+              <AlertTitle>
+                Este mes tiene movimientos en {views.length} monedas
+              </AlertTitle>
+              <AlertDescription>
+                Los totales de abajo son sólo de {views[0]?.currency}. Sumar monedas distintas
+                exige un tipo de cambio del día de cada movimiento, que Wealthfolio todavía no
+                expone a los addons, así que cada moneda va por separado en vez de dar un total
+                inventado.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="Ingresos del mes" value={view.summary.income} tone="positive" />
             <Stat
@@ -212,6 +229,29 @@ export function DashboardPage() {
               hint={`${view.outlook.openPlans.length} compra(s) activa(s)`}
             />
           </dl>
+
+          {otherCurrencies.map(({ currency, view: other }) => (
+            <Card key={currency}>
+              <CardHeader>
+                <CardTitle>Movimientos en {currency}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <Stat label="Ingresos" value={other.summary.income} tone="positive" />
+                  <Stat label="Gasto neto" value={other.summary.netSpending} tone="negative" />
+                  <Stat
+                    label="Flujo de caja"
+                    value={other.summary.netCashFlow}
+                    tone={other.summary.netCashFlow.minor < 0 ? 'negative' : 'positive'}
+                  />
+                  <Stat
+                    label="Movimientos"
+                    value={String(other.summary.transactionCount)}
+                  />
+                </dl>
+              </CardContent>
+            </Card>
+          ))}
 
           <section className="grid gap-4 lg:grid-cols-2">
             <Card>
@@ -437,6 +477,11 @@ function InsightRow({ insight }: { insight: Insight }) {
   );
 }
 
+interface CurrencyView {
+  currency: string;
+  view: DashboardView;
+}
+
 interface DashboardView {
   summary: ReturnType<typeof summarizeMonth>;
   categories: ReturnType<typeof totalsByCategory>;
@@ -446,36 +491,52 @@ interface DashboardView {
   insights: Insight[];
 }
 
-function buildView(data: DashboardData, month: string): DashboardView {
+/**
+ * One view per currency present.
+ *
+ * Totalling CLP and USD needs an exchange rate the SDK does not publish a
+ * historical one for, so the panel does not try: it shows each currency's own
+ * figures side by side. Before this, a single dollar movement made
+ * `currencyOf` throw and replaced the entire panel — peso totals included —
+ * with an error message.
+ *
+ * Ordered so the currency with the most movements leads.
+ */
+function buildViews(data: DashboardData, month: string): CurrencyView[] {
   const inMonth = data.transactions.filter((t) => monthKey(t.date) === month);
   const previousMonth = addMonthsToKey(month, -1);
-  const inPrevious = data.transactions.filter((t) => monthKey(t.date) === previousMonth);
 
-  const currency = currencyOf(data.transactions, data.fallbackCurrency);
+  return summarizeByCurrency(month, inMonth, { fallbackCurrency: data.fallbackCurrency }).map(
+    ({ currency, summary, transactions }) => {
+      const history = data.transactions.filter((t) => t.amount.currency === currency);
+      const inPrevious = history.filter((t) => monthKey(t.date) === previousMonth);
+      const previousSummary = summarizeMonth(previousMonth, inPrevious, { currency });
 
-  const summary = summarizeMonth(month, inMonth, { currency });
-  const previousSummary = summarizeMonth(previousMonth, inPrevious, { currency });
+      const categories = totalsByCategory(transactions, { currency });
+      const previousCategories = totalsByCategory(inPrevious, { currency });
+      const merchants = totalsByMerchant(transactions, 8, { currency });
+      const recurring = findRecurringCharges(history);
 
-  const categories = totalsByCategory(inMonth, { currency });
-  const previousCategories = totalsByCategory(inPrevious, { currency });
-  const merchants = totalsByMerchant(inMonth, 8, { currency });
-  const recurring = findRecurringCharges(data.transactions);
+      const plans = buildInstallmentPlans(history);
+      const outlook = buildOutlook(plans, month, 12, currency);
 
-  const plans = buildInstallmentPlans(data.transactions);
-  const outlook = buildOutlook(plans, month, 12, currency);
+      const insights = buildInsights({
+        month,
+        current: summary,
+        ...(inPrevious.length > 0 ? { previous: previousSummary } : {}),
+        categories,
+        ...(inPrevious.length > 0 ? { previousCategories } : {}),
+        merchants,
+        recurring,
+        installments: outlook,
+      });
 
-  const insights = buildInsights({
-    month,
-    current: summary,
-    ...(inPrevious.length > 0 ? { previous: previousSummary } : {}),
-    categories,
-    ...(inPrevious.length > 0 ? { previousCategories } : {}),
-    merchants,
-    recurring,
-    installments: outlook,
-  });
-
-  return { summary, categories, merchants, recurring, outlook, insights };
+      return {
+        currency,
+        view: { summary, categories, merchants, recurring, outlook, insights },
+      };
+    },
+  );
 }
 
 

@@ -121,6 +121,62 @@ export function currencyOf(
   return [...currencies][0] as string;
 }
 
+/**
+ * Every currency present, sorted, without deciding anything.
+ *
+ * The counterpart to {@link currencyOf}: that one insists on a single answer
+ * because its caller needs one number, this one reports the situation so the
+ * caller can show several.
+ */
+export function currenciesOf(transactions: readonly NormalizedTransaction[]): string[] {
+  return [...new Set(transactions.map((transaction) => transaction.amount.currency))].sort();
+}
+
+/** A month's totals for one currency, alongside the rows they came from. */
+export interface CurrencySummary {
+  currency: string;
+  summary: MonthlySummary;
+  transactions: NormalizedTransaction[];
+}
+
+/**
+ * One summary per currency, never a mixed one.
+ *
+ * Refusing to add CLP to USD is right — the sum would be a number nobody can
+ * act on — but refusing left the whole panel showing an error, so somebody with
+ * one dollar account stopped seeing their peso totals too. Splitting says the
+ * truth and says all of it.
+ *
+ * Converting is not on the table with the API the SDK publishes.
+ * `ExchangeRatesAPI` in 3.7.0 is `getAll`, `update` and `add`: current rates,
+ * not historical ones. Restating an eight-month-old movement at today's rate
+ * would be another invented number, and a harder one to notice.
+ *
+ * Ordered by how much of the month each currency accounts for, so the main one
+ * leads.
+ */
+export function summarizeByCurrency(
+  month: MonthKey,
+  transactions: readonly NormalizedTransaction[],
+  options: { fallbackCurrency?: string } = {},
+): CurrencySummary[] {
+  const currencies = currenciesOf(transactions);
+  if (currencies.length === 0) {
+    const currency = options.fallbackCurrency ?? 'CLP';
+    return [{ currency, summary: summarizeMonth(month, [], { currency }), transactions: [] }];
+  }
+
+  return currencies
+    .map((currency) => {
+      const rows = transactions.filter(
+        (transaction) => transaction.amount.currency === currency,
+      );
+      return { currency, summary: summarizeMonth(month, rows, { currency }), transactions: rows };
+    })
+    .sort((a, b) => b.transactions.length - a.transactions.length ||
+      (a.currency < b.currency ? -1 : 1));
+}
+
 /** More than one currency in a set that has to be totalled as one number. */
 export class MixedCurrencyError extends Error {
   constructor(readonly currencies: readonly string[]) {
