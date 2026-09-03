@@ -317,3 +317,70 @@ describe('cartola inválida', () => {
     ]);
   });
 });
+
+/**
+ * La cartola y la cuenta de destino.
+ *
+ * Ningún otro control detecta esto: el archivo es válido, la vista previa es
+ * correcta y el dedupe no puede ayudar porque las huellas van scoped por
+ * cuenta — en la cuenta equivocada los movimientos *son* nuevos.
+ */
+describe('cuenta de destino', () => {
+  const bancoChileAccount = {
+    accountNumber: '001234567890',
+    accountType: 'CASH' as const,
+    currency: 'CLP',
+  };
+
+  it('confirma la coincidencia cuando el número de la cartola es el de la cuenta', async () => {
+    const host = fakeHost();
+
+    const result = await prepareImportFromHost(host.ctx, {
+      file: loadFixture('banco-chile-cuenta-corriente.csv'),
+      accountId: ACCOUNT,
+      account: bancoChileAccount,
+    });
+
+    expect(result.accountMatch?.verdict).toBe('confirmed');
+    expect(result.canImport).toBe(true);
+  });
+
+  it('bloquea cuando el número no coincide', async () => {
+    const host = fakeHost();
+
+    const result = await prepareImportFromHost(host.ctx, {
+      file: loadFixture('banco-chile-cuenta-corriente.csv'),
+      accountId: ACCOUNT,
+      account: { ...bancoChileAccount, accountNumber: '009999999999' },
+    });
+
+    expect(result.accountMatch?.verdict).toBe('mismatch');
+    expect(result.blockers.some((entry) => entry.code === 'account-mismatch')).toBe(true);
+    expect(result.canImport).toBe(false);
+  });
+
+  it('bloquea cuando la moneda no coincide', async () => {
+    const host = fakeHost();
+
+    const result = await prepareImportFromHost(host.ctx, {
+      file: loadFixture('banco-chile-cuenta-corriente.csv'),
+      accountId: ACCOUNT,
+      account: { ...bancoChileAccount, currency: 'USD' },
+    });
+
+    expect(result.canImport).toBe(false);
+  });
+
+  it('sin la cuenta no inventa una coincidencia', async () => {
+    // No pasar la cuenta significa "no se comprobó", nunca "coincidió".
+    const host = fakeHost();
+
+    const result = await prepareImportFromHost(host.ctx, {
+      file: loadFixture('banco-chile-cuenta-corriente.csv'),
+      accountId: ACCOUNT,
+    });
+
+    expect(result.accountMatch).toBeUndefined();
+    expect(result.canImport).toBe(true);
+  });
+});

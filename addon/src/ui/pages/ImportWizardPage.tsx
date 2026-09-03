@@ -13,6 +13,7 @@ import {
 } from '@wealthfolio/ui';
 import type { Account } from '@wealthfolio/addon-sdk';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { AccountMatch, HostAccountFacts } from '../../core/accounts/match';
 import { categoryPath } from '../../core/categories/defaults';
 import { buildDuplicateIndex } from '../../core/dedupe/classify';
 import { formatIsoDate } from '../../core/dates';
@@ -95,6 +96,7 @@ export function ImportWizardPage() {
           file: source,
           accountId,
           ...(account?.name ? { accountName: account.name } : {}),
+          ...(account ? { account: accountFacts(account) } : {}),
           ...(chosenParser ? { parserId: chosenParser } : {}),
         });
         setPreparation(outcome);
@@ -104,7 +106,7 @@ export function ImportWizardPage() {
         setBusy(false);
       }
     },
-    [account?.name, accountId, ctx],
+    [account, accountId, ctx],
   );
 
   const onFile = useCallback(
@@ -241,6 +243,7 @@ export function ImportWizardPage() {
       {step === 'detect' && prepared ? (
         <DetectionStep
           prepared={prepared}
+          {...(preparation?.accountMatch ? { accountMatch: preparation.accountMatch } : {})}
           selectedParser={parserId}
           onSelectParser={reparseWith}
           onContinue={() => setStep('preview')}
@@ -289,6 +292,11 @@ const BLOCKER_COPY: Record<ImportBlocker['code'], { title: string; consequence: 
     consequence:
       'Sin esa comprobación un movimiento ya registrado se guardaría dos veces, así que importar queda deshabilitado.',
   },
+  'account-mismatch': {
+    title: 'La cartola no es de esta cuenta',
+    consequence:
+      'Importarla aquí dejaría los movimientos en la cuenta equivocada, y la deduplicación no lo detectaría: en otra cuenta esos movimientos son nuevos. Elige la cuenta correcta en el primer paso.',
+  },
   'statement-invalid': {
     title: 'La cartola no se leyó completa',
     consequence:
@@ -335,6 +343,13 @@ function ImportBlockedAlert({
                 {blocker.issues.length > 5 ? (
                   <li>y {blocker.issues.length - 5} más.</li>
                 ) : null}
+              </ul>
+            ) : null}
+            {blocker.code === 'account-mismatch' ? (
+              <ul className="list-disc pl-5 text-xs">
+                {blocker.reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
               </ul>
             ) : null}
           </div>
@@ -467,6 +482,7 @@ function Steps({ current }: { current: Step }) {
 
 function DetectionStep({
   prepared,
+  accountMatch,
   selectedParser,
   onSelectParser,
   onContinue,
@@ -474,6 +490,7 @@ function DetectionStep({
   busy,
 }: {
   prepared: PreparedImport;
+  accountMatch?: AccountMatch;
   selectedParser: string | undefined;
   onSelectParser: (id: string) => void;
   onContinue: () => void;
@@ -510,6 +527,29 @@ function DetectionStep({
             hint={describeRowStats(statement.rowStats)}
           />
         </div>
+
+        {accountMatch && !accountMatch.blocking ? (
+          <Alert>
+            <AlertTitle>
+              {accountMatch.verdict === 'confirmed'
+                ? 'La cartola corresponde a esta cuenta'
+                : 'No se pudo confirmar que la cartola sea de esta cuenta'}
+            </AlertTitle>
+            <AlertDescription>
+              <ul className="list-disc pl-4">
+                {accountMatch.reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+              {accountMatch.verdict === 'compatible' ? (
+                <p className="mt-2">
+                  Nada contradice la elección, pero tampoco hay con qué comprobarla. Revisa que sea
+                  la cuenta correcta antes de continuar.
+                </p>
+              ) : null}
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         {unverified ? (
           <Alert>
@@ -826,6 +866,20 @@ const KIND_LABELS: Record<string, string> = {
 
 export function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? kind;
+}
+
+/**
+ * The parts of a Wealthfolio account the statement is checked against.
+ *
+ * Narrowed here rather than passing the whole `Account` so the comparison in
+ * `core/` stays a pure function of four fields, testable without an SDK type.
+ */
+function accountFacts(account: Account): HostAccountFacts {
+  return {
+    ...(account.accountNumber ? { accountNumber: account.accountNumber } : {}),
+    accountType: account.accountType as HostAccountFacts['accountType'],
+    currency: account.currency,
+  };
 }
 
 function messageOf(error: unknown): string {

@@ -1,6 +1,7 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
 import { addDays } from '../core/dates';
 import { buildDuplicateIndex, type DuplicateIndex } from '../core/dedupe/classify';
+import { matchStatementToAccount, type AccountMatch, type HostAccountFacts } from '../core/accounts/match';
 import type { StatementIssue } from '../core/model/statement';
 import type { SourceFile } from '../core/parsing/tabular';
 import { prepareImport, type PreparedImport } from '../core/pipeline';
@@ -38,6 +39,14 @@ export interface PrepareFromHostInput {
   file: SourceFile;
   accountId: string;
   accountName?: string;
+  /**
+   * The destination account as Wealthfolio holds it.
+   *
+   * Optional only so a caller that has not loaded the account list yet still
+   * gets a preview; without it the statement cannot be checked against where it
+   * is going, and the result says so rather than implying it matched.
+   */
+  account?: HostAccountFacts;
   /** Parser chosen by the user; omitted means auto-detect. */
   parserId?: string;
 }
@@ -60,6 +69,7 @@ export type RulesStatus = { status: 'ok' } | { status: 'fallback'; message: stri
 export type ImportBlocker =
   | { code: 'parse-failed'; message: string }
   | { code: 'duplicate-check-unavailable'; message: string }
+  | { code: 'account-mismatch'; message: string; reasons: string[] }
   | {
       code: 'statement-invalid';
       message: string;
@@ -73,6 +83,12 @@ export interface PreparationResult {
   parse: ParseStatus;
   duplicateIndex: DuplicateIndexStatus;
   rules: RulesStatus;
+  /**
+   * How the statement compares with the destination account.
+   *
+   * Absent when the caller did not supply the account: not "it matched".
+   */
+  accountMatch?: AccountMatch;
   /** Every reason importing is refused. Empty means it is allowed. */
   blockers: ImportBlocker[];
   /**
@@ -130,13 +146,18 @@ export async function prepareImportFromHost(
     };
   }
 
-  const blockers = collectBlockers(final.prepared, indexOutcome.status);
+  const accountMatch = input.account
+    ? matchStatementToAccount(final.prepared.statement.account, input.account)
+    : undefined;
+
+  const blockers = collectBlockers(final.prepared, indexOutcome.status, accountMatch);
 
   return {
     prepared: final.prepared,
     parse: { status: 'ok' },
     duplicateIndex: indexOutcome.status,
     rules: rulesOutcome.status,
+    ...(accountMatch ? { accountMatch } : {}),
     blockers,
     canImport: blockers.length === 0,
   };
@@ -151,8 +172,17 @@ export async function prepareImportFromHost(
 function collectBlockers(
   prepared: PreparedImport,
   index: DuplicateIndexStatus,
+  accountMatch: AccountMatch | undefined,
 ): ImportBlocker[] {
   const blockers: ImportBlocker[] = [];
+
+  if (accountMatch?.blocking) {
+    blockers.push({
+      code: 'account-mismatch',
+      message: 'La cartola no corresponde a la cuenta de destino elegida.',
+      reasons: accountMatch.reasons,
+    });
+  }
 
   if (!prepared.validation.ok) {
     const issues = prepared.validation.issues.filter((issue) => issue.level === 'error');
