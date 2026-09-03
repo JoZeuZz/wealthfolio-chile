@@ -5,6 +5,9 @@ import { Direction, TransactionKind } from '../src/core/model/kinds';
 import { loadWorkbook } from '../src/core/parsing/workbook';
 import { detectAll, getParser, listInstitutions, PARSERS } from '../src/core/providers/registry';
 import type { ParserInput } from '../src/core/providers/parser';
+import { buildDuplicateIndex } from '../src/core/dedupe/classify';
+import { prepareImport } from '../src/core/pipeline';
+import { defaultRules } from '../src/core/rules/builtin';
 import { fromText, loadFixture } from './fixtures';
 
 function inputFor(name: string): ParserInput {
@@ -168,5 +171,111 @@ describe('Falabella CMR parser', () => {
   it('reads a bare counter from the description as a suggestion only', () => {
     const ripley = statement.transactions.find((t) => /RIPLEY/.test(t.description))!;
     expect(ripley.installment).toMatchObject({ current: 1, total: 3 });
+  });
+});
+
+/**
+ * Los dos perfiles que nunca había leído ningún test.
+ *
+ * `banco-chile.tarjeta` y `banco-falabella.cuenta` existían en el registro,
+ * aparecían en el selector del wizard y jamás habían parseado un archivo. Que
+ * un perfil compile no dice nada sobre si mapea las columnas que dice mapear.
+ */
+describe('Banco de Chile — tarjeta de crédito', () => {
+  const prepared = () =>
+    prepareImport({
+      file: loadFixture('banco-chile-tarjeta.csv'),
+      accountId: 'acc-card',
+      parserId: 'banco-chile.tarjeta',
+      rules: defaultRules(),
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+  it('se detecta a sí mismo por encima del resto', () => {
+    const detections = detectAll(inputFor('banco-chile-tarjeta.csv'));
+    expect(detections[0]?.parser).toBe('banco-chile.tarjeta');
+  });
+
+  it('lee los siete movimientos y descarta el encabezado', () => {
+    expect(prepared().statement.rowStats).toMatchObject({ mapped: 7, failed: 0 });
+  });
+
+  it('invierte el signo: un cargo positivo es dinero que sale', () => {
+    const compra = prepared().rows.find((r) =>
+      r.transaction.description.includes('SUPERMERCADO SINTETICO PROVIDENCIA'),
+    );
+    expect(compra?.transaction.amount.minor).toBe(-38500);
+    expect(compra?.transaction.kind).toBe(TransactionKind.credit_card_purchase);
+  });
+
+  it('distingue el pago recibido de la devolución', () => {
+    const rows = prepared().rows;
+    const pago = rows.find((r) => r.transaction.description.includes('PAGO RECIBIDO'));
+    const devolucion = rows.find((r) => r.transaction.description.includes('DEVOLUCION'));
+
+    expect(pago?.transaction.kind).toBe(TransactionKind.credit_card_payment);
+    expect(devolucion?.transaction.kind).toBe(TransactionKind.refund);
+  });
+
+  it('separa comisión de interés', () => {
+    const rows = prepared().rows;
+    expect(rows.find((r) => r.transaction.description.includes('COMISION'))?.transaction.kind).toBe(
+      TransactionKind.fee,
+    );
+    expect(rows.find((r) => r.transaction.description.includes('INTERESES'))?.transaction.kind).toBe(
+      TransactionKind.interest,
+    );
+  });
+
+  it('lee la cuota y admite no saber si el monto es la cuota o la compra', () => {
+    const cuota = prepared().rows.find((r) => r.transaction.installment !== undefined);
+    expect(cuota?.transaction.installment).toMatchObject({ current: 2, total: 3 });
+    // El estado de cuenta no etiqueta la columna, así que la incertidumbre viaja
+    // con la fila en vez de resolverse por suposición.
+    expect(cuota?.transaction.warnings.map((w) => w.code)).toContain(
+      'ambiguous-installment-amount',
+    );
+  });
+
+  it('sigue marcado como pendiente de una cartola real', () => {
+    expect(prepared().parser.profile.validationStatus).toBe('pending-real-sample');
+  });
+});
+
+describe('Banco Falabella — cuenta corriente', () => {
+  const prepared = () =>
+    prepareImport({
+      file: loadFixture('banco-falabella-cuenta.csv'),
+      accountId: 'acc-1',
+      parserId: 'banco-falabella.cuenta',
+      rules: defaultRules(),
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+  it('descarta la fila de saldo anterior', () => {
+    expect(prepared().statement.rowStats).toMatchObject({ mapped: 5, skipped: 1, failed: 0 });
+  });
+
+  it('firma cargos y abonos en la dirección correcta', () => {
+    const rows = prepared().rows;
+    expect(rows.find((r) => r.transaction.description.includes('SUELDO'))?.transaction.amount.minor)
+      .toBe(1150000);
+    expect(
+      rows.find((r) => r.transaction.description.includes('SUPERMERCADO'))?.transaction.amount.minor,
+    ).toBe(-52300);
+  });
+
+  it('un pago de tarjeta desde la cuenta no es un gasto', () => {
+    const pago = prepared().rows.find((r) => r.transaction.description.includes('PAGO TARJETA'));
+    expect(pago?.transaction.kind).toBe(TransactionKind.credit_card_payment);
+  });
+
+  it('cuadra el recorrido de saldos declarado', () => {
+    expect(prepared().validation.summary.balanceReconciles).toBe(true);
+    expect(prepared().validation.ok).toBe(true);
+  });
+
+  it('recupera el número de cuenta del encabezado', () => {
+    expect(prepared().statement.account.number).toBe('000-987654-32');
   });
 });
