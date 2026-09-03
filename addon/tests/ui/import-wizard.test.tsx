@@ -301,6 +301,58 @@ describe('selección manual', () => {
   });
 });
 
+describe('una importación parcial', () => {
+  it('no la presenta como completa', async () => {
+    // El host acepta un lote y rechaza el siguiente. El dinero que sí entró
+    // está en la contabilidad, y el que no, no: decir «listo» sobre eso es cómo
+    // alguien deja de revisar.
+    const harness = await openWizardWith(CARTOLA_BUENA);
+    harness.host.saveManyPlan = [1];
+    await goToPreview(harness);
+
+    await harness.user.click(screen.getByRole('button', { name: /Confirmar e importar/ }));
+    await screen.findByText(/Creados en Wealthfolio/);
+
+    expect(harness.host.toasts.some((toast) => toast.level === 'success')).toBe(false);
+    expect(screen.getByText(/Fallaron al escribir/)).toBeInTheDocument();
+  });
+
+  it('dice cuántos entraron y cuántos no', async () => {
+    const harness = await openWizardWith(CARTOLA_BUENA);
+    harness.host.saveManyPlan = [1];
+    await goToPreview(harness);
+
+    await harness.user.click(screen.getByRole('button', { name: /Confirmar e importar/ }));
+    const created = await screen.findByText(/Creados en Wealthfolio/);
+    const failed = screen.getByText(/Fallaron al escribir/);
+
+    expect(created.parentElement?.textContent).toContain('1');
+    expect(failed.parentElement?.textContent).toContain('1');
+  });
+});
+
+describe('una cartola con fechas ambiguas', () => {
+  it('no marca cada fila como pendiente de revisión', async () => {
+    // `03/09/2026` admite dos lecturas y antes cada fila así llevaba una
+    // advertencia: en una cartola real, la mitad.
+    const harness = await openWizardWith(
+      [
+        'Banco de Chile - Cartola Cuenta Corriente',
+        'Cuenta Corriente N: 00-123-45678-90',
+        '',
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/09/2026;COMPRA UNO;10.000;;90.000',
+        '04/09/2026;COMPRA DOS;5.000;;85.000',
+        '25/09/2026;COMPRA TRES;5.000;;80.000',
+      ].join('\n'),
+    );
+    await goToPreview(harness);
+
+    expect(screen.queryByText('Revisar')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Confirmar e importar 3 movimientos/ })).toBeEnabled();
+  });
+});
+
 describe('una importación que falla', () => {
   it('no dice que salió bien', async () => {
     const harness = await openWizardWith(CARTOLA_BUENA);

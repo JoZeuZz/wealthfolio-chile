@@ -136,6 +136,14 @@ export function fakeHost(options: FakeHostOptions = {}): FakeHost {
         host.navigatedTo.push(path);
       },
     },
+    settings: {
+      // The dashboard reads `baseCurrency` only as the fallback for a month
+      // with nothing in it. A fresh Wealthfolio reports USD, which is what took
+      // the whole panel down once — see `currencyOf`.
+      async get() {
+        return { baseCurrency: 'USD' };
+      },
+    },
     activities: {
       async search(
         page: number,
