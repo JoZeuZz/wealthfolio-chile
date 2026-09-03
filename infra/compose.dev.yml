@@ -12,7 +12,16 @@ services:
     # reach the dev instance from another device, set WF_BIND_ADDR=0.0.0.0 in
     # `.env` instead.
     environment:
-      # A local dev instance behind no proxy does not need a login wall.
+      # A local dev instance behind no proxy does not need a login wall, and
+      # what removes it is an empty password hash — not `WF_AUTH_REQUIRED`.
+      # Upstream builds its auth config from the hash alone
+      # (`apps/server/src/config.rs`: `password_hash.is_some() || oidc.is_some()`);
+      # `WF_AUTH_REQUIRED=false` only waives the fail-closed check that refuses
+      # to listen on a non-loopback address without auth. Setting just that left
+      # auth on, and the wildcard CORS below then made the server panic on every
+      # start — `WF_CORS_ALLOW_ORIGINS cannot be "*" when authentication is
+      # enabled` — in a crash loop with no container ever coming up.
+      WF_AUTH_PASSWORD_HASH: ''
       WF_AUTH_REQUIRED: 'false'
       WF_CORS_ALLOW_ORIGINS: '*'
       RUST_LOG: '${RUST_LOG:-info}'

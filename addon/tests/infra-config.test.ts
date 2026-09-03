@@ -64,3 +64,23 @@ describe('infra/compose.yml', () => {
     expect(image).not.toContain('latest');
   });
 });
+
+describe('infra/compose.dev.yml', () => {
+  const dev = readFileSync(repo('infra/compose.dev.yml'), 'utf8');
+
+  it('quita el hash de la contraseña, que es lo único que apaga la autenticación', () => {
+    // `WF_AUTH_REQUIRED=false` no la apaga: upstream arma la configuración de
+    // auth desde el hash (`password_hash.is_some() || oidc.is_some()` en
+    // `apps/server/src/config.rs`) y `WF_AUTH_REQUIRED` sólo levanta el chequeo
+    // de fail-closed para direcciones no loopback.
+    expect(dev).toMatch(/WF_AUTH_PASSWORD_HASH:\s*''/);
+  });
+
+  it('no deja CORS en `*` con la autenticación encendida', () => {
+    // El servidor entra en panic al arrancar si las dos cosas coinciden, y el
+    // contenedor queda en bucle de reinicio sin llegar a escuchar nunca.
+    const wildcardCors = /WF_CORS_ALLOW_ORIGINS:\s*'\*'/.test(dev);
+    const authOff = /WF_AUTH_PASSWORD_HASH:\s*''/.test(dev);
+    expect(wildcardCors && !authOff).toBe(false);
+  });
+});
