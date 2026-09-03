@@ -440,3 +440,50 @@ describe('pagos de tarjeta: lo que encontró la revisión', () => {
     }
   });
 });
+
+/**
+ * El índice por monto no puede cambiar qué se considera el mismo dinero.
+ *
+ * Los candidatos se agrupan por monto antes de emparejar, porque comparar cada
+ * salida contra cada entrada es cuadrático y una ventana es un año de dos
+ * cuentas: 5.000 movimientos costaban 1,5 s de comparaciones, casi todas entre
+ * pares que difieren en el monto y nunca podrían coincidir. El riesgo del
+ * índice es el contrario: que dos montos iguales escritos con distinta escala
+ * caigan en cubetas distintas y dejen de ser candidatos en silencio.
+ */
+describe('índice por monto', () => {
+  it('empareja montos iguales escritos con distinta escala', () => {
+    const out = leg('a', -200000, '2026-02-10', 'TRASPASO A CUENTA PROPIA');
+    const inn = leg('b', 200000, '2026-02-10', 'TRASPASO DESDE CUENTA PROPIA');
+    // El mismo dinero, con dos decimales de más en un lado.
+    inn.transaction.amount = { minor: 20000000, scale: 2, currency: 'CLP' };
+
+    expect(matchTransfers([out, inn]).matches).toHaveLength(1);
+  });
+
+  it('no empareja monedas distintas por el mismo número', () => {
+    const out = leg('a', -1000, '2026-02-10', 'TRASPASO A CUENTA PROPIA');
+    const inn = leg('b', 1000, '2026-02-10', 'TRASPASO DESDE CUENTA PROPIA');
+    inn.transaction.amount = { minor: 1000, scale: 0, currency: 'USD' };
+
+    expect(matchTransfers([out, inn]).matches).toHaveLength(0);
+  });
+
+  it('sigue resolviendo un conjunto grande sin degradar', () => {
+    // 600 tramos, todos del mismo monto y separados por días distintos: el caso
+    // que hace explotar el número de candidatos.
+    const legs = [];
+    for (let i = 0; i < 300; i += 1) {
+      const day = String((i % 28) + 1).padStart(2, '0');
+      legs.push(leg('a', -50000, `2026-02-${day}`, 'TRASPASO A CUENTA PROPIA'));
+      legs.push(leg('b', 50000, `2026-02-${day}`, 'TRASPASO DESDE CUENTA PROPIA'));
+    }
+
+    const result = matchTransfers(legs);
+    // Con tantos candidatos idénticos no hay nada que decidir; lo importante es
+    // que lo diga en vez de inventar 300 pares.
+    expect(result.matches).toHaveLength(0);
+    expect(result.ambiguous.length).toBeGreaterThan(0);
+    expect(result.matchedFingerprints.size).toBe(0);
+  });
+});

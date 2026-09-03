@@ -1,5 +1,5 @@
 import { daysBetween } from '../dates';
-import { abs, equals, sign } from '../money';
+import { abs, sign, toDecimalString } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { NormalizedTransaction } from '../model/transaction';
 import { normalizeDescription } from '../text';
@@ -187,11 +187,23 @@ export function matchTransfers(
     byDateThenFingerprint,
   );
 
+  // Inflows are bucketed by amount before the pairing loop. Comparing every
+  // outflow against every inflow is quadratic in the size of the window, and a
+  // window is a year of two accounts: 5.000 movements took 1,5 s of pure
+  // comparison, almost all of it on pairs that differ in amount and can never
+  // match. Equal amount is a hard requirement, so it is the index.
+  const byAmount = new Map<string, ScopedTransaction[]>();
+  for (const inflow of inflows) {
+    const bucketKey = amountKey(inflow);
+    const bucket = byAmount.get(bucketKey);
+    if (bucket) bucket.push(inflow);
+    else byAmount.set(bucketKey, [inflow]);
+  }
+
   let candidates: Candidate[] = [];
   for (const outflow of outflows) {
-    for (const inflow of inflows) {
+    for (const inflow of byAmount.get(amountKey(outflow)) ?? []) {
       if (inflow.accountId === outflow.accountId) continue;
-      if (!equals(abs(inflow.transaction.amount), abs(outflow.transaction.amount))) continue;
       const gapDays = Math.abs(daysBetween(outflow.transaction.date, inflow.transaction.date));
       if (gapDays > windowDays) continue;
       const evidence = scoreEvidence(outflow, inflow);
@@ -203,9 +215,12 @@ export function matchTransfers(
   const taken = new Set<string>();
 
   for (;;) {
+    // `candidates` shrinks as legs are taken, so a round never re-walks a pair
+    // that is already out of the running.
     const open = candidates.filter(
       (c) => !taken.has(key(c.outflow)) && !taken.has(key(c.inflow)),
     );
+    candidates = open;
     if (open.length === 0) break;
 
     const byOutflow = groupBy(open, (c) => key(c.outflow));
@@ -485,6 +500,24 @@ function buildReason(input: { gapDays: number; evidence: Evidence }): string {
     parts.push('pero la glosa menciona a un tercero, así que no se confirma sola');
   }
   return `${parts.join('; ')}.`;
+}
+
+/**
+ * Bucket key for "these two amounts are the same money".
+ *
+ * The magnitude, normalised so a scale difference does not split a bucket:
+ * `equals` in `core/money` compares values, not representations, and the index
+ * has to agree with it or a legitimate pair silently stops being a candidate.
+ */
+function amountKey(scoped: ScopedTransaction): string {
+  const magnitude = abs(scoped.transaction.amount);
+  const text = toDecimalString(magnitude);
+  // Trailing fractional zeros are representation, not value: `200000` and
+  // `200000.00` are the same money, and `equals` in `core/money` says so. The
+  // key has to agree, or a legitimate pair lands in two buckets and stops being
+  // a candidate with nothing to show for it.
+  const normalized = text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text;
+  return `${magnitude.currency}:${normalized}`;
 }
 
 function key(scoped: ScopedTransaction): string {
