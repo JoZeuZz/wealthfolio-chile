@@ -2,7 +2,7 @@ import { daysBetween } from '../dates';
 import { abs, equals, sign } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { NormalizedTransaction } from '../model/transaction';
-import { foldCase } from '../text';
+import { normalizeDescription } from '../text';
 
 /**
  * Internal-transfer matching.
@@ -63,10 +63,19 @@ export interface TransferMatchResult {
   matchedFingerprints: Set<string>;
 }
 
-/** One movement and every counterpart the data cannot choose between. */
+/**
+ * A knot of movements whose pairings the data cannot separate.
+ *
+ * Reported per knot rather than per leg: a two-outflows-one-inflow tangle is
+ * one problem to look at, not three, and listing it three times offered the
+ * same counterpart in each — including counterparts other findings in the same
+ * run had already claimed.
+ */
 export interface AmbiguousTransfer {
-  movement: ScopedTransaction;
-  candidates: ScopedTransaction[];
+  /** Every leg involved, outflows and inflows, in ledger order. */
+  movements: ScopedTransaction[];
+  /** The pairings still open inside the knot, best first. */
+  candidates: Array<{ outflow: ScopedTransaction; inflow: ScopedTransaction; gapDays: number }>;
   reason: string;
 }
 
@@ -93,7 +102,25 @@ const OWN_ACCOUNT_MARKERS = ['CUENTA PROPIA', 'ENTRE CUENTAS', 'MIS CUENTAS', 'T
  * mistake this matcher can make — so the phrase now blocks confirmation instead
  * of supporting it.
  */
-const THIRD_PARTY_MARKERS = ['A TERCEROS', 'DE TERCEROS', 'TERCERO'];
+const THIRD_PARTY_MARKERS = ['A TERCEROS', 'DE TERCEROS', 'TERCEROS', 'TERCERO'];
+
+/**
+ * Markers are matched on whole words.
+ *
+ * `TERCERO` as a bare substring made `PAGO PROVEEDOR TERCEROSOFT SPA` a
+ * third-party transfer.
+ */
+function mentionsWord(text: string, markers: readonly string[]): boolean {
+  const normalized = normalizeDescription(text);
+  return markers.some((marker) => {
+    const needle = normalizeDescription(marker);
+    const index = normalized.indexOf(needle);
+    if (index < 0) return false;
+    const before = index === 0 ? ' ' : normalized[index - 1];
+    const after = normalized[index + needle.length] ?? ' ';
+    return before === ' ' && (after === ' ' || after === undefined);
+  });
+}
 
 /**
  * Shortest bank reference worth treating as evidence.
@@ -126,18 +153,26 @@ interface Candidate {
  * is loaded.
  *
  * Pairs are accepted only when the choice is *mutual*: the inflow is this
- * outflow's single best candidate and the outflow is that inflow's. The
- * previous greedy pass walked the outflows in order and consumed the first
- * acceptable inflow, which had two consequences. It could cross a pair — with
- * two $100.000 transfers on consecutive days it might match day 10 to day 11
- * and day 11 to day 10, both at a one-day gap, when the right answer was two
- * same-day pairs. And when two candidates were genuinely indistinguishable it
- * still committed to one of them, tie-broken by fingerprint, which is a coin
- * flip presented as a finding — and `applyTransferMatch` would then write that
- * arbitrary counterpart into the activity's metadata.
+ * outflow's single best candidate and the outflow is that inflow's. A greedy
+ * pass walking the outflows in order could cross a pair — two $100.000
+ * transfers on consecutive days matched day 10 to day 11 and day 11 to day 10 —
+ * and, worse, committed to one of two indistinguishable candidates, tie-broken
+ * by fingerprint. A coin flip presented as a finding, which
+ * `applyTransferMatch` then wrote into the activity's metadata.
  *
- * Indistinguishable groups are now reported as {@link AmbiguousTransfer} with
- * every candidate attached, and no pair at all.
+ * Mutual choice alone is not enough either. Preferences shift as legs are
+ * consumed: once one pair is settled, two legs that each had two candidates can
+ * be left with only each other, and computing preferences once abandoned those.
+ * Measured against the greedy pass it replaced, a single round found fewer
+ * pairs in roughly half of small multi-leg scenarios — and an unmatched
+ * transfer inflates income and expenses at the same time, which is the whole
+ * reason this module exists. So the rounds repeat until one settles nothing new.
+ *
+ * What is left after that is a genuine knot: legs whose candidates the data
+ * cannot separate. Each connected group is reported once as an
+ * {@link AmbiguousTransfer} — every leg and every pairing still open — rather
+ * than as one finding per leg listing counterparts that other findings already
+ * claimed.
  */
 export function matchTransfers(
   scoped: readonly ScopedTransaction[],
@@ -152,7 +187,7 @@ export function matchTransfers(
     byDateThenFingerprint,
   );
 
-  const candidates: Candidate[] = [];
+  let candidates: Candidate[] = [];
   for (const outflow of outflows) {
     for (const inflow of inflows) {
       if (inflow.accountId === outflow.accountId) continue;
@@ -164,73 +199,124 @@ export function matchTransfers(
     }
   }
 
-  const byOutflow = groupBy(candidates, (c) => key(c.outflow));
-  const byInflow = groupBy(candidates, (c) => key(c.inflow));
-
   const matches: TransferMatch[] = [];
-  const ambiguous: AmbiguousTransfer[] = [];
-  const resolved = new Set<string>();
+  const taken = new Set<string>();
 
-  for (const outflow of outflows) {
-    const group = byOutflow.get(key(outflow));
-    if (!group || group.length === 0) continue;
+  for (;;) {
+    const open = candidates.filter(
+      (c) => !taken.has(key(c.outflow)) && !taken.has(key(c.inflow)),
+    );
+    if (open.length === 0) break;
 
-    const best = pickBest(group);
-    if (!best) {
-      ambiguous.push(describeAmbiguity(outflow, group.map((c) => c.inflow)));
-      resolved.add(key(outflow));
-      continue;
+    const byOutflow = groupBy(open, (c) => key(c.outflow));
+    const byInflow = groupBy(open, (c) => key(c.inflow));
+
+    const settled: Candidate[] = [];
+    for (const [outflowKey, group] of byOutflow) {
+      const best = pickBest(group);
+      if (!best) continue;
+      const rivals = byInflow.get(key(best.inflow));
+      const bestForInflow = rivals ? pickBest(rivals) : undefined;
+      if (!bestForInflow || key(bestForInflow.outflow) !== outflowKey) continue;
+      settled.push(best);
     }
 
-    const rival = byInflow.get(key(best.inflow));
-    const bestForInflow = rival ? pickBest(rival) : undefined;
-    if (!bestForInflow || key(bestForInflow.outflow) !== key(outflow)) {
-      // Either the inflow cannot choose between its own suitors, or it prefers
-      // a different outflow. Both mean this pairing is not settled.
-      ambiguous.push(describeAmbiguity(outflow, group.map((c) => c.inflow)));
-      resolved.add(key(outflow));
-      continue;
-    }
+    if (settled.length === 0) break;
 
-    matches.push({
-      outflow,
-      inflow: best.inflow,
-      confidence: resolveConfidence({
-        gapDays: best.gapDays,
-        confirmWindowDays,
-        evidence: best.evidence,
-      }),
-      gapDays: best.gapDays,
-      reason: buildReason({ gapDays: best.gapDays, evidence: best.evidence }),
-    });
-    resolved.add(key(outflow));
-    resolved.add(key(best.inflow));
-  }
-
-  // An inflow several outflows want, none of which won it, is also unresolved
-  // and the user should see it from that side too.
-  for (const inflow of inflows) {
-    if (resolved.has(key(inflow))) continue;
-    const group = byInflow.get(key(inflow));
-    if (!group || group.length < 2) continue;
-    if (group.every((c) => resolved.has(key(c.outflow)) && !isMatched(matches, c))) {
-      ambiguous.push(describeAmbiguity(inflow, group.map((c) => c.outflow)));
+    // Sorted so the accepted set does not depend on Map iteration order when two
+    // settlements collide on a leg — they cannot, being mutual, but the sort
+    // keeps that a property of the code rather than of the input's order.
+    for (const candidate of [...settled].sort(byQuality)) {
+      if (taken.has(key(candidate.outflow)) || taken.has(key(candidate.inflow))) continue;
+      taken.add(key(candidate.outflow));
+      taken.add(key(candidate.inflow));
+      matches.push({
+        outflow: candidate.outflow,
+        inflow: candidate.inflow,
+        confidence: resolveConfidence({
+          gapDays: candidate.gapDays,
+          confirmWindowDays,
+          evidence: candidate.evidence,
+        }),
+        gapDays: candidate.gapDays,
+        reason: buildReason({ gapDays: candidate.gapDays, evidence: candidate.evidence }),
+      });
     }
   }
+
+  candidates = candidates.filter(
+    (c) => !taken.has(key(c.outflow)) && !taken.has(key(c.inflow)),
+  );
 
   return {
-    matches,
-    ambiguous,
+    matches: matches.sort(
+      (a, b) =>
+        byDateThenFingerprint(a.outflow, b.outflow) || compareKeys(a.inflow, b.inflow),
+    ),
+    ambiguous: knots(candidates),
     matchedFingerprints: new Set(
       matches.flatMap((m) => [m.outflow.transaction.fingerprint, m.inflow.transaction.fingerprint]),
     ),
   };
 }
 
-function isMatched(matches: readonly TransferMatch[], candidate: Candidate): boolean {
-  return matches.some(
-    (m) => key(m.outflow) === key(candidate.outflow) && key(m.inflow) === key(candidate.inflow),
-  );
+/**
+ * Group the leftover candidates into connected knots.
+ *
+ * One finding per knot, not per leg. Reporting each leg separately produced
+ * three findings for one two-outflows-one-inflow tangle, one of them offering a
+ * single counterpart under the words "there are 1 equally plausible
+ * candidates".
+ */
+function knots(candidates: readonly Candidate[]): AmbiguousTransfer[] {
+  const component = new Map<string, string>();
+  const find = (k: string): string => {
+    const parent = component.get(k);
+    if (parent === undefined || parent === k) return k;
+    const root = find(parent);
+    component.set(k, root);
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) component.set(rootA < rootB ? rootB : rootA, rootA < rootB ? rootA : rootB);
+  };
+
+  for (const candidate of candidates) {
+    component.set(key(candidate.outflow), component.get(key(candidate.outflow)) ?? key(candidate.outflow));
+    component.set(key(candidate.inflow), component.get(key(candidate.inflow)) ?? key(candidate.inflow));
+    union(key(candidate.outflow), key(candidate.inflow));
+  }
+
+  const grouped = new Map<string, Candidate[]>();
+  for (const candidate of candidates) {
+    const root = find(key(candidate.outflow));
+    const bucket = grouped.get(root);
+    if (bucket) bucket.push(candidate);
+    else grouped.set(root, [candidate]);
+  }
+
+  return [...grouped.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([, group]) => {
+      const movements = new Map<string, ScopedTransaction>();
+      for (const candidate of group) {
+        movements.set(key(candidate.outflow), candidate.outflow);
+        movements.set(key(candidate.inflow), candidate.inflow);
+      }
+      const legs = [...movements.values()].sort(byDateThenFingerprint);
+      return {
+        movements: legs,
+        candidates: [...group]
+          .sort(byQuality)
+          .map((c) => ({ outflow: c.outflow, inflow: c.inflow, gapDays: c.gapDays })),
+        reason:
+          `${legs.length} movimientos del mismo monto en cuentas distintas admiten ` +
+          `${group.length} emparejamientos y nada en los datos permite decidir entre ellos. ` +
+          'Elígelo tú.',
+      };
+    });
 }
 
 /**
@@ -254,18 +340,7 @@ function pickBest(group: readonly Candidate[]): Candidate | undefined {
 function byQuality(a: Candidate, b: Candidate): number {
   if (a.rank !== b.rank) return b.rank - a.rank;
   if (a.gapDays !== b.gapDays) return a.gapDays - b.gapDays;
-  return compareKeys(a.inflow, b.inflow) || compareKeys(a.outflow, b.outflow);
-}
-
-function describeAmbiguity(
-  movement: ScopedTransaction,
-  candidates: readonly ScopedTransaction[],
-): AmbiguousTransfer {
-  return {
-    movement,
-    candidates: [...candidates],
-    reason: `Hay ${candidates.length} candidatos igual de plausibles (mismo monto, cuentas distintas, fechas cercanas) y nada en los datos permite decidir cuál corresponde. Elígelo tú.`,
-  };
+  return compareKeys(a.outflow, b.outflow) || compareKeys(a.inflow, b.inflow);
 }
 
 function groupBy<T>(items: readonly T[], keyOf: (item: T) => string): Map<string, T[]> {
@@ -292,33 +367,46 @@ interface Evidence {
 }
 
 function scoreEvidence(outflow: ScopedTransaction, inflow: ScopedTransaction): Evidence {
-  const outText = foldCase(outflow.transaction.description);
-  const inText = foldCase(inflow.transaction.description);
+  // Normalised, not merely case-folded. The rule engine compares against
+  // `normalizedDescription`, and matching raw text here meant a double space —
+  // routine in exports derived from fixed-width reports — silently downgraded a
+  // confirmed own-account transfer to a suggestion.
+  const outText = normalizeDescription(outflow.transaction.description);
+  const inText = normalizeDescription(inflow.transaction.description);
 
   const transferWording =
-    TRANSFER_MARKERS.some((marker) => outText.includes(marker)) ||
-    TRANSFER_MARKERS.some((marker) => inText.includes(marker));
+    mentionsWord(outText, TRANSFER_MARKERS) || mentionsWord(inText, TRANSFER_MARKERS);
 
   const ownAccountWording =
-    OWN_ACCOUNT_MARKERS.some((marker) => outText.includes(marker)) ||
-    OWN_ACCOUNT_MARKERS.some((marker) => inText.includes(marker));
+    mentionsWord(outText, OWN_ACCOUNT_MARKERS) || mentionsWord(inText, OWN_ACCOUNT_MARKERS);
 
   const outInstitution = institutionWords(outflow.transaction.sourceInstitution);
   const inInstitution = institutionWords(inflow.transaction.sourceInstitution);
   const institutionMentioned =
-    inInstitution.some((word) => outText.includes(word)) ||
-    outInstitution.some((word) => inText.includes(word));
+    inInstitution.some((word) => outText.includes(normalizeDescription(word))) ||
+    outInstitution.some((word) => inText.includes(normalizeDescription(word)));
 
-  const reference = outflow.transaction.reference ?? '';
   const sharedReference =
-    reference.length >= MIN_MEANINGFUL_REFERENCE &&
-    reference === inflow.transaction.reference;
+    isMeaningfulReference(outflow.transaction.reference) &&
+    outflow.transaction.reference === inflow.transaction.reference;
 
   const thirdParty =
-    THIRD_PARTY_MARKERS.some((marker) => outText.includes(marker)) ||
-    THIRD_PARTY_MARKERS.some((marker) => inText.includes(marker));
+    mentionsWord(outText, THIRD_PARTY_MARKERS) || mentionsWord(inText, THIRD_PARTY_MARKERS);
 
   return { transferWording, ownAccountWording, institutionMentioned, sharedReference, thirdParty };
+}
+
+/**
+ * Is this reference distinctive enough to be evidence?
+ *
+ * Length alone was not the test it claimed to be: Chilean statements
+ * zero-pad correlativos, so `000001` cleared a six-character floor and
+ * auto-confirmed a cash withdrawal against an unrelated deposit. The padding
+ * carries no information, so it does not count toward the length.
+ */
+function isMeaningfulReference(reference: string | undefined): boolean {
+  const significant = String(reference ?? '').trim().replace(/^0+/, '');
+  return significant.length >= MIN_MEANINGFUL_REFERENCE;
 }
 
 /**
@@ -328,7 +416,14 @@ function scoreEvidence(outflow: ScopedTransaction, inflow: ScopedTransaction): E
  * {@link resolveConfidence} does on the evidence itself.
  */
 function evidenceRank(evidence: Evidence): number {
-  if (evidence.thirdParty) return 0;
+  // Third-party wording is deliberately absent: this ranks candidates, and
+  // flattening every candidate of a leg to the same tier is precisely what
+  // `pickBest` reads as "indistinguishable". A matching nine-digit reference
+  // was being discarded and the pair put to a coin flip against an unrelated
+  // deposit. `resolveConfidence` still refuses to confirm it, which is the part
+  // that was worth doing — in Chile, moving money to your own account at
+  // another bank goes through the "a terceros" flow, so the wording is weak
+  // evidence against, not proof.
   if (evidence.sharedReference) return 3;
   if (evidence.transferWording && (evidence.ownAccountWording || evidence.institutionMentioned)) {
     return 2;
@@ -440,6 +535,8 @@ export function applyTransferMatch(
 
 /** True when a single row looks like a transfer even without a counterpart. */
 export function looksLikeTransfer(transaction: NormalizedTransaction): boolean {
-  const text = foldCase(transaction.description);
-  return TRANSFER_MARKERS.some((marker) => text.includes(marker)) && sign(transaction.amount) !== 0;
+  return (
+    mentionsWord(normalizeDescription(transaction.description), TRANSFER_MARKERS) &&
+    sign(transaction.amount) !== 0
+  );
 }

@@ -51,81 +51,102 @@ export function matchCardPayments(
 ): CardPaymentMatch[] {
   const windowDays = options.windowDays ?? DEFAULT_WINDOW;
 
-  const cashOutflows = scoped.filter(
-    (s) =>
-      s.transaction.direction === Direction.out &&
-      !isCardProduct(s) &&
-      mentionsCardPayment(s.transaction),
-  );
+  const cashOutflows = scoped
+    .filter(
+      (s) =>
+        s.transaction.direction === Direction.out &&
+        !isCardProduct(s) &&
+        mentionsCardPayment(s.transaction),
+    )
+    .sort(byDate);
 
-  const cardCredits = scoped.filter(
-    (s) => s.transaction.direction === Direction.in && isCardProduct(s),
-  );
+  const cardCredits = scoped
+    .filter((s) => s.transaction.direction === Direction.in && isCardProduct(s))
+    .sort(byDate);
 
-  const used = new Set<string>();
+  interface Pairing {
+    payment: ScopedTransaction;
+    credit: ScopedTransaction;
+    gapDays: number;
+  }
+
+  const pairings: Pairing[] = [];
+  for (const payment of cashOutflows) {
+    for (const credit of cardCredits) {
+      if (!equals(abs(credit.transaction.amount), abs(payment.transaction.amount))) continue;
+      const gapDays = Math.abs(daysBetween(payment.transaction.date, credit.transaction.date));
+      if (gapDays > windowDays) continue;
+      pairings.push({ payment, credit, gapDays });
+    }
+  }
+
+  const taken = new Set<string>();
   const matches: CardPaymentMatch[] = [];
 
-  for (const payment of [...cashOutflows].sort(byDate)) {
-    const candidates = cardCredits
-      .filter((credit) => !used.has(identity(credit)))
-      .filter((credit) => equals(abs(credit.transaction.amount), abs(payment.transaction.amount)))
-      .filter(
-        (credit) =>
-          Math.abs(daysBetween(payment.transaction.date, credit.transaction.date)) <= windowDays,
-      )
-      .sort(
-        (a, b) =>
-          Math.abs(daysBetween(payment.transaction.date, a.transaction.date)) -
-          Math.abs(daysBetween(payment.transaction.date, b.transaction.date)) ||
-          (identity(a) < identity(b) ? -1 : 1),
+  // Same shape as the transfer matcher, for the same reason. Walking the
+  // payments in order and taking the nearest free credit let a payment from the
+  // 10th claim a credit dated the 15th while another payment sat on the 15th
+  // itself — and once that credit was consumed the second payment had a single
+  // candidate left, so it *looked* unambiguous. The choice made by one leg was
+  // manufacturing certainty for the next.
+  for (;;) {
+    const open = pairings.filter(
+      (p) => !taken.has(identity(p.payment)) && !taken.has(identity(p.credit)),
+    );
+    if (open.length === 0) break;
+
+    const settled: Pairing[] = [];
+    for (const payment of cashOutflows) {
+      if (taken.has(identity(payment))) continue;
+      const best = bestPairing(open.filter((p) => identity(p.payment) === identity(payment)));
+      if (!best) continue;
+      const bestForCredit = bestPairing(
+        open.filter((p) => identity(p.credit) === identity(best.credit)),
       );
+      if (!bestForCredit || identity(bestForCredit.payment) !== identity(payment)) continue;
+      settled.push(best);
+    }
 
-    const counterpart = candidates[0];
-    const runnerUp = candidates[1];
-    // Two card credits the same distance away are indistinguishable. Naming one
-    // of them is a coin flip dressed as evidence — and it is shown to the user
-    // as the reason a movement was reclassified.
-    const indistinguishable =
-      counterpart !== undefined &&
-      runnerUp !== undefined &&
-      Math.abs(daysBetween(payment.transaction.date, counterpart.transaction.date)) ===
-        Math.abs(daysBetween(payment.transaction.date, runnerUp.transaction.date));
+    if (settled.length === 0) break;
 
-    if (counterpart && !indistinguishable) {
-      used.add(identity(counterpart));
+    for (const pairing of settled) {
+      if (taken.has(identity(pairing.payment)) || taken.has(identity(pairing.credit))) continue;
+      taken.add(identity(pairing.payment));
+      taken.add(identity(pairing.credit));
       matches.push({
-        payment,
-        cardCredit: counterpart,
+        payment: pairing.payment,
+        cardCredit: pairing.credit,
         confidence: Confidence.confirmed,
         reason:
           'Cargo en cuenta y abono en la tarjeta por el mismo monto, con glosa de pago de tarjeta.',
       });
-      continue;
     }
+  }
 
-    if (indistinguishable) {
-      // The payment itself is not in doubt — the glosa says so — only which
-      // credit it settles.
-      matches.push({
-        payment,
-        confidence: Confidence.suggested,
-        reason: `Hay ${candidates.length} abonos en la tarjeta igual de cercanos y del mismo monto: no se puede decir cuál corresponde a este pago.`,
-      });
-      continue;
-    }
-
+  // Whatever is left. A payment with candidates it cannot choose between is
+  // still a payment — the glosa says so — it just has no named counterpart.
+  for (const payment of cashOutflows) {
+    if (taken.has(identity(payment))) continue;
+    const open = pairings.filter(
+      (p) => identity(p.payment) === identity(payment) && !taken.has(identity(p.credit)),
+    );
     matches.push({
       payment,
       confidence: Confidence.suggested,
       reason:
-        'La glosa indica un pago de tarjeta, pero no se importó el estado de cuenta que lo recibe.',
+        open.length > 0
+          ? `Hay ${open.length} abonos en la tarjeta igual de cercanos y del mismo monto: no se puede decir cuál corresponde a este pago.`
+          : 'La glosa indica un pago de tarjeta, pero no se importó el estado de cuenta que lo recibe.',
     });
   }
 
-  // A card-side credit with no cash counterpart is still a payment received —
-  // the money came from somewhere, it just was not imported.
+  // A card credit nothing on the cash side could be about. `pairings` is
+  // consulted rather than `taken`: a credit left unpaired *because* the payment
+  // beside it was undecidable is not a credit whose originating charge is
+  // missing, and saying so double-counted every ambiguous payment.
   for (const credit of cardCredits) {
-    if (used.has(identity(credit))) continue;
+    if (taken.has(identity(credit))) continue;
+    if (pairings.some((p) => identity(p.credit) === identity(credit))) continue;
     if (!mentionsCardSidePayment(credit.transaction)) continue;
     matches.push({
       payment: credit,
@@ -137,20 +158,20 @@ export function matchCardPayments(
   return matches;
 }
 
-/**
- * Did this row come off a card statement?
- *
- * Asked of the parser that produced it, not of its classification. Keying on
- * the kind was a proxy that held only while every card credit was classified
- * `credit_card_payment`: once an unrecognised credit became `unknown`, the
- * rows this matcher exists to resolve were the exact rows it stopped being
- * shown. The parser id is recorded on every imported movement and survives the
- * round trip through the host, so the product is a fact here rather than an
- * inference.
- *
- * The kind stays as the fallback for a row whose parser is not in the registry
- * — an older bundle, a profile since renamed — where a guess is all there is.
- */
+/** Closest credit, or `undefined` when two are the same distance away. */
+function bestPairing<T extends { gapDays: number; credit: ScopedTransaction }>(
+  group: readonly T[],
+): T | undefined {
+  const sorted = [...group].sort(
+    (a, b) => a.gapDays - b.gapDays || (identity(a.credit) < identity(b.credit) ? -1 : 1),
+  );
+  const best = sorted[0];
+  const runnerUp = sorted[1];
+  if (!best) return undefined;
+  if (runnerUp && runnerUp.gapDays === best.gapDays) return undefined;
+  return best;
+}
+
 function isCardProduct(scoped: ScopedTransaction): boolean {
   const product = getParser(scoped.transaction.sourceParser)?.profile.product;
   if (product !== undefined) {
