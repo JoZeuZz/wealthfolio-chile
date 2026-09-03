@@ -109,12 +109,29 @@ export interface ChileMetadata {
    * Absent on metadata written before schema 3.
    */
   proj?: string;
+  /**
+   * The activity type was chosen for what the destination account accepts, not
+   * for what the movement is.
+   *
+   * Without it a read-back sees a type that does not match `kind`, decides the
+   * user reclassified the row, and quietly replaces our honest `unknown` with
+   * the host's coarser reading.
+   */
+  subst?: true;
 }
 
 export interface MapToActivityOptions {
   accountId: string;
   runId: string;
   weakFingerprint?: string;
+  /**
+   * Destination account type, when the caller knows it.
+   *
+   * Wealthfolio refuses several activity types on a credit-card account, and
+   * refuses the whole batch with them. Without this the mapping produces the
+   * type that best describes the movement and the host rejects the import.
+   */
+  accountType?: HostAccountType;
 }
 
 /**
@@ -130,7 +147,10 @@ export function toActivityCreate(
   transaction: EnrichedTransaction | NormalizedTransaction,
   options: MapToActivityOptions,
 ): ActivityCreate {
-  const { activityType, subtype } = resolveActivityType(transaction);
+  const { activityType, subtype, substituted } = resolveActivityType(
+    transaction,
+    options.accountType !== undefined ? { accountType: options.accountType } : {},
+  );
   const magnitude = abs(transaction.amount);
 
   const comment = buildComment(transaction);
@@ -147,6 +167,7 @@ export function toActivityCreate(
     runId: options.runId,
     kind: transaction.kind,
     dir: transaction.direction,
+    ...(substituted ? { subst: true as const } : {}),
     ...(transaction.category ? { cat: transaction.category } : {}),
     // Redacted. The merchant is a derived convenience, and one derived from a
     // glosa like `TARJETA 4051 2233 4455 6677 SUPERMERCADO` carried the card
@@ -200,6 +221,56 @@ export function toActivityCreateBatch(
 interface ResolvedType {
   activityType: ActivityType;
   subtype?: string;
+  /**
+   * The natural type was one the destination account refuses, and this is the
+   * nearest thing it accepts.
+   *
+   * Recorded so a later read does not mistake the substitution for the user
+   * having reclassified the movement.
+   */
+  substituted?: true;
+}
+
+/** What the destination account can hold, as far as the mapping cares. */
+export type HostAccountType = 'CASH' | 'CREDIT_CARD' | 'SECURITIES' | 'CRYPTOCURRENCY';
+
+/**
+ * Activity types Wealthfolio accepts on a credit-card account.
+ *
+ * From `account_activity_validation_message` in
+ * `crates/core/src/activities/activities_service.rs` at v3.7.0. Anything else
+ * is refused with `Invalid data: <TYPE> activities are not supported for credit
+ * card accounts` — and because `saveMany` validates the whole request before
+ * writing anything, one refused row costs its entire batch. Observed against a
+ * real host: a CMR statement with a single unrecognised credit imported zero of
+ * its five movements.
+ */
+const CREDIT_CARD_ALLOWED: ReadonlySet<string> = new Set([
+  'WITHDRAWAL',
+  'TRANSFER_IN',
+  'CREDIT',
+  'FEE',
+  'INTEREST',
+]);
+
+/**
+ * The nearest type a credit-card account will accept.
+ *
+ * Substitution is not a lie here: `CREDIT` without a subtype is the host's own
+ * vocabulary for "money arrived, unspecified", which is exactly what is known
+ * about a card credit nobody could read. What must not happen is the
+ * substitution erasing what *was* known, so `metadata.kind` keeps the real
+ * classification and `metadata.subst` records that the type was chosen for the
+ * account rather than for the movement.
+ */
+function substituteForCreditCard(natural: ResolvedType, direction: Direction): ResolvedType {
+  if (CREDIT_CARD_ALLOWED.has(natural.activityType)) return natural;
+  // A tax charged to a card is a charge, not a purchase: `FEE` is allowed and
+  // says more than `WITHDRAWAL` would.
+  if (natural.activityType === 'TAX') return { activityType: 'FEE', substituted: true };
+  return direction === Direction.out
+    ? { activityType: 'WITHDRAWAL', substituted: true }
+    : { activityType: 'CREDIT', substituted: true };
 }
 
 /**
@@ -216,7 +287,21 @@ interface ResolvedType {
  *   out of every calculation until a human classifies it. That is precisely the
  *   behaviour we want for a row we could not read.
  */
-export function resolveActivityType(transaction: {
+export function resolveActivityType(
+  transaction: {
+    kind: TransactionKind;
+    direction: Direction;
+  },
+  options: { accountType?: HostAccountType } = {},
+): ResolvedType {
+  const natural = naturalActivityType(transaction);
+  if (options.accountType === 'CREDIT_CARD') {
+    return substituteForCreditCard(natural, transaction.direction);
+  }
+  return natural;
+}
+
+function naturalActivityType(transaction: {
   kind: TransactionKind;
   direction: Direction;
 }): ResolvedType {
@@ -612,6 +697,26 @@ function reconcileKind(
   const cached = (metadata.kind ?? TransactionKind.unknown) as TransactionKind;
   const implied = resolveActivityType({ kind: cached, direction });
   if (implied.activityType === activity.activityType) return cached;
+
+  // A recorded substitution explains the mismatch: the type was chosen for the
+  // account, not by the user. Only the type the substitution itself would have
+  // produced counts — anything else is a real edit and the host still wins.
+  if (metadata.subst) {
+    // Checked against the direction the row *was written with*, not the one the
+    // stored type implies now. Reading the direction back from the activity
+    // makes every outflow on a card look like the substitution that produces
+    // `WITHDRAWAL`, so a genuine reclassification would be waved through as
+    // ours.
+    const written = metadata.dir === Direction.in || metadata.dir === Direction.out
+      ? metadata.dir
+      : direction;
+    const forAccount = resolveActivityType(
+      { kind: cached, direction: written },
+      { accountType: 'CREDIT_CARD' },
+    );
+    if (forAccount.activityType === activity.activityType) return cached;
+  }
+
   return kindFromActivityType(activity.activityType, activity.subtype);
 }
 

@@ -1,5 +1,5 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
-import { toActivityCreate } from '../core/mapping/activities';
+import { toActivityCreate, type HostAccountType } from '../core/mapping/activities';
 import { createRedactingLogger, sanitizeFileName } from '../core/privacy';
 import type { PreparedImport, PreviewRow } from '../core/pipeline';
 import { ImportHistory, newRunId, type ImportRun } from './import-history';
@@ -20,6 +20,16 @@ export interface RunImportInput {
   prepared: PreparedImport;
   accountId: string;
   accountName: string;
+  /**
+   * Destination account type.
+   *
+   * Wealthfolio refuses several activity types on a credit-card account and
+   * refuses the whole batch with them, so the mapping needs to know where the
+   * rows are going. Optional only so a caller without the account list still
+   * works; omitting it means the natural type is used, which is right for a
+   * cash account and rejected for a card.
+   */
+  accountType?: HostAccountType;
   /** Rows already filtered by the preview; only `willImport` rows are written. */
   verboseLogging?: boolean;
 }
@@ -93,6 +103,7 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
       accountId,
       runId,
       weakFingerprint: row.weakFingerprint,
+      ...(input.accountType !== undefined ? { accountType: input.accountType } : {}),
     }),
   );
 

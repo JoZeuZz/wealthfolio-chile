@@ -143,6 +143,7 @@ export function ImportWizardPage() {
         prepared,
         accountId: account.id,
         accountName: account.name,
+        accountType: accountFacts(account).accountType,
         verboseLogging: settings.verboseLogging,
       });
 

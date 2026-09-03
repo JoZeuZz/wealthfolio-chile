@@ -131,6 +131,12 @@ export function DashboardPage() {
           <Button variant="outline" size="sm" onClick={() => setMonth(addMonthsToKey(month, 1))}>
             →
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => ctx.api.navigation.navigate('/addons/wealthfolio-chile/conciliacion')}
+          >
+            Conciliación
+          </Button>
           <Button onClick={() => ctx.api.navigation.navigate('/addons/wealthfolio-chile/importar')}>
             Importar cartola
           </Button>
