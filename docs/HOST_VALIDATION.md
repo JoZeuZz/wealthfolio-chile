@@ -723,3 +723,109 @@ En la UI, el número de cuenta de la cartola se muestra enmascarado (`•••�
 | Decisión D14 sobre `unknown` | Necesita cartolas reales |
 | Límite exacto de bytes de `storage.set` | El esquema particionado nunca se acercó; medirlo exige forzar el fallo a propósito |
 | Spending Tracker nativo | Mostró $0 con nuestras actividades; entender por qué es trabajo aparte |
+
+---
+
+# Sesión 2 — Wealthfolio 3.7.0 (2026-09-03)
+
+La sesión de arriba corrió contra 3.6.2. Ésta es la validación del baseline
+actual, con el addon ya en SDK 3.7.0 y `minWealthfolioVersion: 3.7.0`.
+
+## Entorno
+
+| Dato | Valor |
+| --- | --- |
+| Imagen | `wealthfolio/wealthfolio:3.7.0` |
+| Estado | `Up (healthy)`, `GET /api/v1/accounts` → 200 |
+| Addon | `wealthfolio-chile`, `sdkVersion 3.7.0`, `minWealthfolioVersion 3.7.0`, `enabled: true` |
+| Rutas registradas | panel, importar, importaciones, conciliación |
+| Datos | exclusivamente sintéticos |
+
+El overlay de desarrollo (`infra/compose.dev.yml`) se usó para saltarse el muro
+de login. **Nunca lo había arrancado nadie**: `WF_AUTH_REQUIRED=false` no apaga
+la autenticación —upstream la deriva del hash de contraseña— así que la auth
+quedaba encendida, su propio CORS `*` chocaba con ella y el contenedor entraba
+en bucle de panic sin llegar a escuchar. Corregido y fijado por test.
+
+## Contrato reverificado por HTTP
+
+| Afirmación | Resultado |
+| --- | --- |
+| `metadata` como objeto | **422** `invalid type: map, expected a string` — la asimetría de 3.6.2 sigue igual |
+| `metadata` como string | 200; la respuesta ya devuelve el blob **parseado** |
+| Desfase de zona horaria en filtros de fecha | **sigue**: una actividad del 2026-09-01 sólo aparece pidiendo la ventana `2026-08-31` |
+| `isUserModified` tras un `PUT` | pasa de `false` a `true`, y **la metadata sobrevive intacta** |
+| `activities/link`, `/unlink`, `/transfer-pair` | siguen fuera del SDK publicado y del puente del sandbox |
+
+## Escenarios
+
+| # | Escenario | Resultado |
+| --- | --- | --- |
+| 1 | Importar cartola válida (5 movimientos) | 5 creados, 0 fallidos. Tipos: `DEPOSIT`, `WITHDRAWAL`, `TRANSFER_OUT` ×2, `FEE`. Metadata v3 con `proj` |
+| 2 | Reimportar el mismo archivo | 5/5 duplicados exactos, «Confirmar e importar 0 movimientos» deshabilitado |
+| 3 | Editar una actividad por API y reimportar | sólo esa fila baja a «Posible duplicado», con el motivo en texto visible y una alerta de resumen; las otras 4 siguen exactas |
+| 4 | Cartola con una fila ilegible | bloqueada. **33 actividades antes, 33 después**. El mensaje nombra la línea 6 y el problema real |
+| 5 | Cartola CLP en una cuenta USD | bloqueada, con las dos razones: la moneda que no coincide y el número de cuenta que no se pudo comprobar |
+| 6 | Devolución en tarjeta | `CREDIT` subtipo `REFUND` |
+| 7 | Pago recibido en tarjeta | `TRANSFER_IN`, `kind=credit_card_payment` |
+| 8 | Abono de tarjeta sin glosa reconocible | «Sin clasificar», con el motivo visible en la fila |
+| 9 | Dos monedas en el mismo mes | bloques separados por moneda, con la explicación de por qué no se suman |
+| 10 | Conciliación | 2 pares confirmados, 2 sugeridos, 0 ambiguos, 3 pagos de tarjeta — cada uno con su evidencia |
+
+## El error que sólo aparece contra un host
+
+El escenario 6 **falló la primera vez**:
+
+```
+Activity error: Invalid data: UNKNOWN activities are not supported for
+credit card accounts
+```
+
+Como `saveMany` valida el lote completo antes de escribir, esa única fila sin
+clasificar costó los cinco movimientos del estado de cuenta: **no se guardó
+ninguno**. Los 546 tests que había en ese momento pasaban, porque el doble de
+test no modelaba la regla — el mismo patrón que ya se había visto en la sesión
+anterior con `metadata` y con los filtros de fecha.
+
+La regla está en `account_activity_validation_message`
+(`crates/core/src/activities/activities_service.rs`): una cuenta `CREDIT_CARD`
+sólo acepta `WITHDRAWAL`, `TRANSFER_IN`, `CREDIT`, `FEE` e `INTEREST`.
+Corregido con sustitución por el tipo permitido más cercano, marca `subst` en la
+metadata para que la relectura no la confunda con una reclasificación, y un test
+que recorre todos los `TransactionKind` en ambas direcciones. Reverificado
+contra el host: los 5 movimientos entran.
+
+## Semántica del panel, en el host
+
+Con las cartolas de la sesión cargadas, octubre 2026 mostró:
+
+```
+INGRESOS DEL MES   $1.200.000
+GASTO NETO           $182.900     ($202.890 menos $19.990 devueltos)
+FLUJO DE CAJA      $1.017.100     (tasa de ahorro 85 %)
+
+Movimientos en USD
+INGRESOS           USD 1.500,00
+GASTO NETO           USD 250,00
+```
+
+y en categorías, `Compras $30.000` = 49.990 de compra menos 19.990 devueltos.
+
+## Privacidad en runtime
+
+Todas las líneas que el addon escribió en la consola del host durante la sesión
+son cifras:
+
+```
+[wealthfolio-chile] Importación completed: 5 creados, 0 fallidos, 0 duplicados, …
+[wealthfolio-chile] Importación failed: 0 creados, 5 fallidos, …
+```
+
+Ninguna glosa, ningún monto, ningún nombre de archivo. Cero errores de consola
+provenientes del addon.
+
+## Limpieza
+
+Se eliminaron las 14 actividades creadas por esta sesión (identificadas por su
+`runId`) y la cuenta `Validacion USD` creada para el escenario 5. Las 3
+actividades de octubre con `runId` de una sesión anterior se dejaron intactas.
