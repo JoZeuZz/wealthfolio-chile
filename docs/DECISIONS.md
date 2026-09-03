@@ -224,3 +224,70 @@ re-marcable con un clic.
 cartolas reales. Con perfiles bancarios todavía `pending-real-sample` ese número
 no existe, y sin él la comparación de arriba es especulación. Revisar después de
 [HOST_VALIDATION.md](HOST_VALIDATION.md) y de la calibración con cartolas reales.
+
+---
+
+## D15 — Flujo de caja y gasto se reportan por separado
+
+**Decisión.** `MonthlySummary` lleva dos vistas con nombres que no se pueden
+confundir: `cashInflows`/`cashOutflows`/`netCashFlow` y
+`grossSpending`/`refunds`/`netSpending`. `expenses` y `net` se eliminaron.
+
+**Por qué.** Con una compra de $100.000 y una devolución de $20.000, la tasa de
+ahorro salía **−400 %**: la devolución entraba en `income` porque `isIncome()`
+responde «¿esto sube la caja?», y sube. Ver
+[ADR 0006](adr/0006-caja-y-gasto.md).
+
+---
+
+## D16 — El orden de los campos de una fecha lo decide el archivo, no el perfil
+
+**Decisión.** Cuando una fila prueba el orden —un campo mayor que 12— ese orden
+gana al que declara el perfil, y sólo votan las filas que se convertirán en
+movimientos. Cuando nada lo prueba, se usa el del perfil y se advierte **una
+vez**, no por fila.
+
+**Por qué.** La advertencia por fila disparaba en cerca de la mitad de una
+cartola real, y una marca que aparece en la mitad de las filas deja de leerse.
+Y al revés: un banco que exporte `MM/DD` contra un perfil `DMY` producía fechas
+corridas en silencio, con huella distinta y gasto en el mes equivocado.
+
+---
+
+## D17 — La conciliación se revisa, no se aplica
+
+**Decisión.** La pantalla de conciliación muestra pares confirmados, sugeridos y
+nudos sin decidir, con su evidencia, y **no escribe nada**.
+
+**Por qué.** Aplicar un par exige reescribir dos actividades y registrar la
+contraparte en su metadata, y el Addon SDK 3.7.0 no expone `activities/link` ni
+`transfer-pair` — verificado contra el paquete publicado y contra el puente del
+sandbox, no de memoria. Construir un ledger de pares propio para tapar ese hueco
+es exactamente lo que descarta
+[ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md), porque habría que
+migrarlo el día que upstream exponga el real.
+
+**Qué falta para cambiarla.** Que el SDK exponga el enlace. La frontera está en
+`services/reconciliation.ts`.
+
+---
+
+## D18 — Sustituir el tipo de actividad antes que perder la importación
+
+**Decisión.** En una cuenta `CREDIT_CARD`, un tipo que Wealthfolio no acepta se
+sustituye por el permitido más cercano, y la metadata registra `subst` para que
+una relectura no lo confunda con una reclasificación del usuario.
+
+**Por qué.** Wealthfolio rechaza `UNKNOWN` en una cuenta de tarjeta y `saveMany`
+rechaza el lote entero con él: un abono sin clasificar costaba los cinco
+movimientos del estado de cuenta. Ver
+[HOST_VALIDATION.md](HOST_VALIDATION.md) § *Sesión 2*.
+
+**Por qué no es mentir.** `CREDIT` sin subtipo es el vocabulario del propio host
+para «entró dinero, sin especificar», que es exactamente lo que se sabe de ese
+abono. Lo que la sustitución no puede hacer es borrar lo que sí se sabía, y por
+eso `metadata.kind` conserva la clasificación real.
+
+**Alternativa descartada.** No escribir esas filas. Habría dejado el movimiento
+fuera de la contabilidad, que es el problema que este proyecto lleva toda la
+corrida evitando.
