@@ -405,6 +405,20 @@ function readAmount(input: ReadAmountInput): Money | null {
   return parsed.money;
 }
 
+/**
+ * One of the cargo/abono cells, or `null` when it holds no value.
+ *
+ * Empty, a lone dash and a bare zero are "nothing here". Anything else that
+ * will not parse is an *error*, and the exception is allowed through so the row
+ * mapper records it as a failed row.
+ *
+ * It used to be swallowed. A cargo cell holding an amount too large to
+ * represent exactly — `parseAmount` refuses those rather than rounding — came
+ * back as `null`, the row was counted as deliberately skipped, `validation.ok`
+ * stayed true and the import went ahead without it. A movement disappearing in
+ * silence is the failure this whole gate exists to prevent, and it was
+ * happening one `catch` away from it.
+ */
 function parseOptional(
   text: string,
   currency: string,
@@ -412,18 +426,14 @@ function parseOptional(
   warnings: TransactionWarning[],
 ): Money | null {
   if (text === '' || text === '-' || text === '0') return null;
-  try {
-    const parsed = parseAmount(text, { currency, format });
-    if (parsed.ambiguous) {
-      warnings.push({
-        code: 'ambiguous-amount-format',
-        message: 'El monto de esta fila admite más de una lectura.',
-      });
-    }
-    return parsed.money;
-  } catch {
-    return null;
+  const parsed = parseAmount(text, { currency, format });
+  if (parsed.ambiguous) {
+    warnings.push({
+      code: 'ambiguous-amount-format',
+      message: 'El monto de esta fila admite más de una lectura.',
+    });
   }
+  return parsed.money;
 }
 
 function readOptionalMoney(
