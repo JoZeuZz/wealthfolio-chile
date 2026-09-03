@@ -53,6 +53,12 @@ export default defineConfig({
     'process.env.NODE_ENV': JSON.stringify('production'),
   },
   build: {
+    // Pinned rather than inherited from Vite. Wealthfolio 3.7 supports Chrome/
+    // Edge/WebView2 107, Firefox 104 and Safari/WKWebView 16, and a future Vite
+    // default could raise that floor silently — the addon would then break on
+    // the oldest WebView Wealthfolio runs on, never on the machine that built
+    // it. See docs/addons/addon-migration-guide-v3.6-to-v3.7.md upstream.
+    target: ['chrome107', 'edge107', 'firefox104', 'safari16'],
     lib: {
       entry: 'src/addon.tsx',
       fileName: () => 'addon.js',
