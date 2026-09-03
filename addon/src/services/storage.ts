@@ -1,5 +1,3 @@
-import type { AddonContext } from '@wealthfolio/addon-sdk';
-
 /**
  * Typed persistence over the host's key/value store.
  *
@@ -24,11 +22,6 @@ export interface KeyValueStore {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
-}
-
-/** The subset of the addon context this layer needs. Keeps tests trivial. */
-export function storeFrom(ctx: AddonContext): KeyValueStore {
-  return ctx.api.storage;
 }
 
 /** Read and parse a JSON value, falling back when absent or corrupt. */
@@ -269,11 +262,17 @@ function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
-/** Storage keys used by the addon. Centralised so nothing collides. */
+/**
+ * Storage keys used by the addon. Centralised so nothing collides.
+ *
+ * Only keys something reads or writes. `wfcl.categories` and `wfcl.transfers`
+ * used to be reserved here for a category editor and for persisted
+ * reconciliation decisions; neither exists, and a reserved key is a promise the
+ * code does not keep. They come back when the feature does — with a schema
+ * version, which these never had.
+ */
 export const StorageKeys = {
   settings: 'wfcl.settings',
   rules: 'wfcl.rules',
-  categories: 'wfcl.categories',
   importHistory: 'wfcl.imports',
-  transferDecisions: 'wfcl.transfers',
 } as const;

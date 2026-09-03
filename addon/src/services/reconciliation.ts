@@ -6,11 +6,13 @@ import {
 } from '../core/reconcile/credit-card';
 import {
   matchTransfers,
+  type AmbiguousTransfer,
   type ScopedTransaction,
   type TransferMatch,
   type TransferMatchOptions,
 } from '../core/reconcile/transfers';
 import { loadImportedTransactions, type TransactionWindow } from './imported-transactions';
+import { loadSettings } from './settings';
 
 /**
  * The orchestration seam for multi-account reconciliation.
@@ -42,6 +44,14 @@ export interface ReconciliationOptions {
 
 export interface ReconciliationResult {
   transfers: TransferMatch[];
+  /**
+   * Movements with several equally plausible counterparts.
+   *
+   * Carried alongside the matches rather than folded into them: "we found the
+   * pair" and "we found four movements and cannot tell which two go together"
+   * are different answers, and only the first is a finding.
+   */
+  ambiguousTransfers: AmbiguousTransfer[];
   cardPayments: CardPaymentMatch[];
   /** Fingerprints on either leg of a transfer match. */
   matchedFingerprints: Set<string>;
@@ -70,23 +80,39 @@ export function reconcileScoped(
 
   return {
     transfers: transfers.matches,
+    ambiguousTransfers: transfers.ambiguous,
     cardPayments,
     matchedFingerprints: transfers.matchedFingerprints,
     considered: scoped.length,
   };
 }
 
-/** Read the window from the host, then run the pure matchers over it. */
+/**
+ * Read the window from the host, then run the pure matchers over it.
+ *
+ * The day window comes from the user's settings unless the caller overrides it.
+ * Without this the stored `transferWindowDays` was decoration: something the
+ * settings could hold and nothing would ever read.
+ */
 export async function reconcileWindow(
   ctx: AddonContext,
   window: TransactionWindow = {},
   options: ReconciliationOptions = {},
 ): Promise<ReconciliationResult> {
+  const settings = await loadSettings(ctx.api.storage);
+
   // Deliberately unscoped by account: a transfer has one leg in each of two
   // accounts, so restricting the read to one of them can never find a pair.
   const loaded = await loadImportedTransactions(ctx, {
     ...(window.fromDate ? { fromDate: window.fromDate } : {}),
     ...(window.toDate ? { toDate: window.toDate } : {}),
   });
-  return { ...reconcileScoped(loaded.scoped, options), truncated: loaded.truncated };
+
+  const effective: ReconciliationOptions = {
+    ...options,
+    transfers: { windowDays: settings.transferWindowDays, ...options.transfers },
+    cardPayments: { windowDays: settings.transferWindowDays, ...options.cardPayments },
+  };
+
+  return { ...reconcileScoped(loaded.scoped, effective), truncated: loaded.truncated };
 }
