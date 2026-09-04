@@ -173,6 +173,22 @@ export function multiplyInt(m: Money, factor: number): Money {
 }
 
 /** Plain decimal string with `.` as the decimal mark — the wire format. */
+/**
+ * The one spelling of an amount that two exports of the same movement share.
+ *
+ * `toDecimalString` encodes the scale, and the scale is a property of how the
+ * bank formatted the cell, not of the money: `1.234` and `1.234,00` parse to
+ * different scales and print as `1234` and `1234.00`. Anything that uses the
+ * decimal text as an *identity* — a fingerprint, a bucket key, a projection
+ * hash — has to strip that difference or the same movement gets two identities.
+ *
+ * Only trailing zeros go; a real fraction is real value and stays.
+ */
+export function canonicalAmountString(amount: Money): string {
+  const text = toDecimalString(amount);
+  return text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text;
+}
+
 export function toDecimalString(m: Money): string {
   const negative = m.minor < 0;
   const digits = Math.abs(m.minor).toString().padStart(m.scale + 1, '0');

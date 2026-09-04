@@ -1,5 +1,5 @@
 import { daysBetween } from '../dates';
-import { abs, toDecimalString } from '../money';
+import { abs, canonicalAmountString } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { NormalizedTransaction } from '../model/transaction';
 import { normalizeDescription } from '../text';
@@ -510,14 +510,12 @@ function buildReason(input: { gapDays: number; evidence: Evidence }): string {
  * has to agree with it or a legitimate pair silently stops being a candidate.
  */
 function amountKey(scoped: ScopedTransaction): string {
-  const magnitude = abs(scoped.transaction.amount);
-  const text = toDecimalString(magnitude);
   // Trailing fractional zeros are representation, not value: `200000` and
   // `200000.00` are the same money, and `equals` in `core/money` says so. The
   // key has to agree, or a legitimate pair lands in two buckets and stops being
-  // a candidate with nothing to show for it.
-  const normalized = text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text;
-  return `${magnitude.currency}:${normalized}`;
+  // a candidate with nothing to show for it. Same rule the fingerprints use.
+  const magnitude = abs(scoped.transaction.amount);
+  return `${magnitude.currency}:${canonicalAmountString(magnitude)}`;
 }
 
 function key(scoped: ScopedTransaction): string {

@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { buildDuplicateIndex, type ExistingMovement } from '../src/core/dedupe/classify';
+import {
+  buildDuplicateIndex,
+  classifyDuplicate,
+  type ExistingMovement,
+} from '../src/core/dedupe/classify';
 import { computeFingerprint, computeWeakFingerprint } from '../src/core/dedupe/fingerprint';
 import { toActivityCreate, readChileMetadata } from '../src/core/mapping/activities';
 import { money, toDecimalString } from '../src/core/money';
 import { TransactionKind } from '../src/core/model/kinds';
 import { prepareImport, setRowSelection, type PreparedImport } from '../src/core/pipeline';
 import { defaultRules } from '../src/core/rules/builtin';
-import { fromText, loadFixture } from './fixtures';
+import { fromText, loadFixture, makeTransaction } from './fixtures';
 
 const ACCOUNT = 'acct-banco-chile';
 const EMPTY_INDEX = buildDuplicateIndex([]);
@@ -292,5 +296,82 @@ describe('mapping to Wealthfolio activities', () => {
     expect(index.byFingerprint.has(computeFingerprint(row.transaction, { accountId: ACCOUNT }))).toBe(
       true,
     );
+  });
+});
+
+/**
+ * La huella no puede depender de cómo el banco escribió los decimales.
+ *
+ * `toDecimalString` codifica la escala: `{minor:-12345, scale:0}` da `-12345`
+ * y `{minor:-1234500, scale:2}` da `-12345.00`. Son el mismo dinero —`equals`
+ * de `core/money` lo dice— pero producían huellas distintas, fuerte **y**
+ * débil. El mismo período reexportado con `1.234,00` en vez de `1.234` volvía
+ * como `nuevo`, ni siquiera como posible duplicado, y se escribía entero por
+ * segunda vez con todas las filas marcadas por defecto.
+ *
+ * Es exactamente el escenario que el encabezado de `money.ts` describe: «la
+ * misma cuenta CLP exporta `1.234` en un informe y `1.234,00` en otro».
+ */
+describe('la huella ignora la escala decimal', () => {
+  const base = {
+    date: '2026-02-04',
+    description: 'COMPRA SUPERMERCADO LIDER',
+    kind: TransactionKind.expense,
+  };
+  const scope = { accountId: 'acc-1' };
+
+  /** The same movement, written with the scale a given export happened to use. */
+  const scaled = (minor: number, scale: number) => ({
+    ...makeTransaction({ ...base, amount: minor }),
+    amount: money(minor, scale, 'CLP'),
+  });
+
+  it('el mismo monto con dos escalas produce la misma huella fuerte', () => {
+    const withoutDecimals = scaled(-12345, 0);
+    const withDecimals = scaled(-1234500, 2);
+
+    expect(computeFingerprint(withDecimals, scope)).toBe(
+      computeFingerprint(withoutDecimals, scope),
+    );
+  });
+
+  it('y la misma huella débil', () => {
+    const withoutDecimals = scaled(-12345, 0);
+    const withDecimals = scaled(-1234500, 2);
+
+    expect(computeWeakFingerprint(withDecimals, scope)).toBe(
+      computeWeakFingerprint(withoutDecimals, scope),
+    );
+  });
+
+  it('un decimal que no es cero sigue siendo otro movimiento', () => {
+    const exact = scaled(-1234500, 2);
+    const cents = scaled(-1234550, 2);
+
+    expect(computeFingerprint(cents, scope)).not.toBe(computeFingerprint(exact, scope));
+  });
+
+  it('reimportar el mismo período con decimales no duplica nada', () => {
+    const asImported = scaled(-12345, 0);
+    const index = buildDuplicateIndex([
+      {
+        fingerprint: computeFingerprint(asImported, scope),
+        activityId: 'act-1',
+        date: base.date,
+        amount: money(-12345, 0, 'CLP'),
+        description: base.description,
+      },
+    ]);
+
+    const reExported = scaled(-1234500, 2);
+    const finding = classifyDuplicate(
+      { ...reExported, fingerprint: computeFingerprint(reExported, scope) },
+      index,
+      scope,
+      new Map(),
+    );
+
+    expect(finding.verdict).toBe('exact');
+    expect(finding.reason_code).toBe('exact-fingerprint');
   });
 });

@@ -1,5 +1,5 @@
 import { hashFields } from '../hash';
-import { toDecimalString } from '../money';
+import { canonicalAmountString } from '../money';
 import type { NormalizedTransaction } from '../model/transaction';
 import { descriptionKey } from '../text';
 
@@ -16,6 +16,14 @@ import { descriptionKey } from '../text';
  * description and the bank reference. Anything volatile (row number, file name,
  * running balance, our own classification) is excluded on purpose — including
  * them would make the same movement look new after a re-download.
+ *
+ * The amount goes in through `canonicalAmountString`, not `toDecimalString`.
+ * The latter encodes the scale, which is a fact about the export's formatting
+ * and not about the money: the same period re-exported with `1.234,00` instead
+ * of `1.234` hashed differently in *both* fingerprints, came back `nuevo`
+ * rather than even `probable`, and was written a second time in full with every
+ * row ticked. For a CLP amount with no fraction the two spellings are already
+ * identical, so hashes written by 0.1.x keep matching.
  */
 
 /** Bumped only when the fingerprint recipe changes; old rows keep their hash. */
@@ -45,7 +53,7 @@ export function computeFingerprint(
     FINGERPRINT_VERSION,
     scope.accountId,
     transaction.date,
-    toDecimalString(transaction.amount),
+    canonicalAmountString(transaction.amount),
     transaction.amount.currency,
     // The aggressive key absorbs the formatting drift banks introduce between
     // exports (extra spaces, changing card tails) while keeping the merchant.
@@ -71,7 +79,7 @@ export function computeWeakFingerprint(
     'weak',
     scope.accountId,
     transaction.date,
-    toDecimalString(transaction.amount),
+    canonicalAmountString(transaction.amount),
     transaction.amount.currency,
   ]);
 }

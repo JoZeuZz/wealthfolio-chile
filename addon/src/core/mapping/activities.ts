@@ -1,7 +1,7 @@
 import type { ActivityCreate, ActivityType } from '@wealthfolio/addon-sdk';
 import { hashFields } from '../hash';
 import { redactSensitive } from '../privacy';
-import { abs, money, negate, toDecimalString, type Money } from '../money';
+import { abs, canonicalAmountString, money, negate, toDecimalString, type Money } from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { EnrichedTransaction, NormalizedTransaction } from '../model/transaction';
 import { normalizeDescription } from '../text';
@@ -503,9 +503,7 @@ export interface ProjectableActivity extends HostActivityAmount {
  * would report an edit every time the backend changed how it formats decimals.
  */
 function canonicalAmountText(amount: string | number | null | undefined, currency: string): string {
-  const parsed = parseHostAmount(amount, currency);
-  const text = toDecimalString(abs(parsed));
-  return text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text;
+  return canonicalAmountString(abs(parseHostAmount(amount, currency)));
 }
 
 /**
