@@ -243,3 +243,40 @@ describe('quién decide el signo de una fila', () => {
     expect(prepared.validation.ok).toBe(false);
   });
 });
+
+/**
+ * Dos columnas que se robaban su rol.
+ *
+ * `mapColumns` corre en tres pasadas (exacta, prefijo, contiene) y cada rol se
+ * queda con la primera columna libre que encaja. Eso deja dos casos rotos:
+ *
+ * - `Fecha Contable` la reclama `postedDate` en la pasada exacta, así que
+ *   cuando en la pasada de prefijo le toca a `date` buscar `FECHA`, la columna
+ *   ya está tomada. Sin `date` la cabecera deja de ser plausible y la cartola
+ *   entera falla con `no-header` y un mensaje que habla de otra cosa.
+ * - `CUENTA` está en los sinónimos del rol `card`, así que una columna
+ *   `Cuenta Origen` —el número de cuenta de la contraparte— pasa a leerse como
+ *   el número de tarjeta del titular.
+ */
+describe('columnas que se quedan con el rol de otra', () => {
+  it('una cartola cuya única fecha es la contable se puede leer', () => {
+    const map = mapColumns(['Fecha Contable', 'Descripcion', 'Monto']);
+    expect(map.date).toBe(0);
+  });
+
+  it('pero con las dos, cada una se queda con la suya', () => {
+    const map = mapColumns(['Fecha', 'Fecha Contable', 'Descripcion', 'Monto']);
+    expect(map.date).toBe(0);
+    expect(map.postedDate).toBe(1);
+  });
+
+  it('una cuenta de contraparte no es el número de tarjeta', () => {
+    const map = mapColumns(['Fecha', 'Descripcion', 'Cuenta Origen', 'Monto']);
+    expect(map.card).toBeUndefined();
+  });
+
+  it('y una columna de tarjeta de verdad se sigue leyendo', () => {
+    const map = mapColumns(['Fecha', 'Descripcion', 'N Tarjeta', 'Monto']);
+    expect(map.card).toBe(2);
+  });
+});

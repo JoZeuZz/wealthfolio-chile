@@ -94,18 +94,6 @@ export class ImportHistory {
     return this.list.readAll();
   }
 
-  /**
-   * Has this exact file been imported into this account before?
-   *
-   * Only a hint for the wizard — the authoritative duplicate check is
-   * per-transaction, since a bank can re-export the same period with a
-   * different byte layout.
-   */
-  async findByFileHash(fileHash: string, accountId: string): Promise<ImportRun | undefined> {
-    const runs = await this.list.readAll();
-    return runs.find((run) => run.fileHash === fileHash && run.accountId === accountId);
-  }
-
   async clear(): Promise<void> {
     await this.list.clear();
   }

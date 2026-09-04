@@ -141,7 +141,10 @@ const SYNONYMS: Record<ColumnRole, string[]> = {
   operationType: ['TIPO', 'TIPO MOVIMIENTO', 'TIPO TRANSACCION', 'TIPO OPERACION', 'CANAL'],
   currency: ['MONEDA', 'DIVISA', 'CURRENCY'],
   installment: ['CUOTA', 'CUOTAS', 'N CUOTAS', 'NRO CUOTA', 'CUOTA DE'],
-  card: ['TARJETA', 'N TARJETA', 'NUMERO TARJETA', 'CUENTA', 'CARD'],
+  // `CUENTA` is deliberately absent. It made a `Cuenta Origen` column — the
+  // counterparty's *account* number — read as the cardholder's card number, and
+  // consumed the column for a role it does not play.
+  card: ['TARJETA', 'N TARJETA', 'NUMERO TARJETA', 'CARD'],
   category: ['CATEGORIA', 'RUBRO', 'CATEGORY'],
   directionFlag: ['TIPO CARGO ABONO', 'CARGO ABONO', 'D C', 'DEBE HABER'],
 };
@@ -217,6 +220,16 @@ export function mapColumns(headerRow: readonly string[]): ColumnMap {
         taken.add(index);
       }
     }
+  }
+
+  // A statement whose only date column is the posted one is still a statement.
+  // `postedDate` claims `FECHA CONTABLE` in the exact pass, so by the time
+  // `date` looks for `FECHA` in the prefix pass the column is taken — and
+  // without `date` the header stops being plausible and the whole file fails
+  // with `no-header` and a message about the wrong problem.
+  if (map.date === undefined && map.postedDate !== undefined) {
+    map.date = map.postedDate;
+    delete map.postedDate;
   }
 
   return map;

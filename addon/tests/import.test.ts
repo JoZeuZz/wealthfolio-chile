@@ -381,3 +381,48 @@ describe('la huella ignora la escala decimal', () => {
     expect(finding.reason_code).toBe('exact-fingerprint');
   });
 });
+
+/**
+ * `IVA` como subcadena.
+ *
+ * `builtin.impuestos` usaba `contains('IVA')` contra la glosa normalizada, así
+ * que `CLINICA PRIVADA`, `CONSULTA PRIVADA` o `UNIVERSIDAD` se clasificaban
+ * como impuesto. El total no cambia —el impuesto también es gasto— pero la
+ * categoría sí, y una categoría equivocada es un panel que miente sobre en qué
+ * se va la plata.
+ */
+describe('IVA es una palabra, no una subcadena', () => {
+  function kindAndCategory(description: string) {
+    const prepared = prepareImport({
+      file: fromText(
+        'cartola.csv',
+        ['Fecha;Descripcion;Cargo;Abono', `03/02/2026;${description};10.000;`].join('\n'),
+      ),
+      accountId: ACCOUNT,
+      parserId: 'generico.cuenta',
+      rules: defaultRules(),
+      duplicateIndex: EMPTY_INDEX,
+    });
+    const row = prepared.rows[0]?.transaction;
+    return { kind: row?.kind, category: row?.category };
+  }
+
+  it('una clínica privada no es un impuesto', () => {
+    expect(kindAndCategory('CLINICA PRIVADA SANTA MARIA').kind).not.toBe(TransactionKind.tax);
+  });
+
+  it('una universidad tampoco', () => {
+    expect(kindAndCategory('PAGO UNIVERSIDAD DE CHILE').kind).not.toBe(TransactionKind.tax);
+  });
+
+  it('pero el IVA sí', () => {
+    expect(kindAndCategory('IVA SERVICIOS BANCARIOS')).toMatchObject({
+      kind: TransactionKind.tax,
+      category: 'impuestos',
+    });
+  });
+
+  it('y también en medio de la glosa', () => {
+    expect(kindAndCategory('COMISION MAS IVA').kind).toBe(TransactionKind.tax);
+  });
+});

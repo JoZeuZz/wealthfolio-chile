@@ -103,6 +103,12 @@ export function ImportWizardPage() {
         setPreparation(outcome);
         if (outcome.prepared) setParserId(outcome.prepared.parser.id);
         setStep('detect');
+      } catch (err) {
+        // `prepareImportFromHost` catches every failure it knows about, so
+        // anything arriving here is one it does not. Without this the rejection
+        // was unhandled: `busy` cleared, the step stayed on `file`, and the
+        // screen said nothing at all.
+        setError(err instanceof Error ? err.message : 'No se pudo leer el archivo.');
       } finally {
         setBusy(false);
       }

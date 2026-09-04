@@ -21,7 +21,7 @@
     "dev": "vite build --watch",
     "dev:server": "wealthfolio dev",
     "clean": "rm -rf dist",
-    "package": "mkdir -p dist && find dist -name '*.map' -delete && zip -r dist/wealthfolio-chile-$npm_package_version.zip manifest.json dist/ README.md -x '*.map'",
+    "package": "mkdir -p dist && find dist -name '*.map' -delete && zip -r dist/wealthfolio-chile-$npm_package_version.zip manifest.json dist/ README.md -x '*.map' -x '*.zip'",
     "bundle": "pnpm clean && pnpm build && pnpm package",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",

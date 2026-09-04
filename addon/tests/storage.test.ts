@@ -185,16 +185,6 @@ describe('import history at volume', () => {
     }
   });
 
-  it('finds a previous run by file hash and account', async () => {
-    const history = new ImportHistory(memoryStore());
-    await history.record(run(1));
-    await history.record(run(2));
-
-    expect((await history.findByFileHash('hash-2', 'acc-1'))?.fileName).toBe('cartola-2.csv');
-    expect(await history.findByFileHash('hash-2', 'other-account')).toBeUndefined();
-    expect(await history.findByFileHash('nope', 'acc-1')).toBeUndefined();
-  });
-
   it('uses its own storage key', () => {
     expect(StorageKeys.importHistory).toBe('wfcl.imports');
   });

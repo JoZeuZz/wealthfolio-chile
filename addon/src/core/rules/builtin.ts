@@ -40,6 +40,18 @@ const contains = (value: string): Rule['conditions'][number] => ({
   value,
 });
 
+/**
+ * A marker that has to stand on its own.
+ *
+ * `matches` compiles case-insensitively against the same normalised
+ * description `contains` reads, so the only difference is the word boundary.
+ */
+const word = (value: string): Rule['conditions'][number] => ({
+  field: 'description',
+  operator: 'matches',
+  value: `\\b${value}\\b`,
+});
+
 const merchantIs = (value: string): Rule['conditions'][number] => ({
   field: 'merchant',
   operator: 'equals',
@@ -102,7 +114,11 @@ export const BUILTIN_RULES: readonly Rule[] = [
     'builtin.impuestos',
     'Impuestos',
     32,
-    [contains('IMPUESTO'), contains('IVA'), contains('TIMBRES')],
+    // `IVA` as a whole word. As a substring it made `CLINICA PRIVADA`,
+    // `CONSULTA PRIVADA` and `UNIVERSIDAD` into taxes: the totals survive —
+    // tax is spending either way — but the category does not, and a wrong
+    // category is a panel that misreports where the money went.
+    [contains('IMPUESTO'), word('IVA'), contains('TIMBRES')],
     [
       { type: 'set_kind', value: TransactionKind.tax },
       { type: 'set_category', value: 'impuestos' },
