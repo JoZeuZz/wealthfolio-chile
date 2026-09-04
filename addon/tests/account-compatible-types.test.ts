@@ -213,8 +213,13 @@ describe('lo que no se pudo clasificar queda marcado para revisión', () => {
     // `status = 'DRAFT'`, no `needs_review`
     // (`storage-sqlite/src/activities/repository.rs`). Comprobado contra un host
     // 3.7.0 real: con `needsReview: true` y `status` por defecto, la actividad
-    // se guarda marcada y `needsReviewFilter: true` devuelve cero filas. El
-    // propio camino de sincronización del host pone los dos campos.
+    // se guarda marcada y `needsReviewFilter: true` devuelve cero filas.
+    //
+    // `DRAFT` tiene un segundo efecto, y por eso sólo lo llevan las filas sin
+    // clasificar: `DefaultActivityCompiler::compile` devuelve `vec![]` para
+    // cualquier actividad que no esté `POSTED`, así que una fila en borrador no
+    // entra en ningún cálculo del portafolio. Para un abono que nadie pudo leer
+    // eso es exactamente lo que se quiere.
     expect(create.status).toBe('DRAFT');
   });
 
@@ -245,6 +250,13 @@ describe('lo que no se pudo clasificar queda marcado para revisión', () => {
 
     expect(create.activityType).toBe('FEE');
     expect(create.needsReview).toBe(true);
+    // Pero **sin** `DRAFT`. Un impuesto es un movimiento que el addon leyó y
+    // clasificó con confianza; lo único aproximado es el tipo con que la cuenta
+    // de tarjeta lo acepta. Marcarlo `DRAFT` lo sacaría del saldo de la cuenta
+    // — `compile` descarta lo no `POSTED` — y borrar plata real de la
+    // contabilidad para que aparezca en una lista de revisión es un intercambio
+    // que no se sostiene.
+    expect(create.status).toBeUndefined();
   });
 
   it('un movimiento que se guarda tal cual no pide revisión', () => {

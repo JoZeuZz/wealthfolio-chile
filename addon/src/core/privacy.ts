@@ -83,18 +83,31 @@ const MIN_ACCOUNT_DIGITS = 7;
  * a history row recognisable — which `sanitizeFileName` says in its own comment
  * that it is trying to keep.
  *
- * Deliberately narrow: only a full four-digit year in one of the two orders
- * Chilean exports use. `00-123-45678` does not match, and neither does a
- * six-digit `12-34-56`.
+ * Deliberately narrow, and narrow on the *values*, not only the shape. The
+ * first version matched any eight digits grouped two-two-four, which is also
+ * how a bank writes an identifier: `12-34-5678` stopped being redacted. Since
+ * `sanitizeFileName` shares this rule and its output is persisted as
+ * `ImportRun.fileName`, that is a number leaving memory, not just a log line.
+ *
+ * So a date has to be a possible date: a day of 1..31, a month of 1..12 and a
+ * year in `19xx`/`20xx`. `12-34-5678` fails on the month and the year,
+ * `45-13-2026` on both the day and the month, and every real Chilean date
+ * passes.
  */
-const DATE_SHAPES = [
-  /^\d{4}-\d{2}-\d{2}$/,
-  /^\d{1,2}[-/.]\d{1,2}[-/.]\d{4}$/,
-];
-
 function looksLikeDate(text: string): boolean {
   const trimmed = text.trim();
-  return DATE_SHAPES.some((shape) => shape.test(trimmed));
+
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (iso) return isPlausible(Number(iso[3]), Number(iso[2]), Number(iso[1]));
+
+  const civil = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(trimmed);
+  if (civil) return isPlausible(Number(civil[1]), Number(civil[2]), Number(civil[3]));
+
+  return false;
+}
+
+function isPlausible(day: number, month: number, year: number): boolean {
+  return day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 1900 && year <= 2099;
 }
 
 /** Anything shaped like a bearer token or key. */

@@ -153,16 +153,22 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
   const warnings: TransactionWarning[] = [];
 
   const rawDate = cell(row, map, ColumnRole.date);
+  const description = cell(row, map, ColumnRole.description);
 
   // No money in any column that could hold it: the row is a separator, a
   // continuation line or a zero-value artefact. Not a movement, and skipping it
-  // is the honest answer — the same three spellings `parseOptional` calls
-  // "nothing here".
-  if (!hasAmountContent(row, map)) return null;
+  // is the honest answer.
+  if (!hasAmountContent(row, map, currency, profile.numberFormat)) return null;
 
-  // From here on the row *does* carry money, so it can no longer be "omitted".
-  // Every remaining failure is a movement we could not read, and calling that
-  // an omission is how a charge leaves the ledger without a trace.
+  // Money with neither a date nor a glosa is a total, not a movement missing
+  // its date. A bank writes `;;490.000;` under the last row and means "this is
+  // the period"; treating it as an unreadable movement refused the whole file.
+  if (rawDate === '' && description.trim() === '') return null;
+
+  // From here on the row *does* carry money and says something about itself, so
+  // it can no longer be "omitted". Every remaining failure is a movement we
+  // could not read, and calling that an omission is how a charge leaves the
+  // ledger without a trace.
   if (rawDate === '') {
     throw new Error('la fila tiene monto pero no fecha');
   }
@@ -187,15 +193,17 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     }
   }
 
-  const description = cell(row, map, ColumnRole.description);
+  // Money, a date, and nothing said about it. Both readings are plausible and
+  // both are expensive: a totals line written `28/02/2026;;490.000;640.000`
+  // becomes half a million pesos of income nobody received, and a real movement
+  // whose glosa cell came out blank disappears from the ledger. Nothing in the
+  // row separates them.
+  //
+  // So it blocks. That is what `validation` is for, and it is the only answer
+  // that neither invents money nor loses it: the statement stops, the line
+  // number is named, and a person decides.
   if (description.trim() === '') {
-    // Not fatal — the date and the amount are what make it a movement — but
-    // rare enough in a real export that it usually means the columns are out
-    // of step by one.
-    warnings.push({
-      code: 'missing-description',
-      message: 'La fila no trae glosa. Comprueba que las columnas estén alineadas.',
-    });
+    throw new Error('la fila trae monto y fecha pero no glosa');
   }
   const amountResult = readAmount({
     row,
@@ -387,15 +395,32 @@ function describeOrder(order: StatementProfile['dateOrder']): string {
  * cell happened to be blank, silently, as though it were a footer.
  *
  * So the label is looked for where it actually is: the description cell, and
- * failing that the row's first cell with anything in it. Narrower than joining
- * the whole row, which would let a glosa containing the word `TOTAL` erase its
- * own movement.
+ * failing that the row's first cell that could *be* a label. Narrower than
+ * joining the whole row, which would let a glosa containing the word `TOTAL`
+ * erase its own movement.
+ *
+ * "Could be a label" excludes dates and numbers, and that exclusion is the
+ * whole point. A totals row written as `28/02/2026;;490.000;640.000` puts its
+ * closing date first and leaves the glosa empty; taking the date as the label
+ * found no pattern, so the row stopped being a footer and became a $490.000
+ * income nobody had. Labels are words.
  */
-function isIgnoredRow(row: string[], map: ColumnMap, patterns: readonly RegExp[]): boolean {
+export function isIgnoredRow(
+  row: string[],
+  map: ColumnMap,
+  patterns: readonly RegExp[],
+): boolean {
   const description = cell(row, map, ColumnRole.description).trim();
-  const label = description !== '' ? description : (row.find((c) => c.trim() !== '') ?? '').trim();
+  const label = description !== '' ? description : (row.find(looksLikeLabel) ?? '').trim();
   if (label === '') return false;
   return patterns.some((pattern) => pattern.test(label));
+}
+
+/** A cell that carries words rather than a date or a figure. */
+function looksLikeLabel(value: string): boolean {
+  const text = value.trim();
+  if (text === '') return false;
+  return /\p{L}{2,}/u.test(text);
 }
 
 /**
@@ -405,21 +430,49 @@ function isIgnoredRow(row: string[], map: ColumnMap, patterns: readonly RegExp[]
  * could not read". The two used to share the `skipped` bucket, and the second
  * is money leaving the statement without a trace.
  */
-function hasAmountContent(row: string[], map: ColumnMap): boolean {
+function hasAmountContent(
+  row: string[],
+  map: ColumnMap,
+  currency: string,
+  format: StatementProfile['numberFormat'],
+): boolean {
+  // Exactly the columns `readAmount` reads. `purchaseAmount` used to be here
+  // and is not: nothing reads it, so a CMR statement with `Monto Total` filled
+  // and `Valor Cuota` empty — an ordinary purchase with no cuotas — had every
+  // row declared a movement we failed to read, and the whole file became
+  // unimportable with no user action that could fix it.
   const AMOUNT_ROLES = [
-    ColumnRole.amount,
+    ColumnRole.installmentAmount,
     ColumnRole.debit,
     ColumnRole.credit,
-    ColumnRole.installmentAmount,
-    ColumnRole.purchaseAmount,
+    ColumnRole.amount,
   ] as const;
-  // The same three spellings `parseOptional` treats as "nothing here". A
-  // separator line printing `0` in the cargo column is not a movement we failed
-  // to read; it is a movement that is not there.
-  return AMOUNT_ROLES.some((role) => {
-    const text = cell(row, map, role).trim();
-    return text !== '' && text !== '-' && text !== '0';
-  });
+  return AMOUNT_ROLES.some((role) => carriesValue(cell(row, map, role), currency, format));
+}
+
+/**
+ * Whether a cell holds an amount that is actually there.
+ *
+ * Agrees with `parseOptional` about "nothing here" — but by value, not by
+ * spelling. The literal comparison against `'0'` missed `0,00`, so an
+ * informational line printing zeros in both cargo and abono stopped being a
+ * separator and became an unreadable movement that refused the statement.
+ *
+ * A cell that will not parse at all *is* content: that is the unreadable amount
+ * the gate exists to catch.
+ */
+function carriesValue(
+  text: string,
+  currency: string,
+  format: StatementProfile['numberFormat'],
+): boolean {
+  const trimmed = text.trim();
+  if (trimmed === '' || trimmed === '-') return false;
+  try {
+    return !isZero(parseAmount(trimmed, { currency, format, allowDebitCreditSuffix: true }).money);
+  } catch {
+    return true;
+  }
 }
 
 interface ReadAmountInput {
@@ -527,17 +580,23 @@ function signedByMarker(amount: Money, marker: 'debit' | 'credit'): Money {
  */
 function readDirectionFlag(value: string, header?: string): 'debit' | 'credit' {
   const flag = normalizeDescription(value);
+  const raw = value.trim();
   const heading = header ?? '';
   // `Cargo/Abono` names its outflow explicitly; `D/C` and `Debe/Haber` do not.
+  // That is the *only* thing the heading settles — which of the two readings a
+  // bare `C` gets — so it disambiguates and then steps aside. Making it pick
+  // one table and stop meant a `Cargo/Abono` column printing `D`/`C` failed
+  // every row, and one such row refuses the whole statement.
   const cargoAbono = heading.includes('CARGO') || heading.includes('ABONO');
 
-  if (cargoAbono) {
-    if (/^(C|CARGO|CARGOS)$/.test(flag)) return 'debit';
-    if (/^(A|AB|ABONO|ABONOS)$/.test(flag)) return 'credit';
-  } else {
-    if (/^(D|DB|DEBITO|DEBE|CARGO)$/.test(flag)) return 'debit';
-    if (/^(C|CR|CREDITO|H|HABER|ABONO)$/.test(flag)) return 'credit';
-  }
+  if (cargoAbono && /^(C|CARGO|CARGOS)$/.test(flag)) return 'debit';
+  if (cargoAbono && /^(A|AB|ABONO|ABONOS)$/.test(flag)) return 'credit';
+
+  if (/^(D|DB|DEBITO|DEBE|CARGO|CARGOS)$/.test(flag)) return 'debit';
+  if (/^(C|CR|CREDITO|H|HABER|ABONO|ABONOS|A|AB)$/.test(flag)) return 'credit';
+  // Some exports print the sign in the flag column instead of a letter.
+  if (raw === '-') return 'debit';
+  if (raw === '+') return 'credit';
 
   throw new Error(
     `la columna de dirección dice "${value}", que no significa nada bajo la cabecera "${header ?? '(sin cabecera)'}"`,

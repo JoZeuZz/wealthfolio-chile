@@ -51,6 +51,7 @@ export function buildInstallmentPlans(
       merchant,
       institution: transaction.sourceInstitution,
       total: installment.total,
+      amountBand: amountBand(abs(transaction.amount).minor),
       currency: transaction.amount.currency,
     });
 
@@ -82,6 +83,7 @@ interface GroupKeyInput {
   merchant: string;
   institution: string;
   total: number;
+  amountBand: number;
   currency: string;
 }
 
@@ -91,8 +93,32 @@ function groupKey(input: GroupKeyInput): string {
     input.institution,
     input.merchant.toUpperCase(),
     String(input.total),
+    String(input.amountBand),
     input.currency,
   ]);
+}
+
+/**
+ * Cuota amounts that belong to the same purchase, bucketed together.
+ *
+ * The exact amount used to be the key, which split one plan in two whenever the
+ * last cuota was uneven — 16.667 / 16.667 / 16.665, routine because Chilean
+ * cuotas rarely divide evenly. Removing it entirely went too far the other way:
+ * two real plans at one merchant with the same length and different amounts,
+ * overlapping in time, landed in one group, and splitting on a repeated counter
+ * cut them in the wrong place — three plans out of two, the wrong cuota amount
+ * on each, and `committedTotal` overstated.
+ *
+ * A band keeps both properties. Two cuotas of one plan differ by at most the
+ * rounding remainder, far below one percent; two different purchases at the
+ * same merchant essentially never land that close. Bucketing on a rounded
+ * logarithm gives roughly ±1 % bands with no boundary a plan can straddle,
+ * because every cuota of a plan rounds to the same bucket unless the plan
+ * itself spans a boundary — which needs a spread the rounding cannot produce.
+ */
+function amountBand(minor: number): number {
+  if (minor <= 0) return 0;
+  return Math.round(Math.log(minor) * 100);
 }
 
 /**

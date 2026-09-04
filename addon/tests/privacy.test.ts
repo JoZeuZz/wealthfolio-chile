@@ -482,3 +482,41 @@ describe('las fechas sobreviven a la redacción', () => {
     expect(redactSensitive('ABONO 1.234.567 SUELDO')).toBe('ABONO [NUM] SUELDO');
   });
 });
+
+/**
+ * Una fecha tiene que ser una fecha, no sólo tener su forma.
+ *
+ * La excepción que salvó las fechas usa `\d{1,2}[-/.]\d{1,2}[-/.]\d{4}`, y un
+ * identificador de ocho dígitos agrupado dos-dos-cuatro encaja igual:
+ * `12-34-5678` dejó de redactarse. El camino que importa es
+ * `sanitizeFileName`, que escribe `ImportRun.fileName` en el storage del addon
+ * — el que se replica entre los dispositivos del usuario.
+ */
+describe('la excepción de fechas no deja pasar un número de cuenta', () => {
+  it('un identificador agrupado 2-2-4 se sigue redactando', () => {
+    expect(redactSensitive('Cuenta 12-34-5678')).toBe('Cuenta [NUM]');
+    expect(redactSensitive('TRANSFERENCIA 55-66-7788')).toBe('TRANSFERENCIA [NUM]');
+  });
+
+  it('con puntos, igual', () => {
+    // Con barras no: `ACCOUNT_PATTERN` no las lleva en su clase de caracteres,
+    // y eso es anterior a la excepción de fechas. Los números de cuenta y de
+    // tarjeta chilenos se escriben con guiones, puntos o espacios.
+    expect(redactSensitive('cta 12.34.5678')).toBe('cta [NUM]');
+  });
+
+  it('y en el nombre de archivo también', () => {
+    expect(sanitizeFileName('Cartola_12-34-5678_feb.csv')).not.toContain('5678');
+  });
+
+  it('pero una fecha de verdad sigue intacta', () => {
+    expect(redactSensitive('01-08-2026 al 31-08-2026')).toBe('01-08-2026 al 31-08-2026');
+    expect(redactSensitive('2026-09-04T10:30:00Z')).toBe('2026-09-04T10:30:00Z');
+    expect(redactSensitive('4/7/2026')).toBe('4/7/2026');
+    expect(sanitizeFileName('Cartola_01-08-2026_al_31-08-2026.csv')).toContain('01-08-2026');
+  });
+
+  it('un día o un mes imposibles no son una fecha', () => {
+    expect(redactSensitive('ref 45-13-2026')).toBe('ref [NUM]');
+  });
+});

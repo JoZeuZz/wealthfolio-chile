@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { classifyDuplicate } from '../src/core/dedupe/classify';
+import { hashFields } from '../src/core/hash';
+import { descriptionKey } from '../src/core/text';
 import { computeFingerprint, computeWeakFingerprint } from '../src/core/dedupe/fingerprint';
 import {
   readChileMetadata,
   toActivityCreate,
   type ChileMetadata,
 } from '../src/core/mapping/activities';
-import { money } from '../src/core/money';
+import { money, toDecimalString } from '../src/core/money';
 import { Direction, TransactionKind } from '../src/core/model/kinds';
 import type { NormalizedTransaction } from '../src/core/model/transaction';
 import {
@@ -522,5 +524,88 @@ describe('movimientos que no escribió este addon', () => {
 
     expect(finding.verdict).toBe('probable');
     expect(finding.existingActivityId).toBe('act-ajena');
+  });
+});
+
+/**
+ * Las huellas que escribió 0.1.x tienen que seguir encontrándose.
+ *
+ * `7f93a0b` cambió la receta para que la escala decimal dejara de formar parte
+ * de la identidad, y afirmó que las filas de 0.1.x seguirían coincidiendo
+ * «porque para un monto sin fracción las dos formas son idénticas». Cierto —
+ * pero 0.1.x escribió `toDecimalString`, así que un movimiento parseado de
+ * `49.990,50` quedó guardado como `fp(…"49990.50"…)` y la receta nueva hashea
+ * `"49990.5"`.
+ *
+ * Peor: el índice prefiere `metadata.wfp` sobre la huella derivada, así que
+ * para **nuestras propias** filas antiguas la vía débil tampoco rescata nada.
+ * El resultado es `nuevo`, marcado por defecto: una segunda copia completa de
+ * cada cartola con céntimos.
+ */
+describe('compatibilidad con las huellas de 0.1.x', () => {
+  /** La receta exacta de 0.1.x: `toDecimalString`, con la escala dentro. */
+  function legacyFingerprints(transaction: NormalizedTransaction, accountId: string) {
+    const amountText = toDecimalString(transaction.amount);
+    return {
+      fp: hashFields([
+        'v1',
+        accountId,
+        transaction.date,
+        amountText,
+        transaction.amount.currency,
+        descriptionKey(transaction.description),
+        transaction.reference ?? '',
+      ]),
+      wfp: hashFields([
+        'v1',
+        'weak',
+        accountId,
+        transaction.date,
+        amountText,
+        transaction.amount.currency,
+      ]),
+    };
+  }
+
+  const withCents = {
+    ...makeTransaction({ amount: -4999050, date: '2026-02-04', description: 'COMPRA PARIS' }),
+    amount: money(-4999050, 2, 'CLP'),
+  };
+
+  it('un movimiento con céntimos importado por 0.1.x se reconoce como duplicado', async () => {
+    const legacy = legacyFingerprints(withCents, 'acc-1');
+    // Sanity: la receta nueva ya no produce esa huella.
+    expect(computeFingerprint(withCents, { accountId: 'acc-1' })).not.toBe(legacy.fp);
+
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          id: 'act-vieja',
+          accountId: 'acc-1',
+          activityType: 'WITHDRAWAL',
+          amount: '49990.50',
+          date: '2026-02-04',
+          comment: 'COMPRA PARIS',
+          metadata: ourMetadata({ fp: legacy.fp, wfp: legacy.wfp }),
+        }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, { accountId: 'acc-1' });
+    const finding = classifyDuplicate(
+      { ...withCents, fingerprint: computeFingerprint(withCents, { accountId: 'acc-1' }) },
+      index,
+      { accountId: 'acc-1' },
+      new Map(),
+    );
+
+    expect(finding.verdict).toBe('exact');
+    expect(finding.existingActivityId).toBe('act-vieja');
+  });
+
+  it('y un movimiento sin céntimos sigue funcionando igual que siempre', async () => {
+    const whole = makeTransaction({ amount: -10000, date: '2026-02-05', description: 'COMPRA LIDER' });
+    const legacy = legacyFingerprints(whole, 'acc-1');
+    expect(computeFingerprint(whole, { accountId: 'acc-1' })).toBe(legacy.fp);
   });
 });

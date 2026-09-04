@@ -280,3 +280,61 @@ describe('columnas que se quedan con el rol de otra', () => {
     expect(map.card).toBe(2);
   });
 });
+
+/**
+ * La cabecera fija el vocabulario, no lo restringe.
+ *
+ * `readDirectionFlag` eligió una de las dos tablas según la cabecera y se
+ * quedó ahí. Bajo `Cargo/Abono` con valores `D`/`C` —una combinación que existe
+ * y que antes se leía— la fila pasó a fallar, y una sola fila así refuerza toda
+ * la cartola. La cabecera resuelve la ambigüedad de `C`; no debe borrar el
+ * vocabulario que no es ambiguo.
+ */
+describe('la cabecera desambigua, pero no restringe', () => {
+  function flagged(header: string, rows: string[]) {
+    return prepareImport({
+      file: fromText(
+        'cartola.csv',
+        [`Fecha;Descripcion;Monto;${header};Saldo`, ...rows].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+  }
+
+  it('bajo Cargo/Abono, una D sigue siendo un débito', () => {
+    const prepared = flagged('Cargo/Abono', ['01/02/2026;COMPRA;500.000;D;100.000']);
+    expect(prepared.rows[0]?.transaction.amount.minor).toBe(-500000);
+    expect(prepared.statement.rowStats.failed).toBe(0);
+  });
+
+  it('bajo Cargo/Abono, una C sigue siendo Cargo — ahí la cabecera manda', () => {
+    const prepared = flagged('Cargo/Abono', ['01/02/2026;COMPRA;500.000;C;100.000']);
+    expect(prepared.rows[0]?.transaction.amount.minor).toBe(-500000);
+  });
+
+  it('bajo Cargo/Abono, un HABER es una entrada', () => {
+    const prepared = flagged('Cargo/Abono', ['01/02/2026;SUELDO;500.000;HABER;600.000']);
+    expect(prepared.rows[0]?.transaction.amount.minor).toBe(500000);
+  });
+
+  it('bajo D/C, un ABONO es una entrada', () => {
+    const prepared = flagged('D/C', ['01/02/2026;SUELDO;500.000;ABONO;600.000']);
+    expect(prepared.rows[0]?.transaction.amount.minor).toBe(500000);
+  });
+
+  it('un signo también sirve de bandera', () => {
+    expect(flagged('D/C', ['01/02/2026;COMPRA;500.000;-;100.000']).rows[0]?.transaction.amount.minor)
+      .toBe(-500000);
+    expect(flagged('D/C', ['01/02/2026;SUELDO;500.000;+;600.000']).rows[0]?.transaction.amount.minor)
+      .toBe(500000);
+  });
+
+  it('lo que ninguna de las dos tablas explica sigue fallando la fila', () => {
+    const prepared = flagged('D/C', ['01/02/2026;MOVIMIENTO;500.000;ZZZ;600.000']);
+    expect(prepared.statement.rowStats.failed).toBe(1);
+    expect(prepared.validation.ok).toBe(false);
+  });
+});

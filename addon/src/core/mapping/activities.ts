@@ -146,19 +146,26 @@ export interface ChileMetadata {
 export type ReviewableActivityCreate = ActivityCreate & {
   needsReview?: boolean;
   /**
-   * Companion to `needsReview`, and not optional in practice.
+   * Companion to `needsReview` — but only for a row with no reading at all.
    *
-   * Wealthfolio's "needs review" filter does not read `needs_review` at all: it
+   * Wealthfolio's "needs review" filter does not read `needs_review`: it
    * filters on `status = 'DRAFT'`
    * (`storage-sqlite/src/activities/repository.rs`, where the parameter is
    * literally commented "maps to DRAFT status"). Verified against a real 3.7.0
    * container — an activity created with `needsReview: true` and no status is
    * stored flagged, shows the amber badge, and `needsReviewFilter: true`
-   * returns nothing. The host's own sync path sets both fields together, which
-   * is why nobody noticed the flag alone does not reach the list.
+   * returns nothing.
    *
-   * `DRAFT` does not remove the row from any portfolio calculation; the status
-   * is consulted for asset splits and for this filter, nowhere else.
+   * `DRAFT` is not free, though, and an earlier version of this comment claimed
+   * it was. `DefaultActivityCompiler::compile` returns `vec![]` for anything
+   * `!is_posted()` (`crates/core/src/activities/compiler.rs`, v3.7.0), so a
+   * draft row contributes to no balance, no valuation and no performance
+   * figure. That is the right answer for a movement nobody could read — it is
+   * what `UNKNOWN` already means on a cash account — and the wrong answer for a
+   * movement the addon classified confidently and had to store under a type the
+   * account happens to accept. Every `tax` on a credit card is such a row.
+   *
+   * So: `DRAFT` follows the unresolved kind, never the substitution.
    */
   status?: 'DRAFT';
   /**
@@ -262,11 +269,11 @@ export function toActivityCreate(
     // Only when the stored row does not say what the movement is. Marking every
     // import would make the flag mean nothing, and a person who has to review
     // 400 rows reviews none of them.
-    // Both fields, always together: the flag is what the row shows, the status
-    // is what the filter finds. See `ReviewableActivityCreate`.
-    ...(needsReview(transaction.kind, substituted)
-      ? { needsReview: true, status: 'DRAFT' as const }
-      : {}),
+    // The flag is what the row shows; the status is what the filter finds, and
+    // also what takes the row out of every portfolio total. Only a movement
+    // with no reading at all deserves the second. See `ReviewableActivityCreate`.
+    ...(needsReview(transaction.kind, substituted) ? { needsReview: true } : {}),
+    ...(transaction.kind === TransactionKind.unknown ? { status: 'DRAFT' as const } : {}),
   };
 }
 
@@ -287,6 +294,10 @@ export function toActivityCreate(
  *   `EconomicEventKind::Income`. Without the flag, a movement the addon
  *   explicitly declined to classify enters the portfolio as income and looks
  *   exactly like a refund somebody confirmed.
+ *
+ * Only the first also gets `status: 'DRAFT'`. See `ReviewableActivityCreate`
+ * for why the second must not: a substituted `tax` is money the addon read
+ * correctly, and a draft row is money the host stops counting.
  */
 function needsReview(kind: TransactionKind, substituted: boolean | undefined): boolean {
   return kind === TransactionKind.unknown || substituted === true;

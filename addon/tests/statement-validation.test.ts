@@ -317,22 +317,25 @@ describe('ninguna fila con dinero se omite en silencio', () => {
   }
 
   it('una glosa en blanco no convierte un cargo en un pie de tabla', () => {
+    // Ya no desaparece en silencio: bloquea. Un cargo de $250.000 sin glosa
+    // podría ser un movimiento cuya celda salió vacía o una línea de totales, y
+    // desde la fila no hay forma de distinguirlos. Omitirla pierde plata;
+    // importarla la inventa. Bloquear no hace ninguna de las dos.
     const prepared = parse([
       '01/02/2026;COMPRA LIDER;10.000;',
       '15/02/2026;;250.000;',
       '20/02/2026;SUELDO;;500.000',
     ]);
 
-    expect(prepared.statement.rowStats).toMatchObject({ dataRows: 3, skipped: 0 });
-    expect(prepared.rows).toHaveLength(3);
-    expect(prepared.rows[1]?.transaction.amount.minor).toBe(-250000);
+    expect(prepared.statement.rowStats).toMatchObject({ dataRows: 3, skipped: 0, failed: 1 });
+    expect(prepared.validation.ok).toBe(false);
   });
 
-  it('y la fila queda marcada, porque una glosa vacía sí es raro', () => {
-    const prepared = parse(['01/02/2026;;250.000;']);
-    expect(prepared.rows[0]?.transaction.warnings.map((w) => w.code)).toContain(
-      'missing-description',
-    );
+  it('y dice qué fila es, para que se pueda mirar', () => {
+    const prepared = parse(['01/02/2026;COMPRA LIDER;10.000;', '15/02/2026;;250.000;']);
+    const issue = prepared.validation.issues.find((i) => i.code === 'row-parse-failed');
+    expect(issue?.message).toContain('Fila 3');
+    expect(issue?.message).toContain('glosa');
   });
 
   it('un monto sin fecha falla la fila en vez de omitirla', () => {
@@ -366,6 +369,123 @@ describe('ninguna fila con dinero se omite en silencio', () => {
     ]);
 
     expect(prepared.statement.rowStats).toMatchObject({ mapped: 1, skipped: 1, failed: 0 });
+    expect(prepared.validation.ok).toBe(true);
+  });
+});
+
+/**
+ * Una fecha no es una etiqueta.
+ *
+ * Al quitar `/^\s*$/` de los patrones a ignorar, `isIgnoredRow` pasó a buscar
+ * la etiqueta en la primera celda con contenido cuando la glosa está vacía. En
+ * un pie escrito `SALDO FINAL;;;;1.473.430` eso acierta. En un pie de totales
+ * escrito con la fecha de cierre y la glosa en blanco
+ * —`28/02/2026;;490.000;640.000`— la primera celda con contenido es la fecha,
+ * que no coincide con ningún patrón, así que la fila dejó de ser un pie y pasó
+ * a ser un movimiento: $490.000 de ingreso inventado, marcado para importar.
+ *
+ * Es el mismo agujero que abrió el arreglo anterior, mirando al otro lado. Una
+ * celda que se lee como fecha o como número no puede hacer de etiqueta: las
+ * etiquetas son palabras.
+ */
+describe('el pie de tabla se reconoce por su palabra, no por su primera celda', () => {
+  function parseGeneric(rows: string[]) {
+    return prepareImport({
+      file: fromText('cartola.csv', ['Fecha;Descripcion;Monto;Saldo', ...rows].join('\n')),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+  }
+
+  it('una fila de totales con fecha y sin glosa no se importa como movimiento', () => {
+    const prepared = parseGeneric([
+      '03/02/2026;COMPRA LIDER;-10.000;140.000',
+      '10/02/2026;COMPRA PARIS;-20.000;120.000',
+      '28/02/2026;;490.000;640.000',
+    ]);
+
+    expect(prepared.rows).toHaveLength(2);
+    expect(prepared.totals.income.minor).toBe(0);
+  });
+
+  it('el pie cuya etiqueta cae en la columna de fecha se sigue reconociendo', () => {
+    const prepared = parseGeneric([
+      '03/02/2026;COMPRA LIDER;-10.000;140.000',
+      'SALDO FINAL;;;130.000',
+    ]);
+
+    expect(prepared.statement.rowStats).toMatchObject({ mapped: 1, skipped: 1, failed: 0 });
+    expect(prepared.validation.ok).toBe(true);
+  });
+
+  it('una fila sin fecha, sin glosa y con monto tampoco es un movimiento', () => {
+    const prepared = parseGeneric([
+      '03/02/2026;COMPRA LIDER;-10.000;140.000',
+      ';;490.000;',
+    ]);
+
+    expect(prepared.statement.rowStats).toMatchObject({ mapped: 1, skipped: 1, failed: 0 });
+    expect(prepared.validation.ok).toBe(true);
+  });
+});
+
+/**
+ * Qué cuenta como «esta fila trae dinero».
+ *
+ * `hasAmountContent` decide si una fila que no se pudo leer es un movimiento
+ * perdido (error, bloquea la cartola) o decoración (omitida). Se le escapaban
+ * tres formas, y las tres convertían una cartola normal en una cartola
+ * imposible de importar:
+ *
+ * - miraba `purchaseAmount`, una columna que `readAmount` no lee nunca. Un
+ *   estado de cuenta CMR con `Monto Total` relleno y `Valor Cuota` vacío —una
+ *   compra sin cuotas— fallaba todas sus filas.
+ * - `parseOptional` trata `0` como «aquí no hay nada», pero `0,00` no coincidía
+ *   con esa comparación literal, así que una línea informativa con ceros en
+ *   cargo y abono pasaba a ser una fila ilegible.
+ * - una fila con monto, sin fecha y sin glosa es un total, no un movimiento sin
+ *   fecha.
+ */
+describe('lo que hace que una fila sea un movimiento', () => {
+  it('una columna de monto que el parser no lee no cuenta como contenido', () => {
+    const prepared = prepareImport({
+      file: fromText(
+        'cmr.csv',
+        [
+          'Banco Falabella - Estado de Cuenta CMR',
+          '',
+          'Fecha;Descripcion;Monto Total;Valor Cuota;Cuotas',
+          '04/02/2026;COMPRA PARIS SIN CUOTAS;49.990;;',
+        ].join('\n'),
+      ),
+      accountId: 'acc-card',
+      parserId: 'banco-falabella.cmr',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    expect(prepared.statement.rowStats.failed).toBe(0);
+  });
+
+  it('un cero escrito con decimales sigue siendo «aquí no hay nada»', () => {
+    const prepared = prepareImport({
+      file: fromText(
+        'cartola.csv',
+        [
+          'Fecha;Descripcion;Cargo;Abono;Saldo',
+          '03/02/2026;COMPRA LIDER;10.000;;90.000',
+          '04/02/2026;AVISO INFORMATIVO;0,00;0,00;90.000',
+        ].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    expect(prepared.statement.rowStats).toMatchObject({ mapped: 1, failed: 0 });
     expect(prepared.validation.ok).toBe(true);
   });
 });

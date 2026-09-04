@@ -2,7 +2,12 @@ import { daysBetween } from '../dates';
 import { equals, type Money } from '../money';
 import type { NormalizedTransaction } from '../model/transaction';
 import { descriptionKey, similarity } from '../text';
-import { computeFingerprint, computeWeakFingerprint, type FingerprintScope } from './fingerprint';
+import {
+  computeFingerprint,
+  computeWeakFingerprint,
+  legacyFingerprintsOf,
+  type FingerprintScope,
+} from './fingerprint';
 
 /**
  * Duplicate classification.
@@ -118,7 +123,13 @@ export function classifyDuplicate(
   const { similarityThreshold, dateTolerance } = { ...DEFAULTS, ...options };
   const fingerprint = candidate.fingerprint || computeFingerprint(candidate, scope);
 
-  const stored = index.byFingerprint.get(fingerprint);
+  // A row this addon wrote under 0.1.x carries the fingerprint that version
+  // computed, and for an amount with cents that is a different hash. Looking it
+  // up too is what keeps the recipe change from re-importing every statement
+  // that prints decimals. See `legacyFingerprintsOf`.
+  const legacy = legacyFingerprintsOf(candidate, scope);
+  const stored = index.byFingerprint.get(fingerprint) ??
+    (legacy ? index.byFingerprint.get(legacy.fingerprint) : undefined);
   if (stored) {
     if (stored.hostModified) {
       // The fingerprint says "we imported this row"; the host says "and then it
@@ -169,7 +180,10 @@ export function classifyDuplicate(
   }
 
   const weak = computeWeakFingerprint(candidate, scope);
-  const sameDayAmount = index.byWeakFingerprint.get(weak) ?? [];
+  const sameDayAmount = [
+    ...(index.byWeakFingerprint.get(weak) ?? []),
+    ...(legacy ? (index.byWeakFingerprint.get(legacy.weakFingerprint) ?? []) : []),
+  ];
   const candidateKey = descriptionKey(candidate.description);
 
   let best: { movement: ExistingMovement; score: number } | undefined;

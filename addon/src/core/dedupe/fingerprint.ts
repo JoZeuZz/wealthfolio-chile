@@ -1,5 +1,5 @@
 import { hashFields } from '../hash';
-import { canonicalAmountString, type Money } from '../money';
+import { canonicalAmountString, toDecimalString, type Money } from '../money';
 import type { NormalizedTransaction } from '../model/transaction';
 import { descriptionKey } from '../text';
 
@@ -104,6 +104,49 @@ export function weakFingerprintOf(movement: {
     canonicalAmountString(movement.amount),
     movement.amount.currency,
   ]);
+}
+
+/**
+ * The fingerprints a movement would have had under 0.1.x.
+ *
+ * 0.1.x hashed `toDecimalString`, which carries the scale, so a movement parsed
+ * from `49.990,50` is stored in the user's ledger under `…"49990.50"…` while
+ * the current recipe hashes `…"49990.5"…`. For an amount with no fraction the
+ * two spellings are identical and this returns the same hashes as
+ * {@link computeFingerprint} — which is why the change looked harmless.
+ *
+ * It was not: every row of every statement that prints cents came back `nuevo`,
+ * ticked by default, and imported a second time. The index therefore accepts
+ * both spellings rather than the version being bumped, because bumping it would
+ * orphan the whole existing ledger instead of just the fractional part of it.
+ */
+export function legacyFingerprintsOf(
+  transaction: NormalizedTransaction,
+  scope: FingerprintScope,
+): { fingerprint: string; weakFingerprint: string } | undefined {
+  const canonical = canonicalAmountString(transaction.amount);
+  const legacyText = toDecimalString(transaction.amount);
+  if (legacyText === canonical) return undefined;
+
+  return {
+    fingerprint: hashFields([
+      FINGERPRINT_VERSION,
+      scope.accountId,
+      transaction.date,
+      legacyText,
+      transaction.amount.currency,
+      descriptionKey(transaction.description),
+      transaction.reference ?? '',
+    ]),
+    weakFingerprint: hashFields([
+      FINGERPRINT_VERSION,
+      'weak',
+      scope.accountId,
+      transaction.date,
+      legacyText,
+      transaction.amount.currency,
+    ]),
+  };
 }
 
 /** Assign fingerprints to a batch of freshly parsed rows. */

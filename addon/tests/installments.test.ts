@@ -311,3 +311,60 @@ describe('una última cuota desigual sigue siendo el mismo plan', () => {
     expect(plans).toHaveLength(2);
   });
 });
+
+/**
+ * Quitar el monto de la clave de agrupación fue demasiado lejos.
+ *
+ * Se quitó para que una última cuota desigual no partiera un plan en dos. Pero
+ * dos planes reales del mismo comercio con la misma cantidad de cuotas y montos
+ * distintos, solapados en el tiempo, quedan en el mismo grupo, y
+ * `splitOnRepeatedCounter` los corta por donde se repite el contador — que no
+ * es donde empieza el segundo plan. Salían tres planes de dos, con el monto de
+ * cuota equivocado y `committedTotal` inflado.
+ *
+ * El monto vuelve a la clave, pero por bandas: dos cuotas del mismo plan se
+ * diferencian a lo sumo en el resto del redondeo, muy por debajo del 1 %.
+ */
+describe('dos planes del mismo comercio solapados en el tiempo', () => {
+  function charge(minor: number, current: number, total: number, date: string) {
+    return makeTransaction({
+      amount: -minor,
+      date,
+      description: `FALABELLA RETAIL CUOTA ${current} DE ${total}`,
+      merchant: 'FALABELLA',
+      installment: {
+        current,
+        total,
+        confidence: Confidence.confirmed,
+        matchedText: `CUOTA ${current} DE ${total}`,
+      },
+    });
+  }
+
+  it('se mantienen separados', () => {
+    // Plan A: 6 cuotas de 49.990 desde enero. Plan B: 6 cuotas de 20.000 desde
+    // abril. Se solapan tres meses.
+    const month = (n: number) => `2026-${String(n).padStart(2, '0')}-05`;
+    const plans = buildInstallmentPlans([
+      ...Array.from({ length: 6 }, (_, i) => charge(49990, i + 1, 6, month(i + 1))),
+      ...Array.from({ length: 6 }, (_, i) => charge(20000, i + 1, 6, month(i + 4))),
+    ]);
+
+    expect(plans).toHaveLength(2);
+    const amounts = plans.map((p) => Math.abs(p.installmentAmount.minor)).sort((a, b) => a - b);
+    expect(amounts).toEqual([20000, 49990]);
+    // Los dos completos: ninguno debe quedar reclamando cuotas por pagar.
+    expect(plans.every((p) => p.remainingInstallments === 0)).toBe(true);
+  });
+
+  it('y una última cuota desigual sigue sin partir el plan', () => {
+    const plans = buildInstallmentPlans([
+      charge(16667, 1, 3, '2026-01-05'),
+      charge(16667, 2, 3, '2026-02-05'),
+      charge(16665, 3, 3, '2026-03-05'),
+    ]);
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({ currentInstallment: 3, remainingInstallments: 0 });
+  });
+});

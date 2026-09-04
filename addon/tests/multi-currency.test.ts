@@ -157,3 +157,67 @@ describe('la columna de moneda del archivo', () => {
     expect(prepared.rows[0]?.transaction.amount.currency).toBe('CLP');
   });
 });
+
+/**
+ * `PESOS`, `$` y `CLP` son la misma moneda.
+ *
+ * `readCurrencyColumn` comparaba el texto crudo de la celda, así que una
+ * cartola con `$` en unas filas y `CLP` en otras se declaraba mezclada, y una
+ * que dijera `PESOS` en todas adoptaba literalmente `PESOS` como código de
+ * moneda — que después no coincide con la cuenta CLP y bloquea una cartola
+ * perfectamente normal. Además el barrido incluía los pies de tabla, así que un
+ * `TOTAL DEL PERIODO;PESOS;…` bastaba para inventar una segunda moneda.
+ */
+describe('la columna de moneda se normaliza antes de comparar', () => {
+  function parseRows(rows: string[]) {
+    return prepareImport({
+      file: fromText('cartola.csv', ['Fecha;Descripcion;Moneda;Monto', ...rows].join('\n')),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+  }
+
+  it('$ y CLP no son dos monedas', () => {
+    const prepared = parseRows([
+      '01/02/2026;COMPRA LIDER;$;-10.000',
+      '02/02/2026;COMPRA PARIS;CLP;-20.000',
+    ]);
+
+    expect(prepared.validation.ok).toBe(true);
+    expect(prepared.statement.account.currency).toBe('CLP');
+  });
+
+  it('una cartola que dice PESOS se importa como CLP, no como «PESOS»', () => {
+    const prepared = parseRows(['01/02/2026;COMPRA LIDER;PESOS;-10.000']);
+
+    expect(prepared.validation.ok).toBe(true);
+    expect(prepared.rows[0]?.transaction.amount.currency).toBe('CLP');
+  });
+
+  it('un pie de tabla no inventa una segunda moneda', () => {
+    const prepared = parseRows([
+      '01/02/2026;COMPRA LIDER;CLP;-10.000',
+      ';TOTAL DEL PERIODO;PESOS;-10.000',
+    ]);
+
+    expect(prepared.validation.ok).toBe(true);
+    expect(prepared.validation.issues.map((i) => i.code)).not.toContain('mixed-currency');
+  });
+
+  it('una mezcla de verdad sigue bloqueando', () => {
+    const prepared = parseRows([
+      '01/02/2026;COMPRA AMAZON;USD;-120,50',
+      '02/02/2026;COMPRA LIDER;CLP;-10.000',
+    ]);
+
+    expect(prepared.validation.ok).toBe(false);
+    expect(prepared.validation.issues.map((i) => i.code)).toContain('mixed-currency');
+  });
+
+  it('una moneda que no reconocemos se conserva tal cual, en mayúsculas', () => {
+    const prepared = parseRows(['01/02/2026;COMPRA;EUR;-10,00']);
+    expect(prepared.rows[0]?.transaction.amount.currency).toBe('EUR');
+  });
+});

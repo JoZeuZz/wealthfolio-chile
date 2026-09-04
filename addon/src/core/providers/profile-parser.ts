@@ -11,8 +11,8 @@ import {
   type ValidationResult,
 } from '../model/statement';
 import { cell, ColumnRole, detectHeader, normalizeHeader, type ColumnMap } from '../parsing/columns';
-import type { StatementProfile } from '../parsing/profile';
-import { mapRows } from '../parsing/rows';
+import { COMMON_IGNORE_PATTERNS, type StatementProfile } from '../parsing/profile';
+import { isIgnoredRow, mapRows } from '../parsing/rows';
 import type { NormalizedTransaction } from '../model/transaction';
 import { isBlankRow, type Sheet } from '../parsing/tabular';
 import { pickDataSheet } from '../parsing/workbook';
@@ -173,7 +173,10 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
 
   const map = mergeSynonyms(sheet, header.headerRow, profile, header.map);
   const account = readAccountMetadata(sheet, profile, header.headerRow);
-  const fromColumn = readCurrencyColumn(sheet, map, header.firstDataRow);
+  const fromColumn = readCurrencyColumn(sheet, map, header.firstDataRow, [
+    ...COMMON_IGNORE_PATTERNS,
+    ...(profile.ignoreRowPatterns ?? []),
+  ]);
 
   if (fromColumn.length > 1) {
     // The role was mapped, the column was reserved, and nothing read it: every
@@ -376,18 +379,51 @@ const CURRENCY_PATTERNS: Array<[RegExp, string]> = [
 /**
  * The distinct currencies the file states per row, in the order first seen.
  *
- * Empty when the profile mapped no currency column or every cell is blank, in
- * which case the preamble and then the profile default decide as before.
+ * Normalised through the same patterns the preamble uses, because `$`, `PESOS`
+ * and `CLP` are one currency written three ways. Comparing the raw cells made a
+ * statement that mixed two spellings look like a statement that mixes two
+ * currencies, and a statement written entirely in `PESOS` adopted `PESOS` as
+ * its currency code — which then failed the account match against a CLP account
+ * and refused an ordinary cartola.
+ *
+ * Rows the profile ignores do not vote. A footer reading
+ * `TOTAL DEL PERIODO;PESOS;…` is not a second currency.
+ *
+ * A code we do not recognise is kept as written (upper-cased): refusing every
+ * currency this project has not enumerated would be worse than carrying `EUR`
+ * through to an account match that can judge it.
  */
-function readCurrencyColumn(sheet: Sheet, map: ColumnMap, firstDataRow: number): string[] {
+function readCurrencyColumn(
+  sheet: Sheet,
+  map: ColumnMap,
+  firstDataRow: number,
+  ignorePatterns: readonly RegExp[],
+): string[] {
   if (map.currency === undefined) return [];
   const seen: string[] = [];
   for (let i = firstDataRow; i < sheet.rows.length; i += 1) {
-    const raw = cell(sheet.rows[i] as string[], map, ColumnRole.currency).trim().toUpperCase();
+    const row = sheet.rows[i] as string[];
+    if (isBlankRow(row) || isIgnoredRow(row, map, ignorePatterns)) continue;
+    const raw = cell(row, map, ColumnRole.currency).trim();
     if (raw === '') continue;
-    if (!seen.includes(raw)) seen.push(raw);
+    const code = normalizeCurrency(raw);
+    if (!seen.includes(code)) seen.push(code);
   }
   return seen;
+}
+
+/** `$`, `PESOS` and `CLP` all mean CLP. Anything unrecognised stays as written. */
+function normalizeCurrency(text: string): string {
+  const trimmed = text.trim();
+  // A currency *column* holding a bare `$` is the peso. The preamble patterns
+  // require `$ chilenos` because there the symbol appears next to amounts and
+  // means nothing on its own; in a column whose whole job is to name the
+  // currency, it does.
+  if (trimmed === '$') return 'CLP';
+  for (const [pattern, code] of CURRENCY_PATTERNS) {
+    if (pattern.test(trimmed)) return code;
+  }
+  return trimmed.toUpperCase();
 }
 
 function readAccountMetadata(
