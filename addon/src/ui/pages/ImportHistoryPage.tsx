@@ -11,6 +11,7 @@ import {
 } from '@wealthfolio/ui';
 import { useEffect, useState } from 'react';
 import { ImportHistory, type ImportRun } from '../../services/import-history';
+import type { ShardedListHealth } from '../../services/storage';
 import { useAddon } from '../context';
 
 /**
@@ -25,15 +26,33 @@ export function ImportHistoryPage() {
   const [runs, setRuns] = useState<ImportRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>();
+  const [health, setHealth] = useState<ShardedListHealth | undefined>();
+  const [repairing, setRepairing] = useState(false);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      const history = ImportHistory.from(ctx);
       try {
-        const recent = await ImportHistory.from(ctx).recent(100);
-        if (!cancelled) setRuns(recent);
+        const recent = await history.recent(100);
+        if (!cancelled) {
+          setRuns(recent);
+          setError(undefined);
+          setHealth(undefined);
+        }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+        // The read refused because it could not establish what is there. The
+        // diagnosis is the only thing that still answers, and without it the
+        // user is left with a message and nothing to do about it.
+        try {
+          const report = await history.health();
+          if (!cancelled) setHealth(report);
+        } catch {
+          // Even diagnosing failed. The message above is all there is.
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -41,7 +60,20 @@ export function ImportHistoryPage() {
     return () => {
       cancelled = true;
     };
-  }, [ctx]);
+  }, [ctx, reload]);
+
+  async function repair() {
+    setRepairing(true);
+    try {
+      await ImportHistory.from(ctx).repair();
+      setLoading(true);
+      setReload((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRepairing(false);
+    }
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-6">
@@ -60,7 +92,21 @@ export function ImportHistoryPage() {
       {error ? (
         <Alert variant="destructive">
           <AlertTitle>No se pudo leer el historial</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>
+            <p>{error}</p>
+            {health ? <StorageDiagnosis health={health} /> : null}
+            {health && !health.truncated ? (
+              <Button
+                className="mt-3"
+                variant="outline"
+                size="sm"
+                disabled={repairing}
+                onClick={() => void repair()}
+              >
+                {repairing ? 'Reparando…' : 'Reconstruir el índice'}
+              </Button>
+            ) : null}
+          </AlertDescription>
         </Alert>
       ) : null}
 
@@ -189,4 +235,47 @@ function statusLabel(status: ImportRun['status']): string {
     default:
       return 'Fallida';
   }
+}
+
+/**
+ * What the storage diagnosis found, in the terms the user's problem is in.
+ *
+ * Counts only. A shard holds import records, and an import record holds a
+ * sanitised file name and a hash — but a diagnosis is read when something is
+ * already wrong, which is exactly when the temptation to dump the raw value
+ * into the screen appears. It says how many and which positions, never what is
+ * in them.
+ */
+function StorageDiagnosis({ health }: { health: ShardedListHealth }) {
+  const lines: string[] = [];
+  if (!health.indexReadable) {
+    lines.push('El índice de bloques no se pudo leer y se reconstruyó recorriendo el almacenamiento.');
+  }
+  if (health.truncated) {
+    lines.push(
+      `Se recorrieron ${health.shards} bloques sin llegar al final. Mientras eso siga así no se leerá ni se escribirá el historial, para no pasar por encima de lo que no se alcanzó a ver.`,
+    );
+  }
+  if (health.recoveredShards > 0) {
+    lines.push(`${health.recoveredShards} bloque(s) que el índice no conocía.`);
+  }
+  if (health.corruptShards.length > 0) {
+    lines.push(
+      `${health.corruptShards.length} bloque(s) ilegibles (posición ${health.corruptShards.join(', ')}). No se tocan: reconstruir el índice no los borra.`,
+    );
+  }
+  if (health.missingShards.length > 0) {
+    lines.push(
+      `${health.missingShards.length} hueco(s) entre bloques (posición ${health.missingShards.join(', ')}).`,
+    );
+  }
+  lines.push(`Registros legibles: ${health.total}.`);
+
+  return (
+    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+      {lines.map((line) => (
+        <li key={line}>{line}</li>
+      ))}
+    </ul>
+  );
 }

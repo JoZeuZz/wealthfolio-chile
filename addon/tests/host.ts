@@ -26,14 +26,18 @@ export interface MemoryStore {
   maxValueBytes?: number;
   /** Fail the next call to any method with this error. */
   failWith?: Error;
+  /** Reads served since the counter was last reset. Lets a test pin probe cost. */
+  reads: number;
 }
 
 export function memoryStore(options: { maxValueBytes?: number } = {}): MemoryStore {
   const store: MemoryStore = {
     data: new Map<string, string>(),
+    reads: 0,
     ...(options.maxValueBytes !== undefined ? { maxValueBytes: options.maxValueBytes } : {}),
     async get(key) {
       if (store.failWith) throw store.failWith;
+      store.reads += 1;
       return store.data.get(key) ?? null;
     },
     async set(key, value) {

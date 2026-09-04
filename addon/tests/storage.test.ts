@@ -5,6 +5,7 @@ import {
   StorageError,
   StorageKeys,
   writeJson,
+  MAX_SHARD_PROBES,
 } from '../src/services/storage';
 import { ImportHistory, newRunId, type ImportRun } from '../src/services/import-history';
 import { memoryStore } from './host';
@@ -409,5 +410,200 @@ describe('el índice recuerda con qué tamaño de shard se escribió', () => {
 
     expect(await readBack.count()).toBe(120);
     expect(await readBack.readAll()).toHaveLength(120);
+  });
+});
+
+/**
+ * Hasta dónde mira una lectura, y qué pasa cuando deja de mirar.
+ *
+ * `probeShardCount` avanzaba como máximo 16 shards desde donde el índice
+ * decía que la lista terminaba, y devolvía **el mismo tipo de valor** tanto si
+ * había encontrado el final de verdad como si se había quedado sin
+ * presupuesto. Nadie aguas arriba podía distinguir «la lista termina aquí» de
+ * «dejé de mirar aquí».
+ *
+ * El escenario que lo dispara no es tener muchas importaciones: es perder el
+ * índice teniéndolas. Con `ImportHistory` a 50 registros por shard, 16 shards
+ * son 800 importaciones, y a partir de ahí `readAll` leía corto, `count`
+ * mentía y el siguiente `append` escribía encima de lo que no había visto.
+ */
+describe('límite de sondeo y truncamiento', () => {
+  interface Item {
+    n: number;
+  }
+
+  /** Escribe shards directamente, sin índice: el estado tras perderlo. */
+  async function shardsWithoutIndex(count: number) {
+    const store = memoryStore();
+    for (let shard = 0; shard < count; shard += 1) {
+      store.data.set(`wfcl.test.s${shard}`, JSON.stringify([{ n: shard }]));
+    }
+    return { store, list: new ShardedList<Item>(store, 'wfcl.test', 1) };
+  }
+
+  it('recupera muy por encima de los 16 shards que alcanzaba antes', async () => {
+    const { list } = await shardsWithoutIndex(120);
+
+    expect(await list.count()).toBe(120);
+    expect(await list.readAll()).toHaveLength(120);
+  });
+
+  it('cuando se queda sin presupuesto lo dice, en vez de fingir un final', async () => {
+    const { list } = await shardsWithoutIndex(MAX_SHARD_PROBES + 2);
+
+    const health = await list.inspect();
+    expect(health.truncated).toBe(true);
+  });
+
+  it('una lista sana no está truncada', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+    await list.append([{ n: 1 }, { n: 2 }, { n: 3 }]);
+
+    expect((await list.inspect()).truncated).toBe(false);
+  });
+
+  it('leer no devuelve una lista corta en silencio', async () => {
+    const { list } = await shardsWithoutIndex(MAX_SHARD_PROBES + 2);
+
+    await expect(list.readAll()).rejects.toBeInstanceOf(StorageError);
+    await expect(list.count()).rejects.toBeInstanceOf(StorageError);
+  });
+
+  it('los «más recientes» tampoco, porque lo no visto es justo lo más reciente', async () => {
+    const { list } = await shardsWithoutIndex(MAX_SHARD_PROBES + 2);
+
+    await expect(list.readRecent(5)).rejects.toBeInstanceOf(StorageError);
+  });
+
+  it('y sobre todo, no se escribe donde no se sabe qué hay', async () => {
+    const { store, list } = await shardsWithoutIndex(MAX_SHARD_PROBES + 2);
+    const before = store.data.get(`wfcl.test.s${MAX_SHARD_PROBES}`);
+
+    await expect(list.append([{ n: 999 }])).rejects.toBeInstanceOf(StorageError);
+    expect(store.data.get(`wfcl.test.s${MAX_SHARD_PROBES}`)).toBe(before);
+  });
+});
+
+/**
+ * Un hueco no es un final.
+ *
+ * Sin índice, el sondeo se detiene en el primer shard ausente. Si ese hueco
+ * está en medio —un borrado interrumpido, una réplica entre dispositivos que
+ * llegó desordenada— todo lo que hay detrás desaparece sin que nada falle.
+ * Mirar unos pocos shards más allá del hueco cuesta cuatro lecturas y sólo se
+ * paga cuando el índice ya no está para decir dónde termina la lista.
+ */
+describe('huecos entre shards', () => {
+  interface Item {
+    n: number;
+  }
+
+  it('sin índice, un hueco no esconde lo que hay detrás', async () => {
+    const store = memoryStore();
+    for (const shard of [0, 1, 3, 4]) {
+      store.data.set(`wfcl.test.s${shard}`, JSON.stringify([{ n: shard }]));
+    }
+    const list = new ShardedList<Item>(store, 'wfcl.test', 1);
+
+    expect((await list.readAll()).map((i) => i.n)).toEqual([0, 1, 3, 4]);
+    expect((await list.inspect()).missingShards).toEqual([2]);
+  });
+
+  it('una lista sana no paga esas lecturas de más', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+    await list.append([{ n: 1 }, { n: 2 }]);
+
+    store.reads = 0;
+    await list.count();
+    // Un sondeo (el shard siguiente al que el índice declara) y la lectura del
+    // último shard para el total. Nada más.
+    expect(store.reads).toBeLessThanOrEqual(3);
+  });
+});
+
+/**
+ * Vaciar la lista tiene que dejarla coherente aunque se interrumpa.
+ *
+ * `clear()` borraba de abajo hacia arriba y el índice al final. Interrumpirlo
+ * dejaba un **sufijo** de shards —`s5`, `s6`— sin nada delante: exactamente la
+ * forma que el sondeo no puede recorrer. Borrar de arriba hacia abajo, y el
+ * índice primero, deja siempre un prefijo, que es una lista más corta y nada
+ * más.
+ */
+describe('vaciado interrumpido', () => {
+  interface Item {
+    n: number;
+  }
+
+  it('lo que queda es un prefijo, no un sufijo huérfano', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 1);
+    await list.append([{ n: 0 }, { n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }]);
+
+    // Índice, `s4`, `s3`: tres borrados y la interrupción antes de `s2`.
+    const failAfter = 3;
+    let deletes = 0;
+    const original = store.delete.bind(store);
+    store.delete = async (key: string) => {
+      deletes += 1;
+      if (deletes > failAfter) throw new Error('sincronización interrumpida');
+      await original(key);
+    };
+
+    await expect(list.clear()).rejects.toThrow();
+    store.delete = original;
+
+    const remaining = [...store.data.keys()]
+      .filter((key) => key.startsWith('wfcl.test.s'))
+      .map((key) => Number(key.slice('wfcl.test.s'.length)))
+      .sort((a, b) => a - b);
+
+    expect(remaining).toEqual([0, 1, 2]);
+    expect((await list.readAll()).map((i) => i.n)).toEqual([0, 1, 2]);
+  });
+});
+
+/**
+ * Reparar es reconstruir el índice, no tocar los datos.
+ *
+ * Tras perder el índice, cada lectura vuelve a recorrer la lista entera hasta
+ * que una escritura lo deje bien. `reindex()` lo deja bien de una vez y
+ * devuelve lo que encontró, para que la reparación pueda ser algo que el
+ * usuario ve y decide, no un efecto colateral de leer.
+ */
+describe('reindex', () => {
+  interface Item {
+    n: number;
+  }
+
+  it('reconstruye el índice y la siguiente lectura ya no recorre nada', async () => {
+    const store = memoryStore();
+    for (let shard = 0; shard < 30; shard += 1) {
+      store.data.set(`wfcl.test.s${shard}`, JSON.stringify([{ n: shard }]));
+    }
+    const list = new ShardedList<Item>(store, 'wfcl.test', 1);
+
+    const health = await list.reindex();
+    expect(health.shards).toBe(30);
+    expect(health.total).toBe(30);
+    expect(health.recoveredShards).toBe(30);
+
+    store.reads = 0;
+    expect(await list.count()).toBe(30);
+    expect(store.reads).toBeLessThanOrEqual(3);
+  });
+
+  it('no destruye un shard ilegible al reparar', async () => {
+    const store = memoryStore();
+    const list = new ShardedList<Item>(store, 'wfcl.test', 2);
+    await list.append([{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }]);
+    store.data.set('wfcl.test.s0', '[{"n":1},{"n"');
+
+    const health = await list.reindex();
+
+    expect(health.corruptShards).toEqual([0]);
+    expect(store.data.get('wfcl.test.s0')).toBe('[{"n":1},{"n"');
   });
 });

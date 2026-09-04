@@ -1,5 +1,10 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
-import { ShardedList, StorageKeys, type KeyValueStore } from './storage';
+import {
+  ShardedList,
+  StorageKeys,
+  type KeyValueStore,
+  type ShardedListHealth,
+} from './storage';
 
 /**
  * The import history.
@@ -96,6 +101,22 @@ export class ImportHistory {
 
   async clear(): Promise<void> {
     await this.list.clear();
+  }
+
+  /**
+   * What the store holds, including what the index got wrong.
+   *
+   * Reads refuse rather than come back short, so when one fails this is what
+   * says why — and it is the only method that still answers on a list too
+   * damaged to read.
+   */
+  async health(): Promise<ShardedListHealth> {
+    return this.list.inspect();
+  }
+
+  /** Rebuild the index from the shards. Never touches a shard. */
+  async repair(): Promise<ShardedListHealth> {
+    return this.list.reindex();
   }
 }
 
