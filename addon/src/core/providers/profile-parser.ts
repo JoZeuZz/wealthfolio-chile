@@ -1,11 +1,12 @@
 import { isIsoDate, parseStatementDate, type IsoDate } from '../dates';
-import { add, compare, type Money } from '../money';
+import { add, compare, parseAmount, subtract, sum, type Money } from '../money';
 import {
   DETECTION_FLOOR,
   StatementProduct,
   type DetectionResult,
   type ParsedStatement,
   type RowStats,
+  type StatementBalance,
   type StatementIssue,
   type StatementPeriod,
   type ValidationResult,
@@ -233,6 +234,15 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
   }
 
   const period = derivePeriod(mapped.transactions.map((t) => t.date), readPeriod(sheet, profile, header.headerRow));
+  const balances = readBalances({
+    sheet,
+    profile,
+    headerRow: header.headerRow,
+    currency,
+    transactions: mapped.transactions,
+    stats: mapped.stats,
+    issues,
+  });
 
   return {
     institution: profile.institution,
@@ -242,10 +252,199 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
     period,
     transactions: mapped.transactions,
     rowStats: mapped.stats,
+    ...(balances.opening !== undefined ? { openingBalance: balances.opening } : {}),
+    ...(balances.closing !== undefined ? { closingBalance: balances.closing } : {}),
     issues,
     fileHash: input.fileHash,
     fileName: input.file.name,
   };
+}
+
+/**
+ * Wording that names the balance before the period's first movement.
+ *
+ * `SALDO ANTERIOR` is the previous statement's closing balance, which is the
+ * same number seen from the other side.
+ */
+const DECLARED_OPENING = /\bSALDO\s+(?:INICIAL|ANTERIOR)\b[^\d(+-]{0,40}([(+-]?[\d.,]+\)?-?)/i;
+
+/**
+ * Wording that names the balance after the period's last movement.
+ *
+ * `SALDO DISPONIBLE` is deliberately absent: in a Chilean cuenta corriente the
+ * available balance includes the línea de crédito, so reading it as the
+ * period's closing balance invents funds that are not there — and does it with
+ * the authority of something the file "declared". `SALDO ACTUAL` is absent for
+ * a quieter reason: on a statement downloaded mid-period it is today's
+ * balance, not the balance at the end of what the file covers.
+ */
+const DECLARED_CLOSING = /\bSALDO\s+(?:FINAL|CONTABLE)\b[^\d(+-]{0,40}([(+-]?[\d.,]+\)?-?)/i;
+
+interface StatementBalances {
+  opening?: StatementBalance;
+  closing?: StatementBalance;
+}
+
+/**
+ * The balance before the first movement and after the last one, from whatever
+ * evidence the file offers — derived first, declared second.
+ *
+ * Derived wins because it shares its sign convention and its number format
+ * with the amounts it will be compared against, while a preamble figure shares
+ * neither. When the two disagree that disagreement is itself worth reporting,
+ * and `validateStatement` does that rather than this function picking a winner
+ * quietly.
+ */
+function readBalances(input: {
+  sheet: Sheet;
+  profile: StatementProfile;
+  headerRow: number;
+  currency: string;
+  transactions: readonly NormalizedTransaction[];
+  stats: RowStats;
+  issues: StatementIssue[];
+}): StatementBalances {
+  const derived = deriveBalances(input.transactions, input.stats, input.currency);
+  const declared = readDeclaredBalances(input.sheet, input.profile, input.headerRow, input.currency);
+
+  reportDisagreement('inicial', derived.opening, declared.opening, input.issues);
+  reportDisagreement('final', derived.closing, declared.closing, input.issues);
+
+  return {
+    ...(derived.opening ?? declared.opening
+      ? { opening: derived.opening ?? (declared.opening as StatementBalance) }
+      : {}),
+    ...(derived.closing ?? declared.closing
+      ? { closing: derived.closing ?? (declared.closing as StatementBalance) }
+      : {}),
+  };
+}
+
+/**
+ * The file saying one thing and its own numbers saying another.
+ *
+ * Both figures describe the same moment, so a disagreement means one of them
+ * was read wrong — a misread balance column, a stray number beside the word
+ * "saldo", or, worst and likeliest, an amount whose sign came out backwards.
+ * Reported rather than resolved: the derived figure is the one this pipeline
+ * keeps, because it shares its sign convention with the amounts, but which of
+ * the two is right is not something the parser can decide from the file alone.
+ */
+function reportDisagreement(
+  which: 'inicial' | 'final',
+  derived: StatementBalance | undefined,
+  declared: StatementBalance | undefined,
+  issues: StatementIssue[],
+): void {
+  if (!derived || !declared) return;
+  if (derived.amount.currency !== declared.amount.currency) return;
+  if (compare(derived.amount, declared.amount) === 0) return;
+
+  issues.push({
+    level: 'warning',
+    code: 'balance-declared-mismatch',
+    message: `El saldo ${which} que declara la cabecera no coincide con el que se desprende de la columna de saldo y los montos. Uno de los dos se está leyendo mal.`,
+  });
+}
+
+/**
+ * Balances read out of the running-balance column.
+ *
+ * Three conditions, all of them about whether the movement list in memory is
+ * the movement list the file has.
+ *
+ * **Order.** "First row" is not "first movement": Banco de Chile and Santander
+ * export newest first. `inLedgerOrder` puts them the right way round, and when
+ * the file is in no date order at all it declines rather than picking an end
+ * arbitrarily.
+ *
+ * **Completeness.** A row that failed to parse is not in `transactions`, so
+ * the first movement in memory may not be the first movement of the period,
+ * and subtracting its amount from its balance would produce an opening balance
+ * for the wrong moment. With any failed row, nothing is derived.
+ *
+ * **Presence.** Plenty of cartolas print the balance once per day. The first
+ * movement having no balance means there is no opening to derive, not that the
+ * opening is zero.
+ */
+function deriveBalances(
+  transactions: readonly NormalizedTransaction[],
+  stats: RowStats,
+  currency: string,
+): StatementBalances {
+  if (stats.failed > 0) return {};
+  const ordered = inLedgerOrder(transactions);
+  if (!ordered || ordered.length === 0) return {};
+
+  const first = ordered[0] as NormalizedTransaction;
+  const last = ordered[ordered.length - 1] as NormalizedTransaction;
+  const out: StatementBalances = {};
+
+  if (first.balanceAfter && first.balanceAfter.currency === currency) {
+    out.opening = { amount: subtract(first.balanceAfter, first.amount), source: 'derived' };
+  }
+  if (last.balanceAfter && last.balanceAfter.currency === currency) {
+    out.closing = { amount: last.balanceAfter, source: 'derived' };
+  }
+  return out;
+}
+
+/**
+ * Balances printed in the preamble.
+ *
+ * Not read on a card. `SALDO ANTERIOR $450.000` on a tarjeta is what you owe,
+ * so in this pipeline's sign convention it is negative — but the preamble has
+ * no debit/credit column to say so, and there is no real card export to
+ * calibrate against. A number whose sign is a guess is not evidence, and
+ * labelling it `declared` would give the guess more standing than the amounts
+ * it would be checked against.
+ */
+function readDeclaredBalances(
+  sheet: Sheet,
+  profile: StatementProfile,
+  headerRow: number,
+  currency: string,
+): StatementBalances {
+  if (
+    profile.product === StatementProduct.credit_card ||
+    profile.product === StatementProduct.credit_line
+  ) {
+    return {};
+  }
+
+  const end = headerRow >= 0 ? headerRow + 1 : Math.min(sheet.rows.length, PREAMBLE_ROWS);
+  const text = sheet.rows
+    .slice(0, end)
+    .map((row) => row.join(' '))
+    .join('\n');
+
+  const out: StatementBalances = {};
+  const opening = readDeclared(DECLARED_OPENING, text, profile, currency);
+  if (opening) out.opening = opening;
+  const closing = readDeclared(DECLARED_CLOSING, text, profile, currency);
+  if (closing) out.closing = closing;
+  return out;
+}
+
+function readDeclared(
+  pattern: RegExp,
+  text: string,
+  profile: StatementProfile,
+  currency: string,
+): StatementBalance | undefined {
+  const match = pattern.exec(text);
+  if (!match?.[1]) return undefined;
+  try {
+    return {
+      amount: parseAmount(match[1], { currency, format: profile.numberFormat }).money,
+      source: 'declared',
+    };
+  } catch {
+    // A preamble figure that will not parse is not worth an issue of its own:
+    // it is the one place in the file where a stray number next to the word
+    // "saldo" is routine.
+    return undefined;
+  }
 }
 
 /**
@@ -506,6 +705,7 @@ export function validateStatement(
   const { transactions } = statement;
 
   const balanceReconciles = checkBalanceWalk(statement, profile, issues);
+  checkBalanceTotal(statement, issues);
 
   for (const transaction of transactions) {
     for (const warning of transaction.warnings) {
@@ -590,7 +790,16 @@ function checkBalanceWalk(
     return undefined;
   }
 
-  let previousBalance: Money | undefined;
+  // Seeded only with a *declared* opening. A derived one is computed from the
+  // first row's own balance and amount, so checking that row against it would
+  // be checking a number against itself — a step that always passes, added to
+  // the denominator of the mismatch ratio, quietly making a bad statement look
+  // proportionally better.
+  let previousBalance: Money | undefined =
+    statement.openingBalance?.source === 'declared' &&
+    statement.openingBalance.amount.currency === statement.account.currency
+      ? statement.openingBalance.amount
+      : undefined;
   let pending: Money | undefined;
   let steps = 0;
   let mismatches = 0;
@@ -632,6 +841,49 @@ function checkBalanceWalk(
     message: `El saldo declarado no cuadra con los montos en ${mismatches} de ${steps} pasos. Es probable que el signo de los montos o alguna columna estén mal interpretados.`,
   });
   return false;
+}
+
+/**
+ * Opening + every movement === closing, in one comparison.
+ *
+ * The balance walk can only check the steps the file prints a balance for, and
+ * a cartola with no balance column at all gets no coherence check whatsoever —
+ * which is most of what a bank hands you when you ask for a CSV. Two declared
+ * figures at the ends check every amount in between, including the sign of
+ * each one, without needing a single intermediate balance.
+ *
+ * Requires at least one end to be declared. With both ends derived this is the
+ * balance walk restated: the opening is the first row's balance minus its
+ * amount and the closing is the last row's balance, so the comparison reduces
+ * to the same arithmetic `checkBalanceWalk` already reported on, and firing
+ * twice for one fault reads as two faults.
+ *
+ * Skipped rows are safe to leave out — a row carrying money is never skipped —
+ * but a *failed* row is a missing amount, so the sum would come up short for a
+ * reason this issue does not describe.
+ */
+function checkBalanceTotal(statement: ParsedStatement, issues: StatementIssue[]): void {
+  const opening = statement.openingBalance;
+  const closing = statement.closingBalance;
+  if (!opening || !closing) return;
+  if (opening.source === 'derived' && closing.source === 'derived') return;
+  if (statement.rowStats.failed > 0) return;
+
+  const currency = statement.account.currency;
+  if (opening.amount.currency !== currency || closing.amount.currency !== currency) return;
+
+  const movements = sum(
+    statement.transactions.map((transaction) => transaction.amount),
+    currency,
+  );
+  if (compare(add(opening.amount, movements), closing.amount) === 0) return;
+
+  issues.push({
+    level: 'warning',
+    code: 'balance-total-mismatch',
+    message:
+      'El saldo inicial más los movimientos no da el saldo final que declara la cartola. Falta algún movimiento, sobra alguno, o el signo de alguno está al revés.',
+  });
 }
 
 /**

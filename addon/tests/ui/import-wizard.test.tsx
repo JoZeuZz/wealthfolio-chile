@@ -423,3 +423,43 @@ describe('la vista previa se puede usar sin ver la tabla', () => {
     expect(document.querySelector('[aria-current="step"]')?.textContent).toBe('Vista previa');
   });
 });
+
+/**
+ * Los saldos en la vista previa.
+ *
+ * Comparar el saldo inicial y el final contra la app del banco es la
+ * comprobación que un usuario sí puede hacer sin abrir el archivo. Para que
+ * sirva tiene que decir además cuál de los dos números lo imprimió la cartola
+ * y cuál lo dedujo el addon, porque si discrepan eso decide a quién culpar.
+ */
+describe('saldos de la cartola en la vista previa', () => {
+  it('muestra apertura y cierre, y de dónde salió cada uno', async () => {
+    await openWizardWith(
+      [
+        'Banco de Chile - Cartola Cuenta Corriente',
+        'Saldo inicial;100.000',
+        '',
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '2026-02-03;COMPRA SUPERMERCADO;10.000;;90.000',
+      ].join('\n'),
+    );
+
+    expect(await screen.findByText('Saldos')).toBeInTheDocument();
+    expect(screen.getByText(/inicial calculado · final calculado/)).toBeInTheDocument();
+  });
+
+  it('un extremo sin evidencia se muestra como tal, no como cero', async () => {
+    await openWizardWith(
+      [
+        'Banco de Chile - Cartola Cuenta Corriente',
+        'Saldo inicial;100.000',
+        '',
+        'Fecha;Descripcion;Cargo;Abono',
+        '2026-02-03;COMPRA SUPERMERCADO;10.000;',
+      ].join('\n'),
+    );
+
+    await screen.findByText('Saldos');
+    expect(screen.getByText(/inicial declarado · final sin dato/)).toBeInTheDocument();
+  });
+});

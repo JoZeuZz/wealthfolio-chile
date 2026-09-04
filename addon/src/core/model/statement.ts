@@ -28,6 +28,27 @@ export interface StatementAccount {
   holder?: string;
 }
 
+/**
+ * Where a balance came from, which decides what it can be used to prove.
+ *
+ * `derived` comes out of the running-balance column: same parser, same column,
+ * same sign convention as the amounts beside it, so comparing the two is
+ * arithmetic. `declared` comes out of free text in the preamble, where nothing
+ * says whether an unsigned number is a fund or a debt — enough to show the
+ * user, and enough to check the amounts against, but not something the amounts
+ * can be checked *by* in the other direction.
+ *
+ * The distinction is why a derived balance never seeds the balance walk: the
+ * opening one is computed *from* the first row, so checking the first row
+ * against it would be checking a number against itself.
+ */
+export type BalanceSource = 'declared' | 'derived';
+
+export interface StatementBalance {
+  amount: Money;
+  source: BalanceSource;
+}
+
 /** Period covered by the statement, when the file states or implies one. */
 export interface StatementPeriod {
   from?: IsoDate;
@@ -65,9 +86,14 @@ export interface ParsedStatement {
   transactions: NormalizedTransaction[];
   /** What happened to every row below the header. */
   rowStats: RowStats;
-  /** Opening/closing balances when the file reports them — used by validation. */
-  openingBalance?: Money;
-  closingBalance?: Money;
+  /**
+   * The balance before the first movement of the period, when the file gives
+   * evidence for one. Chronological, not positional: a cartola exported newest
+   * first still opens with its oldest movement.
+   */
+  openingBalance?: StatementBalance;
+  /** The balance after the last movement of the period. Same rule. */
+  closingBalance?: StatementBalance;
   /** File-level problems that are not tied to a single row. */
   issues: StatementIssue[];
   /** SHA-256 of the source bytes. */

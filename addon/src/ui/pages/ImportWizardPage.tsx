@@ -17,9 +17,9 @@ import type { AccountMatch, HostAccountFacts } from '../../core/accounts/match';
 import { categoryPath } from '../../core/categories/defaults';
 import { buildDuplicateIndex } from '../../core/dedupe/classify';
 import { formatIsoDate } from '../../core/dates';
-import { toDecimalString } from '../../core/money';
+import { formatCLP, toDecimalString } from '../../core/money';
 import { maskAccountNumber } from '../../core/privacy';
-import type { RowStats } from '../../core/model/statement';
+import type { ParsedStatement, RowStats, StatementBalance } from '../../core/model/statement';
 import { setRowSelection, type PreparedImport, type PreviewRow } from '../../core/pipeline';
 import { listInstitutions, PARSERS } from '../../core/providers/registry';
 import type { SourceFile } from '../../core/parsing/tabular';
@@ -562,6 +562,13 @@ function DetectionStep({
             value={`${statement.transactions.length} · ${statement.account.currency}`}
             hint={describeRowStats(statement.rowStats)}
           />
+          {statement.openingBalance || statement.closingBalance ? (
+            <Field
+              label="Saldos"
+              value={`${describeBalance(statement.openingBalance)} → ${describeBalance(statement.closingBalance)}`}
+              hint={describeBalanceSources(statement)}
+            />
+          ) : null}
         </div>
 
         {accountMatch && !accountMatch.blocking ? (
@@ -900,6 +907,33 @@ function Field({ label, value, hint }: { label: string; value: string; hint?: st
       {hint ? <span className="text-muted-foreground text-xs">{hint}</span> : null}
     </div>
   );
+}
+
+/**
+ * A balance, or a dash where the file gave no evidence for one.
+ *
+ * The dash is the point of showing this at all: it says the cartola never
+ * stated where the period started, which is why nothing checked it.
+ */
+function describeBalance(balance: StatementBalance | undefined): string {
+  return balance ? formatCLP(balance.amount, { withSymbol: true }) : '—';
+}
+
+/**
+ * Where each balance came from.
+ *
+ * A user comparing these against their bank app needs to know which of the two
+ * numbers the cartola actually printed and which one this addon worked out, so
+ * that a disagreement points at the right suspect.
+ */
+function describeBalanceSources(statement: ParsedStatement): string {
+  const word = (balance: StatementBalance | undefined) =>
+    balance === undefined
+      ? 'sin dato'
+      : balance.source === 'declared'
+        ? 'declarado'
+        : 'calculado';
+  return `inicial ${word(statement.openingBalance)} · final ${word(statement.closingBalance)}`;
 }
 
 /**
