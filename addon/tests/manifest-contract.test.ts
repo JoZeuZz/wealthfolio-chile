@@ -20,17 +20,44 @@ import { describe, expect, it } from 'vitest';
 const addon = (path: string) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 
 const manifest = JSON.parse(readFileSync(addon('manifest.json'), 'utf8')) as {
+  version: string;
   sdkVersion: string;
   minWealthfolioVersion: string;
   hostDependencies: Record<string, string>;
 };
 const pkg = JSON.parse(readFileSync(addon('package.json'), 'utf8')) as {
+  version: string;
   peerDependencies: Record<string, string>;
   devDependencies: Record<string, string>;
 };
 const viteConfig = readFileSync(addon('vite.config.ts'), 'utf8');
 
 const VERSION_TRIPLE = /^\d+\.\d+\.\d+$/;
+
+/**
+ * La versión del addon, que se declara dos veces.
+ *
+ * `manifest.json` es lo que el host lee y muestra; `package.json` es lo que
+ * nombra el zip (`wealthfolio-chile-$npm_package_version.zip`). Divergir
+ * produce el peor fallo posible de un release: un archivo que se llama como la
+ * versión nueva conteniendo un manifiesto que le dice al host que es la vieja,
+ * de modo que instalarlo sobre la anterior no es una actualización de nada.
+ *
+ * Ya pasó una vez en sentido contrario: la documentación decía `0.2.0-rc.1`
+ * mientras los dos manifiestos seguían en `0.1.1`. `infra/addons/**` no entra
+ * aquí porque no está versionado — `scripts/deploy-addon.sh` lo genera copiando
+ * este mismo `manifest.json`.
+ */
+describe('la versión del addon', () => {
+  it('es la misma en el manifiesto y en package.json', () => {
+    expect(manifest.version).toBe(pkg.version);
+  });
+
+  it('tiene una forma que el host y npm entienden los dos', () => {
+    // `major.minor.patch` con un pre-release opcional: `0.2.0-rc.1`.
+    expect(manifest.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
+  });
+});
 
 describe('manifest.json', () => {
   it('declara una sdkVersion con forma de versión exacta', () => {

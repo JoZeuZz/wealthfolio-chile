@@ -2,7 +2,7 @@
 
 Qué funciona **hoy**, verificado, y qué no.
 
-Actualizado: 2026-09-03 · Wealthfolio v3.7.0 · addon 0.2.0-rc.1
+Actualizado: 2026-09-04 · Wealthfolio v3.7.0 · addon 0.2.0-rc.1
 
 ---
 
@@ -28,10 +28,10 @@ release candidate y no un `0.2.0`.
 ```
 typecheck   ✅  tsc --noEmit, strict + noUncheckedIndexedAccess
 lint        ✅  eslint, 0 errores, 0 warnings, sin `any`
-tests       ✅  582 pasando (34 archivos), incluidos 33 de UI sobre DOM
-build       ✅  dist/addon.js — un solo archivo, 797 KB
+tests       ✅  672 pasando (35 archivos), incluidos 37 de UI sobre DOM
+build       ✅  dist/addon.js — un solo archivo, 806 KB (212 KB gzip)
 package     ✅  wealthfolio-chile-<versión>.zip, 211 KB
-coverage    ✅  93 % de líneas y 87 % de ramas sobre `src/core/`
+coverage    ✅  94 % de líneas y 88 % de ramas sobre `src/core/`
 ```
 
 `pnpm verify` corre typecheck, lint, tests y build.

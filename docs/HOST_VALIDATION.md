@@ -151,7 +151,7 @@ el estado correcto de una instancia sin emparejar.
 
 | Qué | Resultado |
 | --- | --- |
-| Detección | `GET /api/v1/addons/installed` devuelve `wealthfolio-chile` 0.1.1 |
+| Detección | `GET /api/v1/addons/installed` devuelve `wealthfolio-chile` (0.1.1 en aquella sesión; 0.2.0-rc.1 desde el cierre de esta fase) |
 | Habilitación | `enabled: true` (el default cuando el manifiesto no dice nada) |
 | Sidebar | «Chile» presente |
 | `/addons/wealthfolio-chile` | Panel renderiza |
