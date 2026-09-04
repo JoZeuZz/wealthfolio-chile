@@ -373,20 +373,39 @@ function deriveBalances(
   currency: string,
 ): StatementBalances {
   if (stats.failed > 0) return {};
-  const ordered = inLedgerOrder(transactions);
-  if (!ordered || ordered.length === 0) return {};
+  const order = ledgerOrder(transactions);
+  if (!order || order.rows.length === 0) return {};
 
-  const first = ordered[0] as NormalizedTransaction;
-  const last = ordered[ordered.length - 1] as NormalizedTransaction;
+  const rows = order.rows;
+  const first = rows[0] as NormalizedTransaction;
+  const last = rows[rows.length - 1] as NormalizedTransaction;
   const out: StatementBalances = {};
 
-  if (first.balanceAfter && first.balanceAfter.currency === currency) {
+  // An end is only an end if the file says which row it is. Two rows sharing
+  // the first date are two candidates for "the first movement", and the
+  // opening balance is defined against exactly one of them. On an ascending
+  // file the printed order settles it — a bank lists a day's movements in the
+  // order it posted them — but on a descending file the rows were reversed to
+  // get here, and reversing a day is a guess about the bank's layout, not
+  // something the file states.
+  const firstIsUnique = order.direction === 'ascending' || !sameDate(rows[0], rows[1]);
+  const lastIsUnique =
+    order.direction === 'ascending' || !sameDate(rows[rows.length - 1], rows[rows.length - 2]);
+
+  if (firstIsUnique && first.balanceAfter && first.balanceAfter.currency === currency) {
     out.opening = { amount: subtract(first.balanceAfter, first.amount), source: 'derived' };
   }
-  if (last.balanceAfter && last.balanceAfter.currency === currency) {
+  if (lastIsUnique && last.balanceAfter && last.balanceAfter.currency === currency) {
     out.closing = { amount: last.balanceAfter, source: 'derived' };
   }
   return out;
+}
+
+function sameDate(
+  a: NormalizedTransaction | undefined,
+  b: NormalizedTransaction | undefined,
+): boolean {
+  return a !== undefined && b !== undefined && a.date === b.date;
 }
 
 /**
@@ -779,16 +798,31 @@ function checkBalanceWalk(
   profile: StatementProfile,
   issues: StatementIssue[],
 ): boolean | undefined {
-  const ordered = inLedgerOrder(statement.transactions);
-  if (!ordered) {
-    issues.push({
-      level: 'info',
-      code: 'balance-walk-skipped',
-      message:
-        'Las filas no vienen ordenadas por fecha, así que no se pudo comprobar que el saldo declarado cuadre con los montos.',
-    });
+  const order = ledgerOrder(statement.transactions);
+  if (!order) {
+    const singleDay =
+      statement.transactions.length > 1 &&
+      statement.transactions.every(
+        (transaction) => transaction.date === statement.transactions[0]?.date,
+      );
+    issues.push(
+      singleDay
+        ? {
+            level: 'info',
+            code: 'balance-order-ambiguous',
+            message:
+              'Todos los movimientos son del mismo día, así que el archivo no dice en qué orden ocurrieron. No se comprobó el saldo ni se dedujeron los saldos inicial y final.',
+          }
+        : {
+            level: 'info',
+            code: 'balance-walk-skipped',
+            message:
+              'Las filas no vienen ordenadas por fecha, así que no se pudo comprobar que el saldo declarado cuadre con los montos.',
+          },
+    );
     return undefined;
   }
+  const ordered = order.rows;
 
   // Seeded only with a *declared* opening. A derived one is computed from the
   // first row's own balance and amount, so checking that row against it would
@@ -895,20 +929,48 @@ function checkBalanceTotal(statement: ParsedStatement, issues: StatementIssue[])
  * reverse is also reversed. Sorting by date alone would leave those the wrong
  * way round and the walk would fail inside every busy day.
  */
-function inLedgerOrder(
+interface LedgerOrder {
+  rows: readonly NormalizedTransaction[];
+  /**
+   * How the file was laid out. `ascending` means the rows are already in
+   * ledger order, including within a day; `descending` means they were
+   * reversed to get here, and the within-day order is this code's guess rather
+   * than the file's statement.
+   */
+  direction: 'ascending' | 'descending';
+}
+
+/**
+ * The rows in ledger order, and how that was decided.
+ *
+ * Two dates that only ever move one way settle it. What does not settle it is
+ * dates that never move at all: a statement covering a single day satisfies
+ * *both* tests, and the old code answered "ascending" because it asked that
+ * question first. For a bank that exports newest-first — Banco de Chile and
+ * Santander by default — that silently reads the day backwards, and every
+ * balance derived from its ends is the wrong end.
+ *
+ * With more than one row and no date ever moving, the file has not said which
+ * way it runs, and no amount of looking at it will. It declines.
+ */
+function ledgerOrder(
   transactions: readonly NormalizedTransaction[],
-): readonly NormalizedTransaction[] | undefined {
+): LedgerOrder | undefined {
   const dates = transactions.map((transaction) => transaction.date);
   let ascending = true;
   let descending = true;
+  let moved = false;
   for (let i = 1; i < dates.length; i += 1) {
     const previous = dates[i - 1] as string;
     const current = dates[i] as string;
     if (current < previous) ascending = false;
     if (current > previous) descending = false;
+    if (current !== previous) moved = true;
   }
-  if (ascending) return transactions;
-  if (descending) return [...transactions].reverse();
+
+  if (transactions.length > 1 && !moved) return undefined;
+  if (ascending) return { rows: transactions, direction: 'ascending' };
+  if (descending) return { rows: [...transactions].reverse(), direction: 'descending' };
   return undefined;
 }
 

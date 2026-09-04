@@ -310,3 +310,88 @@ describe('lo que los saldos permiten comprobar', () => {
     expect(validation.issues.some((i) => i.code === 'balance-total-mismatch')).toBe(false);
   });
 });
+
+/**
+ * Varios movimientos el mismo día, y un archivo que viene al revés.
+ *
+ * `inLedgerOrder` decide entre ascendente y descendente mirando sólo si alguna
+ * fecha rompe la monotonía, así que un archivo entero de un solo día cumple las
+ * dos y se toma tal cual. Y al invertir un archivo descendente también se
+ * invierte el orden *dentro* de cada día, que es una suposición sobre cómo
+ * imprime el banco, no un dato del archivo.
+ *
+ * Ninguna de las dos cosas se puede resolver escogiendo un orden: el archivo no
+ * lo entrega. Lo que sí se puede es no derivar un saldo cuyo extremo está
+ * empatado, porque «el saldo después del último movimiento» no significa nada
+ * si no se sabe cuál fue el último.
+ */
+describe('empates de fecha en los extremos', () => {
+  it('en un archivo descendente, un último día con varias filas no da cierre', () => {
+    const { statement } = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '05/02/2026;C;1.000;;97.000',
+        '05/02/2026;B;1.000;;98.000',
+        '03/02/2026;A;1.000;;99.000',
+      ].join('\n'),
+    );
+
+    // Tras invertir, las dos filas del 05 quedan en un orden que el archivo no
+    // afirma, así que cuál de las dos es la última es una suposición.
+    expect(statement.closingBalance).toBeUndefined();
+    // El extremo que sí es inequívoco sigue derivándose.
+    expect(statement.openingBalance?.amount.minor).toBe(100_000);
+  });
+
+  it('en un archivo ascendente el orden del día es el que imprimió el banco', () => {
+    const { statement } = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;A;1.000;;99.000',
+        '05/02/2026;B;1.000;;98.000',
+        '05/02/2026;C;1.000;;97.000',
+      ].join('\n'),
+    );
+
+    expect(statement.closingBalance?.amount.minor).toBe(97_000);
+    expect(statement.openingBalance?.amount.minor).toBe(100_000);
+  });
+
+  it('un archivo de un solo día no afirma su propio orden, y no se derivan saldos', () => {
+    const { statement, validation } = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;A;1.000;;99.000',
+        '03/02/2026;B;1.000;;98.000',
+      ].join('\n'),
+    );
+
+    expect(statement.openingBalance).toBeUndefined();
+    expect(statement.closingBalance).toBeUndefined();
+    expect(validation.issues.some((i) => i.code === 'balance-order-ambiguous')).toBe(true);
+  });
+
+  it('un archivo de una sola fila sí tiene extremos', () => {
+    const { statement } = prepare(
+      ['Fecha;Descripcion;Cargo;Abono;Saldo', '03/02/2026;A;1.000;;99.000'].join('\n'),
+    );
+
+    expect(statement.openingBalance?.amount.minor).toBe(100_000);
+    expect(statement.closingBalance?.amount.minor).toBe(99_000);
+  });
+
+  it('un empate en medio no impide nada: los extremos siguen siendo únicos', () => {
+    const { statement } = prepare(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;A;1.000;;99.000',
+        '04/02/2026;B;1.000;;98.000',
+        '04/02/2026;C;1.000;;97.000',
+        '05/02/2026;D;1.000;;96.000',
+      ].join('\n'),
+    );
+
+    expect(statement.openingBalance?.amount.minor).toBe(100_000);
+    expect(statement.closingBalance?.amount.minor).toBe(96_000);
+  });
+});
