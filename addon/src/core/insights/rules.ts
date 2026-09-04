@@ -1,8 +1,10 @@
+import { mandateLabel, type AutomaticMandate } from '../chile/mandates';
 import { addMonthsToKey, formatMonthKey, type MonthKey } from '../dates';
 import { add, formatCLP, isZero, subtract, toNumber, type Money } from '../money';
 import { categoryLabel } from '../categories/defaults';
 import type { InstallmentOutlook } from '../model/installment';
-import type { CategoryTotal, MerchantTotal, MonthlySummary, RecurringCharge } from '../metrics/monthly';
+import type { CategoryTotal, MerchantTotal, MonthlySummary } from '../metrics/monthly';
+import type { RecurringCharge } from '../recurring/detect';
 
 /**
  * Deterministic insights.
@@ -197,26 +199,68 @@ function installmentInsights(input: InsightInput): Insight[] {
   return out;
 }
 
+/**
+ * What repeats, and what the bank itself said repeats.
+ *
+ * Two sentences rather than one, because the evidence behind them is not the
+ * same kind. The first counts patterns the arithmetic found; the second counts
+ * standing mandates the bank printed in the glosa, which is a fact about the
+ * account rather than an inference about it — and the one thing on this panel a
+ * generic tool has no way to know.
+ */
 function recurringInsights(input: InsightInput): Insight[] {
-  const { recurring } = input;
+  const currency = input.current.netSpending.currency;
+  // Never total across currencies: the panel builds one of these per currency,
+  // and a charge from another one would be a rate nobody has.
+  const recurring = input.recurring.filter((charge) => charge.currency === currency);
   if (recurring.length === 0) return [];
 
-  const total = recurring.reduce<Money | undefined>(
-    (acc, charge) => (acc ? add(acc, charge.amount) : charge.amount),
+  const likely = recurring.filter((charge) => charge.confidence === 'likely');
+  const possible = recurring.length - likely.length;
+  const monthly = likely.reduce<Money | undefined>(
+    (acc, charge) => (acc ? add(acc, charge.typicalAmount) : charge.typicalAmount),
     undefined,
   );
 
-  const insights: Insight[] = [
-    {
+  const insights: Insight[] = [];
+
+  if (likely.length > 0) {
+    insights.push({
       id: 'recurring-count',
       severity: 'neutral',
-      message: `Detectamos ${recurring.length} gasto(s) recurrente(s)${total ? `, unos ${formatCLP(total)} al mes` : ''}.`,
-      detail: recurring
+      message: `Tienes ${likely.length} gasto(s) que se repiten cada mes${monthly ? `, unos ${formatCLP(monthly)}` : ''}.`,
+      detail: likely
         .slice(0, 5)
-        .map((charge) => `${charge.merchant}: ${formatCLP(charge.amount)} cada ~${charge.cadenceDays} días`)
+        .map(
+          (charge) =>
+            `${charge.merchant}: ${formatCLP(charge.typicalAmount)}, ${charge.occurrences} cargos cada ${charge.minIntervalDays}–${charge.maxIntervalDays} días`,
+        )
         .join(' · '),
-    },
-  ];
+    });
+  }
+
+  if (possible > 0) {
+    insights.push({
+      id: 'recurring-possible',
+      severity: 'neutral',
+      message: `Otros ${possible} cargo(s) podrían ser recurrentes, con evidencia más débil.`,
+      detail:
+        'Se repiten con una cadencia parecida pero el monto varía, o el mismo día hubo más de un cargo del mismo comercio.',
+    });
+  }
+
+  const mandated = recurring.filter((charge) => charge.mandate !== undefined);
+  if (mandated.length > 0) {
+    insights.push({
+      id: 'recurring-mandates',
+      severity: 'neutral',
+      message: `${mandated.length} de ellos son pagos automáticos declarados por tu banco (PAC/PAT).`,
+      detail: mandated
+        .slice(0, 5)
+        .map((charge) => `${charge.merchant} · ${mandateLabel(charge.mandate as AutomaticMandate)}`)
+        .join(' · '),
+    });
+  }
 
   return insights;
 }

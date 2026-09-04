@@ -3,7 +3,6 @@ import { buildDuplicateIndex } from '../src/core/dedupe/classify';
 import { buildInsights } from '../src/core/insights/rules';
 import {
   currencyOf,
-  findRecurringCharges,
   summarizeAll,
   summarizeMonth,
   totalsByCategory,
@@ -233,37 +232,6 @@ describe('category and merchant totals', () => {
     const totals = totalsByMerchant(rows);
     expect(totals[1]!.merchant).toBe('Lider');
     expect(toDecimalString(totals[1]!.amount)).toBe('150000');
-  });
-});
-
-describe('recurring charge detection', () => {
-  it('finds a monthly subscription', () => {
-    const rows = [
-      tx('2026-01-12', -9900, 'NETFLIX', { merchant: 'Netflix' }),
-      tx('2026-02-12', -9900, 'NETFLIX', { merchant: 'Netflix' }),
-      tx('2026-03-12', -9900, 'NETFLIX', { merchant: 'Netflix' }),
-    ];
-    const found = findRecurringCharges(rows);
-    expect(found).toHaveLength(1);
-    expect(found[0]!.cadenceDays).toBeGreaterThanOrEqual(28);
-  });
-
-  it('does not call a frequently visited shop a subscription', () => {
-    const rows = [
-      tx('2026-02-01', -12000, 'LIDER', { merchant: 'Lider' }),
-      tx('2026-02-04', -8000, 'LIDER', { merchant: 'Lider' }),
-      tx('2026-02-09', -21000, 'LIDER', { merchant: 'Lider' }),
-    ];
-    expect(findRecurringCharges(rows)).toHaveLength(0);
-  });
-
-  it('requires a stable amount', () => {
-    const rows = [
-      tx('2026-01-12', -10000, 'GYM', { merchant: 'Gym' }),
-      tx('2026-02-12', -40000, 'GYM', { merchant: 'Gym' }),
-      tx('2026-03-12', -90000, 'GYM', { merchant: 'Gym' }),
-    ];
-    expect(findRecurringCharges(rows)).toHaveLength(0);
   });
 });
 

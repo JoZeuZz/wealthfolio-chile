@@ -404,85 +404,12 @@ export function totalsByMerchant(
     .slice(0, limit);
 }
 
-/** A charge that repeats at a regular cadence — a subscription, most likely. */
-export interface RecurringCharge {
-  merchant: string;
-  /** Representative amount (the most recent one). */
-  amount: Money;
-  /** Average days between charges. */
-  cadenceDays: number;
-  occurrences: number;
-  lastDate: string;
-  category?: string;
-}
-
 /**
- * Find charges that repeat.
+ * Recurring-charge detection used to live here.
  *
- * Requires at least three occurrences from the same merchant at a stable
- * cadence and a stable amount. Three is the minimum that distinguishes a
- * subscription from two coincidences.
+ * It grouped by merchant alone, which meant a purchase in six cuotas — same
+ * merchant, same amount, thirty days apart, six times — was the textbook
+ * subscription. It now lives in `core/recurring`, where the exclusions are the
+ * point rather than an afterthought.
  */
-export function findRecurringCharges(
-  transactions: readonly NormalizedTransaction[],
-  options: { minOccurrences?: number; toleranceDays?: number } = {},
-): RecurringCharge[] {
-  const minOccurrences = options.minOccurrences ?? 3;
-  const toleranceDays = options.toleranceDays ?? 6;
-
-  const byMerchant = new Map<string, NormalizedTransaction[]>();
-  for (const transaction of transactions) {
-    if (!isSpending(transaction.kind, transaction.direction)) continue;
-    const merchant = transaction.merchant;
-    if (!merchant) continue;
-    const bucket = byMerchant.get(merchant);
-    if (bucket) bucket.push(transaction);
-    else byMerchant.set(merchant, [transaction]);
-  }
-
-  const found: RecurringCharge[] = [];
-
-  for (const [merchant, rows] of byMerchant) {
-    if (rows.length < minOccurrences) continue;
-    const sorted = [...rows].sort((a, b) => (a.date < b.date ? -1 : 1));
-
-    const gaps: number[] = [];
-    for (let i = 1; i < sorted.length; i += 1) {
-      gaps.push(daysApart(sorted[i - 1]?.date ?? '', sorted[i]?.date ?? ''));
-    }
-    if (gaps.length === 0) continue;
-
-    const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-    // A monthly subscription lands 28-31 days apart; anything under a week is
-    // just a shop the user visits often, not a recurring charge.
-    if (mean < 20 || mean > 40) continue;
-    if (gaps.some((gap) => Math.abs(gap - mean) > toleranceDays)) continue;
-
-    const amounts = sorted.map((t) => abs(t.amount));
-    const reference = amounts[amounts.length - 1] as Money;
-    const stable = amounts.every(
-      (amount) => Math.abs(toNumber(amount) - toNumber(reference)) <= toNumber(reference) * 0.15,
-    );
-    if (!stable) continue;
-
-    const last = sorted[sorted.length - 1] as NormalizedTransaction;
-    found.push({
-      merchant,
-      amount: reference,
-      cadenceDays: Math.round(mean),
-      occurrences: sorted.length,
-      lastDate: last.date,
-      ...(last.category !== undefined ? { category: last.category } : {}),
-    });
-  }
-
-  return found.sort((a, b) => compare(b.amount, a.amount) || (a.merchant < b.merchant ? -1 : 1));
-}
-
-function daysApart(a: string, b: string): number {
-  const toDays = (iso: string) => {
-    const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
-    return Math.floor(Date.UTC(y, m - 1, d) / 86_400_000);
-  };
-  return Math.abs(toDays(b) - toDays(a));
-}
+export type { RecurringCharge } from '../recurring/detect';

@@ -24,11 +24,13 @@ const DAY = (offset: number) =>
   new Date(Date.UTC(TODAY.getUTCFullYear(), TODAY.getUTCMonth(), 5 + offset))
     .toISOString()
     .slice(0, 10);
-/** The same day of the month before, for the comparison tests. */
-const PREVIOUS_DAY = (offset: number) =>
-  new Date(Date.UTC(TODAY.getUTCFullYear(), TODAY.getUTCMonth() - 1, 5 + offset))
+/** The same day, `months` months back. */
+const MONTHS_AGO = (months: number, offset = 0) =>
+  new Date(Date.UTC(TODAY.getUTCFullYear(), TODAY.getUTCMonth() - months, 5 + offset))
     .toISOString()
     .slice(0, 10);
+/** The same day of the month before, for the comparison tests. */
+const PREVIOUS_DAY = (offset: number) => MONTHS_AGO(1, offset);
 const PREVIOUS_LABEL = formatMonthKey(PREVIOUS_DAY(0).slice(0, 7));
 
 function activity(input: {
@@ -40,12 +42,14 @@ function activity(input: {
   type: string;
   currency?: string;
   scale?: number;
+  merchant?: string;
 }) {
   const base = makeTransaction({
     amount: input.amount,
     date: input.date,
     description: input.description,
     kind: input.kind,
+    ...(input.merchant !== undefined ? { merchant: input.merchant } : {}),
   });
   const transaction = {
     ...base,
@@ -261,5 +265,49 @@ describe('comparación con el mes anterior', () => {
     expect(
       screen.getByText(`-$40.000 en ${PREVIOUS_LABEL}`),
     ).toBeInTheDocument();
+  });
+});
+
+
+describe('gastos que se repiten', () => {
+  it('muestra la evidencia y marca el mandato que declaró el banco', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [2, 1, 0].map((months) =>
+        activity({
+          accountId: 'acc-clp',
+          amount: -32000,
+          date: MONTHS_AGO(months),
+          description: 'PAC AGUAS ANDINAS',
+          merchant: 'Aguas Andinas',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ),
+    });
+
+    await screen.findByText('Gastos que se repiten');
+    expect(screen.getByText('PAC')).toBeInTheDocument();
+    expect(screen.getByText(/3 cargos · cada/)).toBeInTheDocument();
+  });
+
+  it('una compra en cuotas no aparece como gasto recurrente', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [2, 1, 0].map((months, index) =>
+        activity({
+          accountId: 'acc-clp',
+          amount: -39990,
+          date: MONTHS_AGO(months),
+          description: `FALABELLA CUOTA ${index + 1} DE 6`,
+          merchant: 'Falabella',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ),
+    });
+
+    await screen.findByText('Gastos por categoría');
+    expect(screen.queryByText('Gastos que se repiten')).not.toBeInTheDocument();
   });
 });

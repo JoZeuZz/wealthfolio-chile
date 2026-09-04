@@ -25,11 +25,12 @@ import { compareMonths, type MonthlyComparison } from '../../core/metrics/compar
 import { buildInstallmentPlans, buildOutlook } from '../../core/installments/plans';
 import {
   summarizeByCurrency,
-  findRecurringCharges,
   summarizeMonth,
   totalsByCategory,
   totalsByMerchant,
 } from '../../core/metrics/monthly';
+import { findRecurringCharges } from '../../core/recurring/detect';
+import { mandateLabel } from '../../core/chile/mandates';
 import { formatCLP } from '../../core/money';
 import { Confidence } from '../../core/model/kinds';
 import type { NormalizedTransaction } from '../../core/model/transaction';
@@ -493,23 +494,45 @@ export function DashboardPage() {
           {view.recurring.length > 0 ? (
             <Card>
               <CardHeader>
-                <CardTitle>Gastos recurrentes detectados</CardTitle>
+                <CardTitle>Gastos que se repiten</CardTitle>
               </CardHeader>
-              <CardContent className="flex flex-col gap-2 text-sm">
+              <CardContent className="flex flex-col gap-3 text-sm">
                 {view.recurring.slice(0, 8).map((charge) => (
                   <div
-                    key={charge.merchant}
+                    key={`${charge.currency} ${charge.merchantKey}`}
                     className="flex items-baseline justify-between gap-2"
                   >
                     <span>
                       {charge.merchant}
-                      <span className="text-muted-foreground ml-2 text-xs">
-                        cada ~{charge.cadenceDays} días · {charge.occurrences} cargos
+                      {charge.mandate ? (
+                        <Badge variant="outline" className="ml-2">
+                          {charge.mandate.toUpperCase()}
+                        </Badge>
+                      ) : null}
+                      {charge.confidence === 'possible' ? (
+                        <Badge variant="outline" className="ml-2">
+                          posible
+                        </Badge>
+                      ) : null}
+                      {/* The evidence, not just the verdict: a reader can check
+                          the claim against their own statement. */}
+                      <span className="text-muted-foreground block text-xs">
+                        {charge.occurrences} cargos · cada{' '}
+                        {charge.minIntervalDays === charge.maxIntervalDays
+                          ? `${charge.medianIntervalDays}`
+                          : `${charge.minIntervalDays}–${charge.maxIntervalDays}`}{' '}
+                        días · monto ±{Math.round(charge.amountSpread * 100)} %
+                        {charge.mandate ? ` · ${mandateLabel(charge.mandate)}` : ''}
                       </span>
                     </span>
-                    <Amount value={charge.amount} />
+                    <Amount value={charge.typicalAmount} />
                   </div>
                 ))}
+                <p className="text-muted-foreground text-xs">
+                  Las compras en cuotas no aparecen aquí: son un compromiso que termina solo, no un
+                  gasto que se repite. Tampoco los traspasos entre tus cuentas ni los pagos de
+                  tarjeta.
+                </p>
               </CardContent>
             </Card>
           ) : null}
