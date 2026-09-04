@@ -141,6 +141,9 @@ describe('loadDuplicateIndex', () => {
   });
 
   it('keeps activities that are not ours, so weak matching still sees them', async () => {
+    // El título decía esto y la aserción decía lo contrario: `byWeakFingerprint`
+    // vacío es precisamente «el matching débil **no** las ve». La actividad se
+    // cargaba y quedaba inalcanzable.
     const host = fakeHost({
       activities: [
         activityStub({ activityType: 'WITHDRAWAL', amount: '5000', date: '2026-03-06' }),
@@ -150,8 +153,10 @@ describe('loadDuplicateIndex', () => {
     const result = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
 
     expect(result.scanned).toBe(1);
+    // Sin metadata nuestra no hay huella fuerte: eso sigue igual, y debe seguir.
     expect(result.index.byFingerprint.size).toBe(0);
-    expect(result.index.byWeakFingerprint.size).toBe(0);
+    // Pero la débil se deriva de la cuenta, el día y el monto, que el host sí da.
+    expect(result.index.byWeakFingerprint.size).toBe(1);
   });
 });
 
@@ -446,5 +451,76 @@ describe('end to end: index feeds classification', () => {
 
     expect(finding.verdict).toBe('probable');
     expect(finding.existingActivityId).toBe(stored.id);
+  });
+});
+
+/**
+ * El índice tiene que ver todo lo que ya está en la cuenta.
+ *
+ * `loadDuplicateIndexResult` lee **todas** las actividades de la ventana y ya
+ * tiene de cada una la cuenta, la fecha, el monto, la moneda y el comentario —
+ * todo lo que `computeWeakFingerprint` necesita. Pero sólo poblaba las claves
+ * desde nuestra propia metadata, así que un movimiento que este addon no
+ * escribió entraba al índice y quedaba estructuralmente inalcanzable: ni
+ * `exact` ni `probable` podían encontrarlo.
+ *
+ * El caso concreto: alguien prueba el importador CSV que trae Wealthfolio con
+ * su cartola de agosto, no le convence, instala este addon e importa el mismo
+ * archivo. Todas las filas volvían «Nuevo», el botón quedaba habilitado, y la
+ * tarjeta de resultado le decía que reimportar no duplicaría nada.
+ */
+describe('movimientos que no escribió este addon', () => {
+  it('entran al índice como candidatos a duplicado probable', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          id: 'act-ajena',
+          accountId: 'acc-1',
+          activityType: 'WITHDRAWAL',
+          amount: '85400',
+          date: '2026-02-04',
+          comment: 'COMPRA INT WEBPAY TRANSBANK SUPERMERCADO LIDER LAS CONDES',
+          // Sin metadata: la escribió el importador del propio Wealthfolio.
+          metadata: undefined,
+        }),
+      ],
+    });
+
+    const result = await loadDuplicateIndexResult(host.ctx, { accountId: 'acc-1' });
+
+    expect(result.scanned).toBe(1);
+    expect(result.index.byWeakFingerprint.size).toBe(1);
+  });
+
+  it('y una reimportación del mismo movimiento ya no dice «nuevo»', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          id: 'act-ajena',
+          accountId: 'acc-1',
+          activityType: 'WITHDRAWAL',
+          amount: '85400',
+          date: '2026-02-04',
+          comment: 'COMPRA INT WEBPAY TRANSBANK SUPERMERCADO LIDER LAS CONDES',
+          metadata: undefined,
+        }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, { accountId: 'acc-1' });
+    const scope = { accountId: 'acc-1' };
+    const candidate = {
+      ...makeTransaction({
+        amount: -85400,
+        date: '2026-02-04',
+        description: 'COMPRA INT WEBPAY TRANSBANK SUPERMERCADO LIDER LAS CONDES',
+      }),
+      fingerprint: '',
+    };
+
+    const finding = classifyDuplicate(candidate, index, scope, new Map());
+
+    expect(finding.verdict).toBe('probable');
+    expect(finding.existingActivityId).toBe('act-ajena');
   });
 });

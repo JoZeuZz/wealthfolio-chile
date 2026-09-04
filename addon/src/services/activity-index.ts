@@ -1,6 +1,7 @@
 import type { ActivitySearchFilters, AddonContext } from '@wealthfolio/addon-sdk';
 import { addDays, type IsoDate } from '../core/dates';
 import { buildDuplicateIndex, type DuplicateIndex, type ExistingMovement } from '../core/dedupe/classify';
+import { weakFingerprintOf } from '../core/dedupe/fingerprint';
 import {
   activityDetailsToSignedMoney,
   activityProjection,
@@ -85,12 +86,23 @@ export async function loadDuplicateIndexResult(
       if (!withinWindow(activity.date, options)) continue;
       const metadata = readChileMetadata(activity.metadata);
       const modified = wasModifiedAfterImport(activity, metadata?.proj);
+      const date = toIsoDate(activity.date);
+      const amount = activityDetailsToSignedMoney(activity);
       movements.push({
         ...(metadata?.fp ? { fingerprint: metadata.fp } : {}),
-        ...(metadata?.wfp ? { weakFingerprint: metadata.wfp } : {}),
+        // Derived here rather than read from `metadata.wfp`, which only exists
+        // on rows this addon wrote. Everything else — a movement entered by
+        // hand, or imported with Wealthfolio's own CSV importer — was loaded
+        // into the index and then structurally unreachable: neither `exact` nor
+        // `probable` could ever find it, so importing the same cartola through
+        // this addon produced a complete second copy while the result card said
+        // re-importing would duplicate nothing.
+        //
+        // `metadata.wfp` stays as the strong-path key for our own rows.
+        weakFingerprint: metadata?.wfp ?? weakFingerprintOf({ accountId: options.accountId, date, amount }),
         activityId: activity.id,
-        date: toIsoDate(activity.date),
-        amount: activityDetailsToSignedMoney(activity),
+        date,
+        amount,
         description: activity.comment ?? '',
         ...(modified ? { hostModified: true } : {}),
       });

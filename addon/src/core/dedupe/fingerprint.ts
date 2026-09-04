@@ -1,5 +1,5 @@
 import { hashFields } from '../hash';
-import { canonicalAmountString } from '../money';
+import { canonicalAmountString, type Money } from '../money';
 import type { NormalizedTransaction } from '../model/transaction';
 import { descriptionKey } from '../text';
 
@@ -74,13 +74,35 @@ export function computeWeakFingerprint(
   transaction: NormalizedTransaction,
   scope: FingerprintScope,
 ): string {
+  return weakFingerprintOf({
+    accountId: scope.accountId,
+    date: transaction.date,
+    amount: transaction.amount,
+  });
+}
+
+/**
+ * The same weak hash, from the fields alone.
+ *
+ * A stored Wealthfolio activity has an account, a day and a signed amount, but
+ * it is not a `NormalizedTransaction` and it may not be one of ours at all.
+ * Deriving the hash from the parts is what lets the duplicate index cover
+ * movements this addon never wrote — a row entered by hand, or imported with
+ * Wealthfolio's own CSV importer — instead of only the ones carrying our
+ * metadata.
+ */
+export function weakFingerprintOf(movement: {
+  accountId: string;
+  date: string;
+  amount: Money;
+}): string {
   return hashFields([
     FINGERPRINT_VERSION,
     'weak',
-    scope.accountId,
-    transaction.date,
-    canonicalAmountString(transaction.amount),
-    transaction.amount.currency,
+    movement.accountId,
+    movement.date,
+    canonicalAmountString(movement.amount),
+    movement.amount.currency,
   ]);
 }
 
