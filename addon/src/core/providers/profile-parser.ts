@@ -10,7 +10,7 @@ import {
   type StatementPeriod,
   type ValidationResult,
 } from '../model/statement';
-import { detectHeader, normalizeHeader, type ColumnMap } from '../parsing/columns';
+import { cell, ColumnRole, detectHeader, normalizeHeader, type ColumnMap } from '../parsing/columns';
 import type { StatementProfile } from '../parsing/profile';
 import { mapRows } from '../parsing/rows';
 import type { NormalizedTransaction } from '../model/transaction';
@@ -173,7 +173,33 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
 
   const map = mergeSynonyms(sheet, header.headerRow, profile, header.map);
   const account = readAccountMetadata(sheet, profile, header.headerRow);
-  const currency = (input.currency ?? account.currency ?? profile.defaultCurrency).toUpperCase();
+  const fromColumn = readCurrencyColumn(sheet, map, header.firstDataRow);
+
+  if (fromColumn.length > 1) {
+    // The role was mapped, the column was reserved, and nothing read it: every
+    // row took the statement-level currency, which itself falls back to
+    // `profile.defaultCurrency`. A USD 120,50 charge on a mixed-currency
+    // statement was stored as CLP 120,50 — about $115.000 of real spending
+    // recorded as $120 — and `matchStatementToAccount` then compared the
+    // invented CLP against a CLP account and reported `compatible`, so the
+    // currency guard could not catch it either.
+    //
+    // One currency per statement is what the rest of this pipeline is built
+    // for: the account match, the balance walk and the period totals all assume
+    // it. So a file that carries more than one is refused rather than flattened.
+    issues.push({
+      level: 'error',
+      code: 'mixed-currency',
+      message: `La cartola mezcla ${fromColumn.join(' y ')} en la misma columna de moneda. Impórtala en archivos separados, uno por moneda.`,
+    });
+  }
+
+  const currency = (
+    input.currency ??
+    fromColumn[0] ??
+    account.currency ??
+    profile.defaultCurrency
+  ).toUpperCase();
 
   const mapped = mapRows({
     sheet,
@@ -346,6 +372,23 @@ const CURRENCY_PATTERNS: Array<[RegExp, string]> = [
   [/\b(?:D[OÓ]LARES?|USD|US\$)\b/i, 'USD'],
   [/\b(?:UF|UNIDAD(?:ES)?\s+DE\s+FOMENTO)\b/i, 'CLF'],
 ];
+
+/**
+ * The distinct currencies the file states per row, in the order first seen.
+ *
+ * Empty when the profile mapped no currency column or every cell is blank, in
+ * which case the preamble and then the profile default decide as before.
+ */
+function readCurrencyColumn(sheet: Sheet, map: ColumnMap, firstDataRow: number): string[] {
+  if (map.currency === undefined) return [];
+  const seen: string[] = [];
+  for (let i = firstDataRow; i < sheet.rows.length; i += 1) {
+    const raw = cell(sheet.rows[i] as string[], map, ColumnRole.currency).trim().toUpperCase();
+    if (raw === '') continue;
+    if (!seen.includes(raw)) seen.push(raw);
+  }
+  return seen;
+}
 
 function readAccountMetadata(
   sheet: Sheet,

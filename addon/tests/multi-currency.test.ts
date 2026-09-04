@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { money } from '../src/core/money';
 import { currenciesOf, summarizeByCurrency } from '../src/core/metrics/monthly';
 import { TransactionKind } from '../src/core/model/kinds';
-import { makeTransaction } from './fixtures';
+import { buildDuplicateIndex } from '../src/core/dedupe/classify';
+import { prepareImport } from '../src/core/pipeline';
+import { fromText, makeTransaction } from './fixtures';
 
 /**
  * Más de una moneda.
@@ -91,5 +93,67 @@ describe('summarizeByCurrency', () => {
     const clpSummary = summaries.find((s) => s.currency === 'CLP');
     expect(clpSummary?.summary.refunds.minor).toBe(20000);
     expect(summaries.find((s) => s.currency === 'USD')?.summary.refunds.minor).toBe(0);
+  });
+});
+
+/**
+ * Una columna `Moneda` que se detecta y no se lee es peor que no detectarla.
+ *
+ * `ColumnRole.currency` existe, está en los sinónimos y se le reserva su
+ * columna — y no tiene un solo lector fuera de `columns.ts`. La moneda de cada
+ * fila salía del preámbulo, que a su vez cae en `profile.defaultCurrency`.
+ *
+ * Una cartola con `USD` y `CLP` en la misma columna guardaba las dos como CLP:
+ * un cargo de USD 120,50 quedaba como $120 en vez de unos $115.000. Y
+ * `matchStatementToAccount` comparaba después ese CLP inventado contra una
+ * cuenta CLP y decía `compatible`, así que la guarda de moneda tampoco podía
+ * atraparlo.
+ */
+describe('la columna de moneda del archivo', () => {
+  function parse(rows: string[]) {
+    return prepareImport({
+      file: fromText('cartola.csv', ['Fecha;Descripcion;Moneda;Monto', ...rows].join('\n')),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+  }
+
+  it('bloquea la cartola cuando las filas no están todas en la misma moneda', () => {
+    const prepared = parse([
+      '01/02/2026;COMPRA AMAZON;USD;-120,50',
+      '02/02/2026;COMPRA LIDER;CLP;-10.000',
+    ]);
+
+    expect(prepared.validation.ok).toBe(false);
+    expect(prepared.validation.issues.map((i) => i.code)).toContain('mixed-currency');
+  });
+
+  it('cuando todas coinciden, esa moneda gana al preámbulo', () => {
+    const prepared = parse([
+      '01/02/2026;COMPRA AMAZON;USD;-120,50',
+      '02/02/2026;SUSCRIPCION;USD;-9,99',
+    ]);
+
+    expect(prepared.validation.ok).toBe(true);
+    expect(prepared.statement.account.currency).toBe('USD');
+    expect(prepared.rows[0]?.transaction.amount.currency).toBe('USD');
+  });
+
+  it('sin columna de moneda nada cambia', () => {
+    const prepared = prepareImport({
+      file: fromText(
+        'cartola.csv',
+        ['Fecha;Descripcion;Monto;Saldo', '01/02/2026;COMPRA LIDER;-10.000;90.000'].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    expect(prepared.validation.ok).toBe(true);
+    expect(prepared.rows[0]?.transaction.amount.currency).toBe('CLP');
   });
 });
