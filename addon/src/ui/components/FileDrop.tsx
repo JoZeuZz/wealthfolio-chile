@@ -16,6 +16,17 @@ import type { SourceFile } from '../../core/parsing/tabular';
 
 const ACCEPTED = '.csv,.txt,.tsv,.xlsx,.xls';
 
+/**
+ * Largest file the wizard will take.
+ *
+ * `arrayBuffer()` and the whole spreadsheet parse run synchronously on the
+ * sandbox's only thread, so a 40 MB `.xls` freezes the iframe with the drop
+ * zone still looking idle. A bank statement is a few hundred kilobytes; ten
+ * megabytes is already far past anything real, and refusing with a reason
+ * beats a window that stops responding.
+ */
+const MAX_BYTES = 10 * 1024 * 1024;
+
 export function FileDrop({
   onFile,
   disabled = false,
@@ -25,17 +36,27 @@ export function FileDrop({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [reading, setReading] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
   const accept = useCallback(
     async (file: File | undefined) => {
       if (!file) return;
       setError(undefined);
+      if (file.size > MAX_BYTES) {
+        setError(
+          `El archivo pesa ${Math.round(file.size / (1024 * 1024))} MB y el máximo son ${MAX_BYTES / (1024 * 1024)} MB. Una cartola bancaria no llega a eso: comprueba que sea el archivo correcto.`,
+        );
+        return;
+      }
+      setReading(true);
       try {
         const buffer = await file.arrayBuffer();
         onFile({ name: file.name, bytes: new Uint8Array(buffer) });
       } catch {
         setError('No se pudo leer el archivo. Intenta seleccionarlo de nuevo.');
+      } finally {
+        setReading(false);
       }
     },
     [onFile],
@@ -82,7 +103,16 @@ export function FileDrop({
           }}
         />
       </div>
-      {error ? <p className="text-destructive text-sm">{error}</p> : null}
+      {reading ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          Leyendo el archivo…
+        </p>
+      ) : null}
+      {error ? (
+        <p className="text-destructive text-sm" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

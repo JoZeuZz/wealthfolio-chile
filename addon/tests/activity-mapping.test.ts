@@ -13,7 +13,7 @@ import {
   toActivityCreate,
   type ChileMetadata,
 } from '../src/core/mapping/activities';
-import { money } from '../src/core/money';
+import { money, MoneyError } from '../src/core/money';
 import { Direction, TransactionKind } from '../src/core/model/kinds';
 import type { NormalizedTransaction } from '../src/core/model/transaction';
 import { makeTransaction } from './fixtures';
@@ -300,7 +300,9 @@ describe('host amount parsing', () => {
   });
 
   it('gives up on a magnitude too large to hold exactly', () => {
-    expect(parseHostAmount('99999999999999999999', 'CLP')).toEqual(money(0, 0, 'CLP'));
+    // Se rinde lanzando, no devolviendo cero: ver «un monto del host imposible
+    // de representar» más abajo.
+    expect(() => parseHostAmount('99999999999999999999', 'CLP')).toThrow(MoneyError);
   });
 });
 
@@ -567,5 +569,34 @@ describe('regression: an expense reconstructed from a WITHDRAWAL is a probable d
     );
 
     expect(finding.verdict).toBe('none');
+  });
+});
+
+/**
+ * Un monto del host que no se puede representar no es cero.
+ *
+ * `parseHostAmount` devolvía `money(0, 0, …)` cuando el entero reconstruido
+ * pasaba de `Number.MAX_SAFE_INTEGER` — alcanzable alrededor de 9×10⁹ CLP en
+ * cuanto el backend rellena a seis decimales. Ese cero entraba en el índice de
+ * duplicados, en `activityDetailsToSignedMoney` y en todos los totales del
+ * panel. Y un monto cero rompe además el bucket de la huella débil, así que la
+ * actividad dejaba de ser candidata a duplicado sin decirlo.
+ *
+ * `core/money` se niega a redondear un monto que no puede representar; leer del
+ * host tiene que negarse igual.
+ */
+describe('un monto del host imposible de representar', () => {
+  it('lanza en vez de devolver cero', () => {
+    expect(() => parseHostAmount('99999999999999999999', 'CLP')).toThrow(MoneyError);
+  });
+
+  it('un monto normal se sigue leyendo', () => {
+    expect(parseHostAmount('85400', 'CLP')).toEqual(money(85400, 0, 'CLP'));
+    expect(parseHostAmount('85400.50', 'CLP')).toEqual(money(8540050, 2, 'CLP'));
+  });
+
+  it('ausente sigue siendo cero, que es lo que el host quiere decir', () => {
+    expect(parseHostAmount(null, 'CLP')).toEqual(money(0, 0, 'CLP'));
+    expect(parseHostAmount(undefined, 'CLP')).toEqual(money(0, 0, 'CLP'));
   });
 });

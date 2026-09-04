@@ -1,7 +1,15 @@
 import type { ActivityCreate, ActivityType } from '@wealthfolio/addon-sdk';
 import { hashFields } from '../hash';
 import { redactSensitive } from '../privacy';
-import { abs, canonicalAmountString, money, negate, toDecimalString, type Money } from '../money';
+import {
+  abs,
+  canonicalAmountString,
+  money,
+  MoneyError,
+  negate,
+  toDecimalString,
+  type Money,
+} from '../money';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { EnrichedTransaction, NormalizedTransaction } from '../model/transaction';
 import { normalizeDescription } from '../text';
@@ -625,7 +633,14 @@ export function parseHostAmount(amount: string | number | null | undefined, curr
   const [whole = '0', fraction = ''] = digits.split('.');
   const scale = Math.min(6, fraction.length);
   const minor = Number(`${whole}${fraction.slice(0, scale)}`);
-  if (!Number.isSafeInteger(minor)) return money(0, 0, currency || 'CLP');
+  if (!Number.isSafeInteger(minor)) {
+    // Not zero. That zero went into the duplicate index, into
+    // `activityDetailsToSignedMoney` and into every dashboard total, and it also
+    // broke the weak-fingerprint bucket, so the activity quietly stopped being
+    // a duplicate candidate. `core/money` refuses to round an amount it cannot
+    // represent; reading one back has to refuse the same way.
+    throw new MoneyError(`host amount is too large to represent exactly: ${text}`);
+  }
   return money(negative ? -minor : minor, scale, currency || 'CLP');
 }
 
