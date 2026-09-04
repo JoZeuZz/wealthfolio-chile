@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { formatCLP, type Money as MoneyValue } from '../../core/money';
 
 /**
@@ -47,7 +48,8 @@ export function Stat({
 }: {
   label: string;
   value: MoneyValue | string;
-  hint?: string;
+  /** Secondary line under the figure: a breakdown, a comparison, both. */
+  hint?: ReactNode;
   tone?: 'neutral' | 'positive' | 'negative';
 }) {
   const toneClass =
@@ -57,7 +59,11 @@ export function Stat({
       <dt className="text-muted-foreground text-xs uppercase tracking-wide">{label}</dt>
       <dd className={`text-2xl font-semibold tabular-nums ${toneClass}`.trim()}>
         {typeof value === 'string' ? value : formatCLP(value)}
-        {hint ? <span className="text-muted-foreground block text-xs font-normal">{hint}</span> : null}
+        {typeof hint === 'string' ? (
+          <span className="text-muted-foreground block text-xs font-normal">{hint}</span>
+        ) : (
+          hint
+        )}
       </dd>
     </div>
   );

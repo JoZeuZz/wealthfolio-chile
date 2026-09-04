@@ -21,6 +21,7 @@ import {
   monthStart,
 } from '../../core/dates';
 import { buildInsights, type Insight } from '../../core/insights/rules';
+import { compareMonths, type MonthlyComparison } from '../../core/metrics/comparison';
 import { buildInstallmentPlans, buildOutlook } from '../../core/installments/plans';
 import {
   summarizeByCurrency,
@@ -35,6 +36,7 @@ import type { NormalizedTransaction } from '../../core/model/transaction';
 import { ImportHistory, type ImportRun } from '../../services/import-history';
 import { loadImportedTransactions } from '../../services/imported-transactions';
 import { useAddon } from '../context';
+import { DeltaLine } from '../components/Delta';
 import { Amount, Stat } from '../components/Money';
 
 /**
@@ -240,15 +242,36 @@ export function DashboardPage() {
           ) : null}
 
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat label="Ingresos del mes" value={view.summary.income} tone="positive" />
+            <Stat
+              label="Ingresos del mes"
+              value={view.summary.income}
+              tone="positive"
+              hint={
+                <DeltaLine
+                  delta={view.comparison.income}
+                  previousMonth={view.comparison.previousMonth}
+                  polarity="more-is-better"
+                />
+              }
+            />
             <Stat
               label="Gasto neto"
               value={view.summary.netSpending}
               tone="negative"
               hint={
-                view.summary.refunds.minor > 0
-                  ? `${formatCLP(view.summary.grossSpending)} menos ${formatCLP(view.summary.refunds)} devueltos`
-                  : undefined
+                <>
+                  {view.summary.refunds.minor > 0 ? (
+                    <span className="text-muted-foreground block text-xs font-normal">
+                      {formatCLP(view.summary.grossSpending)} menos{' '}
+                      {formatCLP(view.summary.refunds)} devueltos
+                    </span>
+                  ) : null}
+                  <DeltaLine
+                    delta={view.comparison.netSpending}
+                    previousMonth={view.comparison.previousMonth}
+                    polarity="more-is-worse"
+                  />
+                </>
               }
             />
             <Stat
@@ -256,15 +279,29 @@ export function DashboardPage() {
               value={view.summary.netCashFlow}
               tone={view.summary.netCashFlow.minor < 0 ? 'negative' : 'positive'}
               hint={
-                view.summary.savingsRate !== undefined
-                  ? `Tasa de ahorro ${Math.round(view.summary.savingsRate * 100)}%`
-                  : undefined
+                <>
+                  {view.summary.savingsRate !== undefined ? (
+                    <span className="text-muted-foreground block text-xs font-normal">
+                      Tasa de ahorro {Math.round(view.summary.savingsRate * 100)}%
+                    </span>
+                  ) : null}
+                  <DeltaLine
+                    delta={view.comparison.netCashFlow}
+                    previousMonth={view.comparison.previousMonth}
+                    polarity="more-is-better"
+                  />
+                </>
               }
             />
             <Stat
               label="Comprometido en cuotas"
               value={view.outlook.committedTotal}
-              hint={`${view.outlook.openPlans.length} compra(s) activa(s)`}
+              hint={
+                <span className="text-muted-foreground block text-xs font-normal">
+                  {view.outlook.openPlans.length} compra(s) activa(s) · cuotas que faltan por
+                  pagar, no el total de la compra
+                </span>
+              }
             />
           </dl>
 
@@ -276,11 +313,29 @@ export function DashboardPage() {
               <CardContent>
                 <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <Stat label="Ingresos" value={other.summary.income} tone="positive" />
-                  <Stat label="Gasto neto" value={other.summary.netSpending} tone="negative" />
+                  <Stat
+                    label="Gasto neto"
+                    value={other.summary.netSpending}
+                    tone="negative"
+                    hint={
+                      <DeltaLine
+                        delta={other.comparison.netSpending}
+                        previousMonth={other.comparison.previousMonth}
+                        polarity="more-is-worse"
+                      />
+                    }
+                  />
                   <Stat
                     label="Flujo de caja"
                     value={other.summary.netCashFlow}
                     tone={other.summary.netCashFlow.minor < 0 ? 'negative' : 'positive'}
+                    hint={
+                      <DeltaLine
+                        delta={other.comparison.netCashFlow}
+                        previousMonth={other.comparison.previousMonth}
+                        polarity="more-is-better"
+                      />
+                    }
                   />
                   <Stat
                     label="Movimientos"
@@ -527,6 +582,7 @@ interface DashboardView {
   recurring: ReturnType<typeof findRecurringCharges>;
   outlook: ReturnType<typeof buildOutlook>;
   insights: Insight[];
+  comparison: MonthlyComparison;
 }
 
 /**
@@ -571,7 +627,18 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
 
       return {
         currency,
-        view: { summary, categories, merchants, recurring, outlook, insights },
+        view: {
+          summary,
+          categories,
+          merchants,
+          recurring,
+          outlook,
+          insights,
+          // `undefined` rather than a zero summary when the previous month holds
+          // no movement in this currency: "there was nothing" and "it was zero"
+          // are different claims, and only the second one can carry a delta.
+          comparison: compareMonths(summary, inPrevious.length > 0 ? previousSummary : undefined),
+        },
       };
     },
   );

@@ -1,6 +1,7 @@
 /** @vitest-environment happy-dom */
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { formatMonthKey } from '../../src/core/dates';
 import { readChileMetadata, toActivityCreate } from '../../src/core/mapping/activities';
 import { money } from '../../src/core/money';
 import { TransactionKind } from '../../src/core/model/kinds';
@@ -23,6 +24,12 @@ const DAY = (offset: number) =>
   new Date(Date.UTC(TODAY.getUTCFullYear(), TODAY.getUTCMonth(), 5 + offset))
     .toISOString()
     .slice(0, 10);
+/** The same day of the month before, for the comparison tests. */
+const PREVIOUS_DAY = (offset: number) =>
+  new Date(Date.UTC(TODAY.getUTCFullYear(), TODAY.getUTCMonth() - 1, 5 + offset))
+    .toISOString()
+    .slice(0, 10);
+const PREVIOUS_LABEL = formatMonthKey(PREVIOUS_DAY(0).slice(0, 7));
 
 function activity(input: {
   accountId: string;
@@ -151,5 +158,108 @@ describe('dos monedas en el mismo mes', () => {
 
     await screen.findByText(/Este mes tiene movimientos en 2 monedas/);
     expect(screen.getByText(/tipo de cambio del día de cada movimiento/)).toBeInTheDocument();
+  });
+});
+
+
+/**
+ * La comparación con el mes anterior.
+ *
+ * Lo que se prueba aquí no es el porcentaje —eso vive en
+ * `tests/comparison.test.ts`— sino que la pantalla no llegue a mostrar uno
+ * cuando no existe: sin mes anterior, y con un flujo que cambia de signo.
+ */
+describe('comparación con el mes anterior', () => {
+  it('dice cuánto subió el gasto neto y contra qué mes', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -100000,
+          date: PREVIOUS_DAY(0),
+          description: 'COMPRA TIENDA',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+        activity({
+          accountId: 'acc-clp',
+          amount: -200000,
+          date: DAY(0),
+          description: 'COMPRA TIENDA',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    await screen.findByText('Gasto neto');
+    expect(screen.getByText(`100 % más que en ${PREVIOUS_LABEL}`)).toBeInTheDocument();
+  });
+
+  it('sin mes anterior no inventa un porcentaje', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -200000,
+          date: DAY(0),
+          description: 'COMPRA TIENDA',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    await screen.findByText('Gasto neto');
+    expect(screen.getAllByText('Sin base comparable').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/% más que/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Infinity/)).not.toBeInTheDocument();
+  });
+
+  it('un flujo de caja que cambia de signo se dice con montos, no con un porcentaje', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: 60000,
+          date: PREVIOUS_DAY(0),
+          description: 'SUELDO',
+          kind: TransactionKind.income,
+          type: 'DEPOSIT',
+        }),
+        activity({
+          accountId: 'acc-clp',
+          amount: -100000,
+          date: PREVIOUS_DAY(1),
+          description: 'COMPRA TIENDA',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+        activity({
+          accountId: 'acc-clp',
+          amount: 300000,
+          date: DAY(0),
+          description: 'SUELDO',
+          kind: TransactionKind.income,
+          type: 'DEPOSIT',
+        }),
+        activity({
+          accountId: 'acc-clp',
+          amount: -120000,
+          date: DAY(1),
+          description: 'COMPRA TIENDA',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    await screen.findByText('Flujo de caja');
+    expect(
+      screen.getByText(`-$40.000 en ${PREVIOUS_LABEL}`),
+    ).toBeInTheDocument();
   });
 });
