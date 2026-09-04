@@ -9,9 +9,11 @@ import {
 } from '../src/core/classify/card-semantics';
 import { buildDuplicateIndex } from '../src/core/dedupe/classify';
 import { TransactionKind } from '../src/core/model/kinds';
+import { StatementProduct } from '../src/core/model/statement';
 import { prepareImport } from '../src/core/pipeline';
 import { defaultRules } from '../src/core/rules/builtin';
-import { fromText } from './fixtures';
+import { applyRules } from '../src/core/rules/engine';
+import { fromText, makeTransaction } from './fixtures';
 
 /**
  * Qué significa un abono en una tarjeta de crédito.
@@ -241,5 +243,75 @@ describe('el alcance de los marcadores', () => {
   it('lo que sólo sigue el default del producto queda sugerido', () => {
     const prepared = prepareChecking(['2026-02-05;COMPRA SUPERMERCADO;20.000;;980.000']);
     expect(prepared.rows[0]?.transaction.kindConfidence).toBe('suggested');
+  });
+});
+
+/**
+ * Una regla escrita para cuentas corrientes leyendo un estado de cuenta.
+ *
+ * `builtin.transferencia-propia` dispara sobre `TRASPASO` con `match: 'any'`,
+ * lo que en una cuenta corriente chilena es correcto: `TRASPASO A CUENTA
+ * PROPIA` mueve plata entre cuentas del mismo dueño y no es gasto. En una
+ * tarjeta la misma palabra significa otra cosa por completo —`TRASPASO A 12
+ * CUOTAS`, `TRASPASO DE DEUDA`, `TRASPASO DE SALDO` son refinanciamiento— y
+ * marcarlo como transferencia interna arrastra tres consecuencias:
+ *
+ * 1. `internal_transfer` saliente en una tarjeta se resuelve a `TRANSFER_OUT`,
+ *    que Wealthfolio **rechaza** en una cuenta `CREDIT_CARD`
+ *    (`account_activity_validation_message`, v3.7.0), así que se sustituye por
+ *    `WITHDRAWAL`;
+ * 2. `WITHDRAWAL` en una tarjeta es `Expense` para el informe de gasto del host
+ *    (`spending::classify_activity`, v3.7.0) — el mismo sitio del que la regla
+ *    pretendía sacarlo;
+ * 3. `stopProcessing` esconde la fila de todas las reglas de abajo.
+ *
+ * Lo que hace falta no es un tipo de actividad distinto: no lo hay. Es que la
+ * regla sepa sobre qué producto está corriendo.
+ */
+describe('reglas y producto de la cartola', () => {
+  it('«traspaso» en una tarjeta no es una transferencia entre cuentas propias', () => {
+    const transaction = makeTransaction({
+      description: 'TRASPASO A 12 CUOTAS',
+      amount: -120_000,
+      date: '2026-02-03',
+      kind: TransactionKind.credit_card_purchase,
+    });
+
+    const { transaction: out } = applyRules(transaction, defaultRules(), {
+      accountId: 'acc-1',
+      product: StatementProduct.credit_card,
+    });
+
+    expect(out.kind).toBe(TransactionKind.credit_card_purchase);
+    expect(out.appliedRules).not.toContain('builtin.transferencia-propia');
+  });
+
+  it('la misma glosa en una cuenta corriente sí lo es', () => {
+    const transaction = makeTransaction({
+      description: 'TRASPASO A CUENTA PROPIA',
+      amount: -120_000,
+      date: '2026-02-03',
+      kind: TransactionKind.expense,
+    });
+
+    const { transaction: out } = applyRules(transaction, defaultRules(), {
+      accountId: 'acc-1',
+      product: StatementProduct.checking,
+    });
+
+    expect(out.kind).toBe(TransactionKind.internal_transfer);
+  });
+
+  it('sin producto conocido la regla sigue aplicando, como hasta ahora', () => {
+    const transaction = makeTransaction({
+      description: 'TRASPASO A CUENTA PROPIA',
+      amount: -120_000,
+      date: '2026-02-03',
+      kind: TransactionKind.expense,
+    });
+
+    const { transaction: out } = applyRules(transaction, defaultRules(), { accountId: 'acc-1' });
+
+    expect(out.kind).toBe(TransactionKind.internal_transfer);
   });
 });

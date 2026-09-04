@@ -296,3 +296,62 @@ describe('lo que no se pudo clasificar queda marcado para revisión', () => {
     expect(create.needsReview).toBeUndefined();
   });
 });
+
+/**
+ * Qué queda registrado cuando la tarjeta no puede representar el movimiento.
+ *
+ * Verificado en el checkout de Wealthfolio en la etiqueta `v3.7.0`, no de
+ * memoria:
+ *
+ * - `account_activity_validation_message` (`activities_service.rs`) acepta en
+ *   una cuenta `CREDIT_CARD` sólo `WITHDRAWAL`, `TRANSFER_IN`, `CREDIT`, `FEE`
+ *   e `INTEREST`. `TRANSFER_OUT` está genuinamente prohibido, así que la
+ *   sustitución no es una preferencia del addon: es la única salida
+ *   representable para una salida de dinero.
+ * - `handle_withdrawal` (`handlers/cash_flows.rs`) y la rama de efectivo de
+ *   `handle_transfer_out` (`handlers/transfers.rs`) hacen exactamente lo mismo
+ *   con el saldo: `add_cash(-(monto + comisión + impuesto))` y la misma suma a
+ *   `net_contribution`. **El saldo de la cuenta no depende de cuál se escriba.**
+ * - Donde sí difieren: `economic_events::event_kind` trata `WITHDRAWAL` como
+ *   `CashFlow` (flujo externo) y `spending::classify_activity` cuenta un
+ *   `WITHDRAWAL` en una tarjeta como `Expense`.
+ *
+ * Es decir, la degradación cuesta clasificación, no saldos. Y por eso tiene
+ * que viajar marcada: `metadata.kind` conserva la lectura real y `needsReview`
+ * pide que un humano la mire en el host.
+ */
+describe('la degradación de una transferencia saliente en una tarjeta', () => {
+  it('se escribe WITHDRAWAL, se marca como sustituida y pide revisión', () => {
+    const create = toActivityCreate(
+      makeTransaction({
+        kind: TransactionKind.internal_transfer,
+        amount: -120_000,
+        date: '2026-02-03',
+        description: 'TRASPASO A CUENTA CORRIENTE',
+      }),
+      { accountId: 'acc-card', runId: 'run-1', accountType: 'CREDIT_CARD' },
+    );
+
+    expect(create.activityType).toBe('WITHDRAWAL');
+    expect(create.needsReview).toBe(true);
+
+    const metadata = readChileMetadata(create.metadata as string);
+    expect(metadata?.kind).toBe(TransactionKind.internal_transfer);
+    expect(metadata?.subst).toBe(true);
+  });
+
+  it('la entrante sí se representa, y por eso no pide revisión', () => {
+    const create = toActivityCreate(
+      makeTransaction({
+        kind: TransactionKind.internal_transfer,
+        amount: 120_000,
+        date: '2026-02-03',
+        description: 'ABONO DESDE CUENTA CORRIENTE',
+      }),
+      { accountId: 'acc-card', runId: 'run-1', accountType: 'CREDIT_CARD' },
+    );
+
+    expect(create.activityType).toBe('TRANSFER_IN');
+    expect(create.needsReview).toBeUndefined();
+  });
+});

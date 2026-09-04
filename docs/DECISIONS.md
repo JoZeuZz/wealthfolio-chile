@@ -291,3 +291,48 @@ eso `metadata.kind` conserva la clasificación real.
 **Alternativa descartada.** No escribir esas filas. Habría dejado el movimiento
 fuera de la contabilidad, que es el problema que este proyecto lleva toda la
 corrida evitando.
+
+## D19 — Una transferencia saliente en una tarjeta cuesta clasificación, no saldos
+
+**Decisión.** En una cuenta `CREDIT_CARD` una salida clasificada como
+`internal_transfer` o `credit_card_payment` se escribe `WITHDRAWAL`, marcada
+`subst` y con `needsReview`. No se busca un tipo mejor porque no existe.
+
+**Qué comprobamos.** Sobre el checkout de Wealthfolio en la etiqueta `v3.7.0`:
+
+- `ActivitiesService::account_activity_validation_message`
+  (`crates/core/src/activities/activities_service.rs`) acepta en una cuenta
+  `CREDIT_CARD` únicamente `WITHDRAWAL`, `TRANSFER_IN`, `CREDIT`, `FEE` e
+  `INTEREST`. `TRANSFER_OUT` está prohibido; no es una elección del addon.
+- `handle_withdrawal`
+  (`crates/core/src/portfolio/snapshot/holdings_calculator/handlers/cash_flows.rs`)
+  y la rama de efectivo de `handle_transfer_out` (`.../handlers/transfers.rs`)
+  hacen lo mismo: `add_cash(-(monto + comisión + impuesto))` y la misma suma a
+  `net_contribution`. **El saldo de la cuenta es idéntico se escriba cual se
+  escriba.** El propio comentario de upstream lo dice: «Transfers always affect
+  account-level net_contribution; portfolio boundary is handled by aggregation».
+- Difieren en dos consumidores: `economic_events::event_kind` clasifica
+  `WITHDRAWAL` como `CashFlow` —flujo externo— mientras que `TRANSFER_OUT`
+  depende de `TransferBoundary`; y `spending::classify_activity` cuenta un
+  `WITHDRAWAL` en una tarjeta como `Expense`, mientras que un `TRANSFER_OUT`
+  quedaría `Ignored`.
+
+**Conclusión.** La degradación no toca el saldo ni el patrimonio; hace que el
+informe de gasto del host cuente como gasto de tarjeta algo que no lo es. Y
+aunque `TRANSFER_OUT` estuviera permitido, sin `source_group_id` —que el SDK no
+deja escribir, ver [ADR 0005](adr/0005-transfer-matching-propio.md)— tampoco
+obtendría el tratamiento de transferencia interna.
+
+**Lo que sí se corrigió.** El origen real de esas filas no era el clasificador
+—`defaultKindForRow` da `credit_card_purchase` a toda salida de tarjeta— sino
+`builtin.transferencia-propia`, que disparaba `mark_transfer` con `match: 'any'`
+sobre `TRASPASO`. En una cartola de tarjeta chilena `TRASPASO A 12 CUOTAS` y
+`TRASPASO DE DEUDA` son refinanciamiento, no transferencias, así que la regla
+que existe para sacar un movimiento del total de gasto lo estaba metiendo. La
+condición `product` del motor de reglas separa ahora ambos documentos.
+
+**Pendiente de evidencia.** Si una cartola real muestra que un avance en
+efectivo hacia una cuenta propia es frecuente, hará falta decidir si el avance
+es gasto o giro de préstamo. Hoy queda como `credit_card_purchase` con la
+etiqueta `efectivo`, que es lo que el archivo dice y nada más.
+`BLOCKED: real-bank-sample`.

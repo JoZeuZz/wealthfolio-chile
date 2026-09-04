@@ -150,6 +150,10 @@ export function prepareImport(input: PrepareInput): PreparedImport {
   const ruleOutcomes = applyRulesToBatch(fingerprinted, input.rules, {
     accountId: input.accountId,
     ...(input.accountName !== undefined ? { accountName: input.accountName } : {}),
+    // The statement's own product, not the host account's. A rule keyed on it
+    // is asking what document the glosa was printed on, which is what makes
+    // the wording mean one thing or another.
+    product: statement.account.product,
   });
 
   const enriched = ruleOutcomes.map((outcome) => outcome.transaction);

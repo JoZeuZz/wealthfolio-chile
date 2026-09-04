@@ -1,4 +1,5 @@
 import { TransactionKind } from '../model/kinds';
+import { StatementProduct } from '../model/statement';
 import type { Rule } from './engine';
 
 /**
@@ -75,13 +76,33 @@ export const BUILTIN_RULES: readonly Rule[] = [
     { stopProcessing: true },
   ),
 
+  // Split in two on purpose. The wording is only unambiguous on an account
+  // statement: on a tarjeta, `TRASPASO` is refinancing — `TRASPASO A 12
+  // CUOTAS`, `TRASPASO DE DEUDA` — and `mark_transfer` there resolves to
+  // `TRANSFER_OUT`, which a Wealthfolio credit-card account refuses, so it is
+  // substituted for `WITHDRAWAL`, which the host's spending report counts as
+  // card spending. The rule that exists to keep a movement out of the spending
+  // total was putting it in. `CUENTA PROPIA` and `ENTRE CUENTAS` say what they
+  // mean on any document, so they keep their reach.
   rule(
     'builtin.transferencia-propia',
     'Traspaso entre cuentas propias',
     20,
-    [contains('CUENTA PROPIA'), contains('ENTRE CUENTAS'), contains('TRASPASO')],
+    [contains('CUENTA PROPIA'), contains('ENTRE CUENTAS')],
     [{ type: 'mark_transfer' }, { type: 'set_category', value: 'transferencias' }],
     { stopProcessing: true },
+  ),
+  rule(
+    'builtin.traspaso-cuenta',
+    'Traspaso (solo en cuentas, no en tarjetas)',
+    21,
+    [
+      { field: 'description', operator: 'contains', value: 'TRASPASO' },
+      { field: 'product', operator: 'not_equals', value: StatementProduct.credit_card },
+      { field: 'product', operator: 'not_equals', value: StatementProduct.credit_line },
+    ],
+    [{ type: 'mark_transfer' }, { type: 'set_category', value: 'transferencias' }],
+    { match: 'all', stopProcessing: true },
   ),
 
   // ── Bank charges ─────────────────────────────────────────────────────

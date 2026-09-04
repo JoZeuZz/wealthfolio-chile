@@ -1,5 +1,6 @@
 import { toNumber, type Money } from '../money';
 import { Confidence, TransactionKind, type Direction } from '../model/kinds';
+import type { StatementProduct } from '../model/statement';
 import type { EnrichedTransaction, NormalizedTransaction } from '../model/transaction';
 import { normalizeMerchant } from '../merchants/normalize';
 import { foldCase } from '../text';
@@ -31,7 +32,8 @@ export type ConditionField =
   | 'kind'
   | 'direction'
   | 'category'
-  | 'operationType';
+  | 'operationType'
+  | 'product';
 
 export type ConditionOperator =
   | 'contains'
@@ -90,6 +92,24 @@ export interface Rule {
 export interface RuleContext {
   accountId: string;
   accountName?: string;
+  /**
+   * What kind of product the statement covers.
+   *
+   * A condition the row cannot carry, because it is not a property of the
+   * movement: the same glosa means different things depending on the document
+   * it was printed on. `TRASPASO` on a cuenta corriente moves money between
+   * the holder's own accounts; on a tarjeta it is refinancing — `TRASPASO A 12
+   * CUOTAS`, `TRASPASO DE DEUDA` — and treating it as a transfer resolves to
+   * `TRANSFER_OUT`, which Wealthfolio refuses on a credit-card account, so it
+   * is substituted for `WITHDRAWAL`, which the host's spending report counts
+   * as card spending. The rule meant to keep the row out of the spending total
+   * put it there.
+   *
+   * Absent when the caller does not know, and a condition on an unknown field
+   * does not match, so `match: 'all'` is how a rule says "only on this
+   * product" and no existing rule changes behaviour by gaining the field.
+   */
+  product?: StatementProduct;
 }
 
 export interface RuleOutcome {
@@ -283,6 +303,8 @@ function textField(
       return transaction.category ?? '';
     case 'operationType':
       return transaction.operationType ?? '';
+    case 'product':
+      return context.product;
     default:
       return undefined;
   }
