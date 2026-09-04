@@ -217,7 +217,7 @@ re-marcable con un clic.
 
 | | A favor | En contra |
 | --- | --- | --- |
-| Desmarcado por defecto | El usuario sólo escribe lo que entendió; `UNKNOWN` en Wealthfolio queda `needs_review` y fuera de todo cálculo, así que omitirlo no distorsiona nada | Un banco mal calibrado puede producir muchas filas `unknown`: el usuario importaría una fracción de su cartola sin notarlo |
+| Desmarcado por defecto | El usuario sólo escribe lo que entendió; `UNKNOWN` en Wealthfolio queda fuera de todo cálculo, así que omitirlo no distorsiona nada | Un banco mal calibrado puede producir muchas filas `unknown`: el usuario importaría una fracción de su cartola sin notarlo |
 | Marcado (hoy) | La cartola entra completa; nada se pierde en silencio | Se escriben filas que nadie clasificó, y el costo de sacarlas después es manual |
 
 **Qué falta para decidir.** Saber qué proporción de filas queda `unknown` con

@@ -76,9 +76,10 @@ describe('clasificación de abonos de tarjeta', () => {
   it('un abono sin glosa reconocible queda sin clasificar, no como pago', () => {
     // El default anterior era `credit_card_payment`: cualquier abono que no
     // supiéramos leer desaparecía de los totales como si fuera deuda movida.
-    // `unknown` llega a Wealthfolio como `UNKNOWN`, que el host marca
-    // `needs_review` y excluye de todo cálculo — que es lo correcto para una
-    // fila que no supimos interpretar.
+    // `unknown` llega a Wealthfolio como `UNKNOWN`, que el host excluye de
+    // todo cálculo (`EconomicEventKind::Other`), y `toActivityCreate` lo manda
+    // con `needsReview` para que además se pueda encontrar — que es lo correcto
+    // para una fila que no supimos interpretar.
     expect(kindOf(['06/02/2026;ABONO;-15.000'])).toBe(TransactionKind.unknown);
   });
 

@@ -176,7 +176,7 @@ Conjunto cerrado de 14 tipos. Los que usamos y por qué:
 | `tax` | `TAX` | Solo caja |
 | `interest` (ganado) | `INTEREST` | Ingreso |
 | `interest` (cobrado) | `FEE` (subtipo `INTEREST_CHARGE`) | Costo de financiamiento |
-| `unknown` | `UNKNOWN` | Wealthfolio lo marca `needs_review` y lo excluye de todo cálculo — exactamente lo que queremos para una fila que no supimos leer |
+| `unknown` | `UNKNOWN` | `event_kind` lo clasifica `EconomicEventKind::Other`, así que queda fuera de todo cálculo — exactamente lo que queremos para una fila que no supimos leer. La marca `needs_review` **no** la pone el host en un create normal (sólo en modo sincronización): la escribe el addon, ver abajo |
 
 Referencia: `.upstream/wealthfolio/docs/activities/activity-types.md`.
 

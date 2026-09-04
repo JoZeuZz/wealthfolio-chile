@@ -59,8 +59,9 @@ describe('tipos permitidos en una cuenta de tarjeta', () => {
   });
 
   it('en una cuenta de efectivo sigue siendo UNKNOWN', () => {
-    // `UNKNOWN` es mejor donde el host lo acepta: lo marca `needs_review` y lo
-    // deja fuera de todo cálculo.
+    // `UNKNOWN` es mejor donde el host lo acepta: `event_kind` lo manda a
+    // `EconomicEventKind::Other` y queda fuera de todo cálculo. La marca de
+    // revisión la pone `toActivityCreate`, no el host — ver más abajo.
     expect(
       resolveActivityType(
         { kind: TransactionKind.unknown, direction: Direction.in },
@@ -166,5 +167,112 @@ describe('la sustitución no borra lo que sí sabíamos', () => {
     );
 
     expect(rebuilt?.kind).toBe(TransactionKind.expense);
+  });
+});
+
+/**
+ * Marcar para revisión lo que no se pudo leer.
+ *
+ * `UNKNOWN` se eligió porque «Wealthfolio lo marca `needs_review` y lo deja
+ * fuera de todo cálculo». La segunda mitad es cierta —`event_kind` lo manda a
+ * `EconomicEventKind::Other`— pero la primera no: comprobado contra un host
+ * 3.7.0 real, una actividad `UNKNOWN` creada por `activities/bulk` vuelve con
+ * `needsReview: false`. El host sólo fuerza esa marca en modo sincronización
+ * (`activities_service.rs`, `mode.is_sync()`).
+ *
+ * En una cuenta de tarjeta el agujero es peor. Ahí `UNKNOWN` no se acepta y la
+ * sustitución escribe `CREDIT`, que `event_kind` clasifica como
+ * `EconomicEventKind::Income`: un abono que el addon se negó explícitamente a
+ * clasificar entra al portafolio como ingreso, sin marca de revisión y sin
+ * nada que lo distinga de una devolución real.
+ *
+ * `needs_review` no está declarado en `ActivityCreate` del SDK 3.7.0, pero el
+ * backend sí lo acepta (`NewActivity.needs_review: Option<bool>`) y el puente
+ * del host reenvía el objeto sin filtrar campos
+ * (`apps/frontend/src/addons/type-bridge.ts`). Verificado contra el host real:
+ * un create con `needsReview: true` vuelve con `needsReview: true`.
+ */
+describe('lo que no se pudo clasificar queda marcado para revisión', () => {
+  const unreadable = makeTransaction({
+    amount: 9900,
+    date: '2026-03-24',
+    description: 'ABONO VARIOS SIN DETALLE',
+    kind: TransactionKind.unknown,
+  });
+
+  it('un abono ilegible en una tarjeta se marca, aunque se guarde como CREDIT', () => {
+    const create = toActivityCreate(unreadable, {
+      accountId: 'acc-card',
+      runId: 'run-1',
+      accountType: 'CREDIT_CARD',
+    });
+
+    expect(create.activityType).toBe('CREDIT');
+    expect(create.needsReview).toBe(true);
+  });
+
+  it('también se marca en una cuenta de efectivo, donde queda como UNKNOWN', () => {
+    const create = toActivityCreate(unreadable, {
+      accountId: 'acc-cash',
+      runId: 'run-1',
+      accountType: 'CASH',
+    });
+
+    expect(create.activityType).toBe('UNKNOWN');
+    expect(create.needsReview).toBe(true);
+  });
+
+  it('una sustitución de tipo también se marca: el tipo guardado no es el del movimiento', () => {
+    const tax = makeTransaction({
+      amount: -1230,
+      date: '2026-03-11',
+      description: 'IMPUESTO TIMBRES Y ESTAMPILLAS',
+      kind: TransactionKind.tax,
+    });
+
+    const create = toActivityCreate(tax, {
+      accountId: 'acc-card',
+      runId: 'run-1',
+      accountType: 'CREDIT_CARD',
+    });
+
+    expect(create.activityType).toBe('FEE');
+    expect(create.needsReview).toBe(true);
+  });
+
+  it('un movimiento que se guarda tal cual no pide revisión', () => {
+    const purchase = makeTransaction({
+      amount: -15300,
+      date: '2026-03-27',
+      description: 'TOTTUS PUENTE ALTO',
+      kind: TransactionKind.credit_card_purchase,
+    });
+
+    const create = toActivityCreate(purchase, {
+      accountId: 'acc-card',
+      runId: 'run-1',
+      accountType: 'CREDIT_CARD',
+    });
+
+    expect(create.activityType).toBe('WITHDRAWAL');
+    expect(create.needsReview).toBeUndefined();
+  });
+
+  it('una devolución reconocida por su glosa no pide revisión', () => {
+    const refund = makeTransaction({
+      amount: 27450,
+      date: '2026-03-21',
+      description: 'ANULACION COMPRA SODIMAC MAIPU',
+      kind: TransactionKind.refund,
+    });
+
+    const create = toActivityCreate(refund, {
+      accountId: 'acc-card',
+      runId: 'run-1',
+      accountType: 'CREDIT_CARD',
+    });
+
+    expect(create).toMatchObject({ activityType: 'CREDIT', subtype: 'REFUND' });
+    expect(create.needsReview).toBeUndefined();
   });
 });

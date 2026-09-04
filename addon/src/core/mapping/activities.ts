@@ -120,6 +120,23 @@ export interface ChileMetadata {
   subst?: true;
 }
 
+/**
+ * An `ActivityCreate` plus the review flag the SDK type has not caught up to.
+ *
+ * `NewActivity.needs_review` is `Option<bool>` in the v3.7.0 backend and the
+ * bulk endpoint persists whatever is sent, but `ActivityCreate` in
+ * `@wealthfolio/addon-sdk@3.7.0` does not declare the field. The host's addon
+ * bridge forwards the request object without filtering its keys
+ * (`apps/frontend/src/addons/type-bridge.ts`: `saveMany` calls
+ * `internalAPI.saveActivities(input)` unchanged), so the flag survives the trip
+ * through the sandbox. Verified against a real 3.7.0 container: a create
+ * carrying `needsReview: true` comes back with `needsReview: true`.
+ *
+ * Declared here rather than cast at the call site so a future SDK that adds the
+ * field makes this alias redundant instead of silently disagreeing with it.
+ */
+export type ReviewableActivityCreate = ActivityCreate & { needsReview?: boolean };
+
 export interface MapToActivityOptions {
   accountId: string;
   runId: string;
@@ -146,7 +163,7 @@ export interface MapToActivityOptions {
 export function toActivityCreate(
   transaction: EnrichedTransaction | NormalizedTransaction,
   options: MapToActivityOptions,
-): ActivityCreate {
+): ReviewableActivityCreate {
   const { activityType, subtype, substituted } = resolveActivityType(
     transaction,
     options.accountType !== undefined ? { accountType: options.accountType } : {},
@@ -208,7 +225,33 @@ export function toActivityCreate(
     // single row is written. Reads are asymmetric — `ActivityDetails.metadata`
     // comes back already parsed — which is why `readChileMetadata` takes both.
     metadata: JSON.stringify({ [METADATA_NAMESPACE]: metadata }),
+    // Only when the stored row does not say what the movement is. Marking every
+    // import would make the flag mean nothing, and a person who has to review
+    // 400 rows reviews none of them.
+    ...(needsReview(transaction.kind, substituted) ? { needsReview: true } : {}),
   };
+}
+
+/**
+ * Whether Wealthfolio should ask a person to look at this row.
+ *
+ * Two cases, and both are "the activity Wealthfolio stores does not say what
+ * the movement is":
+ *
+ * - `unknown` — nothing was known. The kind was left unresolved on purpose
+ *   rather than guessed, and that decision is only honest if the user can find
+ *   the row afterwards. `UNKNOWN` alone does not achieve it: the host forces
+ *   `needs_review` only on broker-sync imports (`mode.is_sync()`), so an
+ *   `UNKNOWN` created through `activities/bulk` comes back unflagged.
+ * - a **substituted** type — the account refused the natural type and the row
+ *   was written as the nearest thing it accepts. On a credit-card account an
+ *   unreadable credit becomes `CREDIT`, which upstream's `event_kind` counts as
+ *   `EconomicEventKind::Income`. Without the flag, a movement the addon
+ *   explicitly declined to classify enters the portfolio as income and looks
+ *   exactly like a refund somebody confirmed.
+ */
+function needsReview(kind: TransactionKind, substituted: boolean | undefined): boolean {
+  return kind === TransactionKind.unknown || substituted === true;
 }
 
 interface ResolvedType {
