@@ -146,11 +146,25 @@ export function classifyDuplicate(
 
   const inBatch = withinBatch.get(fingerprint);
   if (inBatch) {
+    // `probable`, not `exact`. This module's own contract says `probable` exists
+    // precisely because two genuinely identical charges on the same day — two
+    // $2.500 coffees, two ATM withdrawals of the same amount — are a real thing
+    // that has to stay distinguishable from one movement listed twice. That
+    // promise held against the stored ledger and not within a single file,
+    // where the second row was called a proven duplicate. Nothing here proves
+    // it: an export that repeats a line and a day that contained two identical
+    // purchases look the same from here.
+    //
+    // It stays unticked either way — a wrong skip costs one movement the user
+    // can re-add, a wrong import doubles an expense silently — but the badge
+    // now says what is actually known, and the row can be ticked on its own
+    // (see `PreviewRow.key`).
     return {
-      verdict: 'exact',
+      verdict: 'probable',
       reason_code: 'repeated-within-file',
       existingFingerprint: fingerprint,
-      reason: 'El archivo contiene esta misma fila dos veces.',
+      reason:
+        'El archivo lista esta misma fila dos veces. Si de verdad hubo dos movimientos iguales, márcala.',
     };
   }
 

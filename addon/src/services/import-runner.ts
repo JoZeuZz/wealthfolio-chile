@@ -1,5 +1,9 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
-import { toActivityCreate, type HostAccountType } from '../core/mapping/activities';
+import {
+  toActivityCreate,
+  type HostAccountType,
+  type ReviewableActivityCreate,
+} from '../core/mapping/activities';
 import { createRedactingLogger, sanitizeFileName } from '../core/privacy';
 import type { PreparedImport, PreviewRow } from '../core/pipeline';
 import { ImportHistory, newRunId, type ImportRun } from './import-history';
@@ -89,6 +93,48 @@ export interface RunImportResult {
  */
 const BATCH_SIZE = 100;
 
+/**
+ * Make our fingerprint the host's idempotency key.
+ *
+ * Wealthfolio derives its own key when a create does not carry one — from
+ * `(account, type, date, symbol, quantity, unitPrice, amount, fee, currency,
+ * sourceRecordId, notes)` — and protects it with a unique index. Ours includes
+ * the bank reference; the host's does not. Two ATM withdrawals of $20.000 on
+ * the same day with the same glosa and document numbers 4417 and 4418 are two
+ * movements to us and one to the host.
+ *
+ * The bulk create is a plain insert inside a single transaction with no
+ * `ON CONFLICT`, so the collision does not skip a row — it rejects the whole
+ * request. With batches of 100, two indistinguishable withdrawals cost 100
+ * movements, the preview having called every one of them new. There is no
+ * recovery: the only way through is to untick one of the two, which drops a
+ * real withdrawal from the ledger while the run still reports `completed`.
+ *
+ * Sending the fingerprint leaves one identity function instead of two that
+ * disagree. `idempotencyKey` is not declared on `ActivityCreate` in the 3.7.0
+ * SDK, but the backend stores what it is given and the host's addon bridge
+ * forwards the object unfiltered — verified against a real container.
+ *
+ * The ordinal covers the remaining case: rows we ourselves cannot tell apart
+ * share a fingerprint, and if the user ticks both, they still have to be two
+ * rows to the host.
+ */
+function withIdempotencyKeys(
+  activities: readonly ReviewableActivityCreate[],
+  fingerprints: readonly string[],
+): ReviewableActivityCreate[] {
+  const seen = new Map<string, number>();
+  return activities.map((activity, index) => {
+    const fingerprint = fingerprints[index] ?? '';
+    const occurrence = (seen.get(fingerprint) ?? 0) + 1;
+    seen.set(fingerprint, occurrence);
+    return {
+      ...activity,
+      idempotencyKey: occurrence === 1 ? fingerprint : `${fingerprint}#${occurrence}`,
+    };
+  });
+}
+
 export async function runImport(input: RunImportInput): Promise<RunImportResult> {
   const { ctx, prepared, accountId, accountName } = input;
   const logger = createRedactingLogger(ctx.api.logger, {
@@ -98,13 +144,16 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
   const runId = newRunId();
   const selected = prepared.rows.filter((row) => row.willImport);
 
-  const activities = selected.map((row) =>
-    toActivityCreate(row.transaction, {
-      accountId,
-      runId,
-      weakFingerprint: row.weakFingerprint,
-      ...(input.accountType !== undefined ? { accountType: input.accountType } : {}),
-    }),
+  const activities = withIdempotencyKeys(
+    selected.map((row) =>
+      toActivityCreate(row.transaction, {
+        accountId,
+        runId,
+        weakFingerprint: row.weakFingerprint,
+        ...(input.accountType !== undefined ? { accountType: input.accountType } : {}),
+      }),
+    ),
+    selected.map((row) => row.transaction.fingerprint),
   );
 
   const errors: string[] = [];

@@ -171,8 +171,14 @@ describe('idempotency', () => {
       duplicateIndex: EMPTY_INDEX,
     });
 
-    expect(prepared.totals.exactDuplicates).toBe(1);
+    // Posible, no exacto: un archivo que repite una línea y un día con dos
+    // compras iguales se ven igual desde aquí. Queda desmarcada de todos modos,
+    // pero la etiqueta dice lo que de verdad se sabe y la fila se puede marcar
+    // por separado.
+    expect(prepared.totals.probableDuplicates).toBe(1);
+    expect(prepared.totals.exactDuplicates).toBe(0);
     expect(prepared.totals.toImport).toBe(1);
+    expect(prepared.rows[1]?.duplicate.reason_code).toBe('repeated-within-file');
   });
 
   it('scopes identity to the account, so the same charge in two accounts stays two', () => {
@@ -217,7 +223,7 @@ describe('preview selection', () => {
     const prepared = prepare('banco-chile-cuenta-corriente.csv');
     const sueldo = prepared.rows.find((row) => /SUELDO/.test(row.transaction.description))!;
 
-    const updated = setRowSelection(prepared, sueldo.transaction.fingerprint, false);
+    const updated = setRowSelection(prepared, sueldo.key, false);
 
     expect(updated.totals.toImport).toBe(prepared.totals.toImport - 1);
     expect(toDecimalString(updated.totals.income)).toBe('45000');

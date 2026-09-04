@@ -18,6 +18,17 @@ import { fakeHost } from './host';
 
 const ACCOUNT = 'acc-1';
 
+/** Raw CSV instead of a named fixture, for the rows a fixture does not contain. */
+function prepareText(text: string): PreparedImport {
+  return prepareImport({
+    file: fromText('cartola.csv', text),
+    accountId: ACCOUNT,
+    accountName: 'Cuenta corriente',
+    rules: defaultRules(),
+    duplicateIndex: buildDuplicateIndex([]),
+  });
+}
+
 function prepare(overrides: { file?: string } = {}): PreparedImport {
   return prepareImport({
     file: loadFixture(overrides.file ?? 'banco-chile-cuenta-corriente.csv'),
@@ -336,7 +347,7 @@ describe('buildBreakdown', () => {
   it('tracks a row the user unticked in the preview', () => {
     const prepared = prepare();
     const first = prepared.rows.find((r) => r.willImport);
-    const toggled = setRowSelection(prepared, first?.transaction.fingerprint as string, false);
+    const toggled = setRowSelection(prepared, first?.key as string, false);
 
     const breakdown = buildBreakdown(toggled.rows, 0);
     expect(breakdown.skippedByUser).toBeGreaterThanOrEqual(1);
@@ -375,5 +386,119 @@ describe('el historial cuenta las filas que el parser descartó', () => {
 
     expect(result.run.skippedRows).toBe(2);
     expect(result.run.detectedRows).toBe(2);
+  });
+});
+
+/**
+ * Dos identidades para el mismo movimiento no pueden discrepar.
+ *
+ * Wealthfolio calcula su propia clave de idempotencia y la protege con un
+ * índice único, y esa clave **no** incluye la referencia bancaria: es
+ * `(cuenta, tipo, fecha, símbolo, cantidad, precio, monto, comisión, moneda,
+ * sourceRecordId, notes)`. La nuestra sí incluye la referencia. Dos giros de
+ * $20.000 el mismo día con la misma glosa y documentos 4417 y 4418 son dos
+ * movimientos para nosotros y uno para el host.
+ *
+ * Comprobado contra un host 3.7.0 real: el `POST /activities/bulk` devuelve
+ * `400 Duplicate activity detected. A matching activity already exists.` y —
+ * porque el create masivo es un `insert_into` sin `ON CONFLICT` dentro de una
+ * sola transacción— **no escribe ninguna** de las filas del lote. Con lotes de
+ * 100, dos giros iguales cuestan 100 movimientos. La vista previa dice que
+ * todas son nuevas y el error habla de un duplicado que el usuario no puede
+ * encontrar: la única salida es desmarcar una fila, que borra un giro real.
+ *
+ * Mandar nuestra huella como `idempotencyKey` deja una sola función de
+ * identidad. El campo no está declarado en `ActivityCreate` del SDK 3.7.0 pero
+ * el backend lo respeta tal cual — verificado contra el host real.
+ */
+describe('la clave de idempotencia del host es la nuestra', () => {
+  it('cada actividad lleva su huella como clave', async () => {
+    const prepared = prepare();
+    const host = fakeHost();
+
+    await runImport({
+      ctx: host.ctx,
+      prepared,
+      accountId: ACCOUNT,
+      accountName: 'Banco de Chile',
+    });
+
+    const creates = host.saveManyCalls[0]?.request.creates ?? [];
+    expect(creates.length).toBeGreaterThan(0);
+    for (const [i, create] of creates.entries()) {
+      const row = prepared.rows.filter((r) => r.willImport)[i];
+      expect((create as { idempotencyKey?: string }).idempotencyKey).toBe(
+        row?.transaction.fingerprint,
+      );
+    }
+  });
+
+  it('dos filas indistinguibles del mismo archivo no comparten clave', async () => {
+    const prepared = prepareText(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo;N Documento',
+        '14/02/2026;GIRO CAJERO AUTOMATICO;20.000;;980.000;4417',
+        '14/02/2026;GIRO CAJERO AUTOMATICO;20.000;;960.000;4418',
+      ].join('\n'),
+    );
+
+    // Las dos filas se importan sólo si el usuario marca la segunda; el
+    // objetivo aquí es que, cuando lo haga, el host no rechace el lote.
+    const second = prepared.rows[1];
+    const all = setRowSelection(prepared, second?.key as string, true);
+    const host = fakeHost();
+
+    await runImport({
+      ctx: host.ctx,
+      prepared: all,
+      accountId: ACCOUNT,
+      accountName: 'Banco de Chile',
+    });
+
+    const keys = (host.saveManyCalls[0]?.request.creates ?? []).map(
+      (c) => (c as { idempotencyKey?: string }).idempotencyKey,
+    );
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+});
+
+/**
+ * Marcar una fila no puede arrastrar a otra.
+ *
+ * `setRowSelection` buscaba por huella, y dos filas indistinguibles del mismo
+ * archivo comparten huella: marcar una marcaba las dos. Justo el caso donde el
+ * usuario más necesita decidir fila por fila — el archivo lista un movimiento
+ * dos veces, o hubo dos cafés del mismo precio — era el único donde no podía.
+ */
+describe('la selección es por fila, no por huella', () => {
+  it('marcar la segunda de dos filas iguales no marca la primera', () => {
+    const prepared = prepareText(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo;N Documento',
+        '14/02/2026;GIRO CAJERO AUTOMATICO;20.000;;980.000;4417',
+        '14/02/2026;GIRO CAJERO AUTOMATICO;20.000;;960.000;4418',
+      ].join('\n'),
+    );
+
+    const updated = setRowSelection(prepared, prepared.rows[1]?.key as string, false);
+
+    expect(updated.rows[0]?.willImport).toBe(true);
+    expect(updated.rows[1]?.willImport).toBe(false);
+  });
+
+  it('cada fila tiene una clave distinta aunque compartan huella', () => {
+    const prepared = prepareText(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '14/02/2026;GIRO CAJERO AUTOMATICO;20.000;;980.000',
+        '14/02/2026;GIRO CAJERO AUTOMATICO;20.000;;960.000',
+      ].join('\n'),
+    );
+
+    expect(prepared.rows[0]?.transaction.fingerprint).toBe(
+      prepared.rows[1]?.transaction.fingerprint,
+    );
+    expect(prepared.rows[0]?.key).not.toBe(prepared.rows[1]?.key);
   });
 });

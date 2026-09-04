@@ -258,10 +258,10 @@ export function ImportWizardPage() {
           prepared={prepared}
           dedupeAvailable={preparation?.duplicateIndex.status === 'ready'}
           blockers={preparation?.blockers ?? []}
-          onToggle={(fingerprint, willImport) =>
+          onToggle={(key, willImport) =>
             setPreparation((current) =>
               current?.prepared
-                ? { ...current, prepared: setRowSelection(current.prepared, fingerprint, willImport) }
+                ? { ...current, prepared: setRowSelection(current.prepared, key, willImport) }
                 : current,
             )
           }
@@ -650,7 +650,7 @@ function PreviewStep({
   prepared: PreparedImport;
   dedupeAvailable: boolean;
   blockers: readonly ImportBlocker[];
-  onToggle: (fingerprint: string, willImport: boolean) => void;
+  onToggle: (rowKey: string, willImport: boolean) => void;
   onBack: () => void;
   onConfirm: () => void;
   busy: boolean;
@@ -765,7 +765,7 @@ function PreviewStep({
             <tbody>
               {rows.map((row) => (
                 <PreviewRowView
-                  key={row.transaction.fingerprint}
+                  key={row.key}
                   row={row}
                   dedupeAvailable={dedupeAvailable}
                   onToggle={onToggle}
@@ -801,7 +801,7 @@ function PreviewRowView({
 }: {
   row: PreviewRow;
   dedupeAvailable: boolean;
-  onToggle: (fingerprint: string, willImport: boolean) => void;
+  onToggle: (rowKey: string, willImport: boolean) => void;
 }) {
   const { transaction } = row;
   return (
@@ -810,7 +810,7 @@ function PreviewRowView({
         <Checkbox
           checked={row.willImport}
           onCheckedChange={(checked) =>
-            onToggle(transaction.fingerprint, checked === true)
+            onToggle(row.key, checked === true)
           }
         />
       </td>

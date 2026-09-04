@@ -135,7 +135,17 @@ export interface ChileMetadata {
  * Declared here rather than cast at the call site so a future SDK that adds the
  * field makes this alias redundant instead of silently disagreeing with it.
  */
-export type ReviewableActivityCreate = ActivityCreate & { needsReview?: boolean };
+export type ReviewableActivityCreate = ActivityCreate & {
+  needsReview?: boolean;
+  /**
+   * The host's own duplicate key, which it derives itself when absent.
+   *
+   * Set by `import-runner` so the addon's identity and Wealthfolio's are the
+   * same function. See `withIdempotencyKeys` for what happens when they are
+   * not. Also undeclared on `ActivityCreate` in 3.7.0, and also honoured.
+   */
+  idempotencyKey?: string;
+};
 
 export interface MapToActivityOptions {
   accountId: string;

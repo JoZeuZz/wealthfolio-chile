@@ -15,10 +15,14 @@ import { fromText, makeTransaction } from './fixtures';
 
 type RowOverrides = Omit<Partial<PreviewRow['transaction']>, 'amount'> & { amount: number };
 
+let rowCounter = 0;
+
 function row(overrides: RowOverrides): PreviewRow {
   const { amount, ...rest } = overrides;
   const transaction = makeTransaction({ amount, date: '2026-02-10', ...rest });
+  rowCounter += 1;
   return {
+    key: `r${rowCounter}`,
     transaction: { ...transaction, appliedRules: [] },
     weakFingerprint: 'wfp',
     duplicate: { verdict: 'none', reason_code: 'new', reason: 'Movimiento nuevo.' },

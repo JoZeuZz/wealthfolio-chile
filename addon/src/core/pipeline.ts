@@ -41,6 +41,16 @@ export interface PrepareInput {
 }
 
 export interface PreviewRow {
+  /**
+   * Identifies this row inside this preview.
+   *
+   * Not the fingerprint. Two rows a bank printed identically — two $2.500
+   * coffees, two ATM withdrawals of the same amount on the same day — share a
+   * fingerprint by design, and selection used to be keyed on it: ticking one
+   * ticked both. The case where the user most needs to decide row by row was
+   * the one case where they could not.
+   */
+  key: string;
   transaction: EnrichedTransaction;
   /** Weak fingerprint, carried through to activity metadata. */
   weakFingerprint: string;
@@ -149,6 +159,7 @@ export function prepareImport(input: PrepareInput): PreparedImport {
     const ignoredByRule = ruleOutcomes[index]?.ignored ?? false;
     const transaction = enriched[index] as EnrichedTransaction;
     return {
+      key: `r${index}`,
       transaction: { ...transaction, fingerprint: result.transaction.fingerprint },
       weakFingerprint: computeWeakFingerprint(result.transaction, scope),
       duplicate: result.finding,
@@ -264,12 +275,10 @@ function needsAttention(transaction: EnrichedTransaction): boolean {
 /** Toggle one row and return a new preview with totals refreshed. */
 export function setRowSelection(
   prepared: PreparedImport,
-  fingerprint: string,
+  key: string,
   willImport: boolean,
 ): PreparedImport {
-  const rows = prepared.rows.map((row) =>
-    row.transaction.fingerprint === fingerprint ? { ...row, willImport } : row,
-  );
+  const rows = prepared.rows.map((row) => (row.key === key ? { ...row, willImport } : row));
   return {
     ...prepared,
     rows,
