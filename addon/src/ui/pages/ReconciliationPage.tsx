@@ -11,7 +11,14 @@ import {
 } from '@wealthfolio/ui';
 import type { Account } from '@wealthfolio/addon-sdk';
 import { useCallback, useEffect, useState } from 'react';
-import { addMonthsToKey, formatIsoDate, monthEnd, monthKey, monthStart } from '../../core/dates';
+import {
+  addMonthsToKey,
+  civilToday,
+  formatIsoDate,
+  monthEnd,
+  monthKey,
+  monthStart,
+} from '../../core/dates';
 import { Confidence } from '../../core/model/kinds';
 import type { AmbiguousTransfer, TransferMatch } from '../../core/reconcile/transfers';
 import type { CardPaymentMatch } from '../../core/reconcile/credit-card';
@@ -55,7 +62,7 @@ interface PageState {
 export function ReconciliationPage() {
   const ctx = useAddon();
   const [state, setState] = useState<PageState>({ accounts: new Map(), loading: true });
-  const [month, setMonth] = useState(() => monthKey(new Date().toISOString().slice(0, 10)));
+  const [month, setMonth] = useState(() => monthKey(civilToday()));
 
   const load = useCallback(async () => {
     setState((current) => ({ ...current, loading: true, error: undefined }));
@@ -117,6 +124,11 @@ export function ReconciliationPage() {
             variant="outline"
             size="sm"
             aria-label="Ver los meses siguientes"
+            // Nothing has been imported from the future. Walking past the
+            // current month only produced empty screens that looked like data
+            // loss, and on the reconciliation screen an empty window is
+            // indistinguishable from "nothing matched".
+            disabled={month >= monthKey(civilToday())}
             onClick={() => setMonth(addMonthsToKey(month, 1))}
           >
             <span aria-hidden>→</span>

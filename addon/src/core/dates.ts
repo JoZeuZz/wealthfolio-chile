@@ -193,6 +193,33 @@ export function addMonths(iso: IsoDate, months: number): IsoDate {
 }
 
 /** `YYYY-MM` bucket key used by every monthly aggregate. */
+/**
+ * Today, in the calendar the user lives in.
+ *
+ * `new Date().toISOString().slice(0, 10)` is not anybody's civil date — it is
+ * the UTC one. In Chile that is three or four hours ahead of the wall clock,
+ * so from ten at night the UTC day has already turned: on the 31st of January
+ * at 22:30 in Santiago a screen opening "this month" opened February.
+ *
+ * A civil date computed from a wall clock has to be read on that wall clock.
+ * What must *not* change is reading a date that came from the host:
+ * Wealthfolio stores a bare `YYYY-MM-DD` as UTC midnight
+ * (`storage-sqlite/src/activities/model.rs`, v3.7.0), so re-reading that
+ * instant in UTC gives the same civil day back and re-reading it locally would
+ * move it by one.
+ *
+ * @param offsetMinutes Minutes to add to UTC, i.e. the negation of
+ *   `Date.prototype.getTimezoneOffset`. Defaults to the running environment's,
+ *   and is a parameter so the boundaries can be tested without a fake clock.
+ */
+export function civilToday(
+  now: Date = new Date(),
+  offsetMinutes: number = -now.getTimezoneOffset(),
+): IsoDate {
+  const local = new Date(now.getTime() + offsetMinutes * 60_000);
+  return toIsoDate(local.getUTCFullYear(), local.getUTCMonth() + 1, local.getUTCDate());
+}
+
 export type MonthKey = string;
 
 export function monthKey(iso: IsoDate): MonthKey {

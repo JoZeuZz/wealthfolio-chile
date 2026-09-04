@@ -520,3 +520,27 @@ describe('la excepción de fechas no deja pasar un número de cuenta', () => {
     expect(redactSensitive('ref 45-13-2026')).toBe('ref [NUM]');
   });
 });
+
+/**
+ * El dígito verificador suelto.
+ *
+ * `RUT_PATTERN` separaba cuerpo y verificador con `[\s-]{0,3}`, y los bancos
+ * chilenos nombran sus descargas con guion bajo: `CartolaRut_12345678_5.csv`.
+ * El motor retrocedía, tomaba `12345678` como si el `8` fuera el verificador y
+ * dejaba `[RUT]_5` — con lo que el RUT quedaba redactado a medias y, peor, mal
+ * interpretado: el cuerpo real es `12.345.678` y el verificador es el `5`.
+ */
+describe('separadores de RUT que usan los bancos', () => {
+  it('el guion bajo separa cuerpo y verificador como el guion', () => {
+    expect(redactSensitive('CartolaRut_12345678_5.csv')).not.toContain('5.csv');
+    expect(redactSensitive('12345678_5')).toBe('[RUT]');
+  });
+
+  it('el nombre de archivo tampoco lo deja pasar', () => {
+    expect(sanitizeFileName('CartolaRut_12345678_5_202602.csv')).not.toMatch(/12345678/);
+  });
+
+  it('y una fecha con guiones bajos sigue sin ser un RUT', () => {
+    expect(redactSensitive('cartola_2026_02.csv')).toContain('2026');
+  });
+});

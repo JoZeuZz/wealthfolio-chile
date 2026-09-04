@@ -12,7 +12,14 @@ import {
 } from '@wealthfolio/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { categoryPath } from '../../core/categories/defaults';
-import { addMonthsToKey, formatMonthKey, monthEnd, monthKey, monthStart } from '../../core/dates';
+import {
+  addMonthsToKey,
+  civilToday,
+  formatMonthKey,
+  monthEnd,
+  monthKey,
+  monthStart,
+} from '../../core/dates';
 import { buildInsights, type Insight } from '../../core/insights/rules';
 import { buildInstallmentPlans, buildOutlook } from '../../core/installments/plans';
 import {
@@ -64,7 +71,7 @@ export function DashboardPage() {
   const [data, setData] = useState<DashboardData | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
-  const [month, setMonth] = useState<string>(() => monthKey(new Date().toISOString().slice(0, 10)));
+  const [month, setMonth] = useState<string>(() => monthKey(civilToday()));
 
   useEffect(() => {
     let cancelled = false;
@@ -137,6 +144,11 @@ export function DashboardPage() {
             variant="outline"
             size="sm"
             aria-label="Ver el mes siguiente"
+            // Nothing has been imported from the future. Walking past the
+            // current month only produced empty screens that looked like data
+            // loss, and on the reconciliation screen an empty window is
+            // indistinguishable from "nothing matched".
+            disabled={month >= monthKey(civilToday())}
             onClick={() => setMonth(addMonthsToKey(month, 1))}
           >
             <span aria-hidden>→</span>

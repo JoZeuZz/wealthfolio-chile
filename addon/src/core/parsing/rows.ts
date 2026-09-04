@@ -652,7 +652,16 @@ function readReference(row: readonly string[], map: ColumnMap): string | undefin
   return value === '' ? undefined : value;
 }
 
-const CARD_TAIL = /(?:\*{2,}|X{2,}|N[°º]?\s*)(\d{4})\b/i;
+/**
+ * How a Chilean statement writes the last four digits of a card.
+ *
+ * The `°` is not optional and the `N` has to start a word. Without either,
+ * `N\s*` matched the ene of any word before a four-digit number, so
+ * `TRANSFERENCIA OPERACION 4521` handed back `4521` as the tail of the user's
+ * card — an operation number shown in the preview and written into the
+ * metadata as if it identified a card.
+ */
+const CARD_TAIL = /(?:\*{2,}|X{2,}|(?<![\p{L}])N[°º]\s*)(\d{4})\b/iu;
 
 function readCardLast4(
   row: readonly string[],

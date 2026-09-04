@@ -175,3 +175,28 @@ describe('sin nada que conciliar', () => {
     expect(screen.getByText(/No quedó ningún grupo ambiguo/)).toBeInTheDocument();
   });
 });
+
+/**
+ * No se puede conciliar el mes que viene.
+ *
+ * La ventana avanzaba sin tope, así que un par de clics dejaban al usuario
+ * mirando meses vacíos. En esta pantalla eso es peor que inútil: una ventana
+ * sin candidatos y una ventana sin datos se ven exactamente igual, así que
+ * navegar al futuro parecía decir «no hay transferencias que conciliar».
+ */
+describe('tope de navegación', () => {
+  it('el botón de meses siguientes está deshabilitado en el mes actual', async () => {
+    renderPage(<ReconciliationPage />);
+
+    const next = await screen.findByRole('button', { name: 'Ver los meses siguientes' });
+    expect(next).toBeDisabled();
+  });
+
+  it('y se habilita al retroceder', async () => {
+    const { user } = renderPage(<ReconciliationPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Ver los meses anteriores' }));
+
+    expect(screen.getByRole('button', { name: 'Ver los meses siguientes' })).toBeEnabled();
+  });
+});

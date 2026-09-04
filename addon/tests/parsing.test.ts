@@ -338,3 +338,46 @@ describe('la cabecera desambigua, pero no restringe', () => {
     expect(prepared.validation.ok).toBe(false);
   });
 });
+
+/**
+ * Cuatro dígitos detrás de una letra ene no son una tarjeta.
+ *
+ * `CARD_TAIL` aceptaba `N` seguida de espacio y cuatro dígitos, sin exigir el
+ * `°` ni comprobar que la `N` empezara palabra. Cualquier glosa terminada en
+ * una palabra con ene delante de un número de cuatro cifras —
+ * `TRANSFERENCIA OPERACION 4521`— entregaba `4521` como los últimos cuatro
+ * dígitos de una tarjeta. Ese dato se muestra en la vista previa y viaja en la
+ * metadata: un número de operación presentado como una tarjeta del usuario.
+ */
+describe('últimos cuatro dígitos de la tarjeta', () => {
+  function last4(description: string): string | undefined {
+    const { statement } = prepareImport({
+      file: fromText(
+        'cartola.csv',
+        ['Fecha;Descripcion;Cargo;Abono', `03/02/2026;${description};10.000;`].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+    return statement.transactions[0]?.cardLast4;
+  }
+
+  it('un número de operación detrás de una palabra con ene no lo es', () => {
+    expect(last4('TRANSFERENCIA OPERACION 4521')).toBeUndefined();
+  });
+
+  it('«N 1234» suelto tampoco', () => {
+    expect(last4('GIRO CAJERO N 1234')).toBeUndefined();
+  });
+
+  it('los enmascarados sí', () => {
+    expect(last4('COMPRA WEBPAY ****4521')).toBe('4521');
+    expect(last4('COMPRA TARJETA XXXX4521')).toBe('4521');
+  });
+
+  it('y «N° 1234» también, que es como se escribe de verdad', () => {
+    expect(last4('COMPRA TARJETA N° 4521')).toBe('4521');
+  });
+});

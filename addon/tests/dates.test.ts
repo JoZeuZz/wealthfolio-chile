@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addDays,
+  civilToday,
   addMonths,
   addMonthsToKey,
   DateParseError,
@@ -147,5 +148,47 @@ describe('month bounds', () => {
   it('bounds the window a dashboard asks the host for', () => {
     expect(monthStart(addMonthsToKey('2026-03', -13))).toBe('2025-02-01');
     expect(monthEnd('2026-03')).toBe('2026-03-31');
+  });
+});
+
+/**
+ * Hoy, en el calendario del usuario.
+ *
+ * Dos pantallas abrían en el mes actual con
+ * `new Date().toISOString().slice(0, 10)`, que no es la fecha civil de nadie:
+ * es la fecha UTC. En Chile (UTC−3 en verano, UTC−4 en invierno) eso significa
+ * que entre medianoche y las tres o cuatro de la mañana la fecha civil ya es
+ * la del día siguiente en UTC. El 31 de enero a las 22:00 en Santiago, el panel
+ * abría en febrero; el 1 de febrero a las 00:30, abría en enero.
+ *
+ * `civilToday` lee el reloj local, que es el único calendario en el que el
+ * usuario tiene sus movimientos.
+ *
+ * Lo que **no** cambia es leer una fecha que viene del host: Wealthfolio
+ * guarda un `YYYY-MM-DD` desnudo como medianoche UTC
+ * (`storage-sqlite/src/activities/model.rs`, v3.7.0), así que releer ese
+ * instante en UTC devuelve el mismo día civil y leerlo en local lo correría uno.
+ */
+describe('civilToday', () => {
+  it('usa el reloj local, no el UTC', () => {
+    // 1 de febrero a las 00:30 en Santiago (UTC−3) son las 03:30 UTC del 1,
+    // así que ambos coinciden; el caso interesante es el contrario.
+    const lateEvening = new Date(Date.UTC(2026, 1, 1, 1, 30)); // 31/01 22:30 en UTC−3
+    expect(civilToday(lateEvening, -180)).toBe('2026-01-31');
+  });
+
+  it('y cuando el desfase no cruza la medianoche, coincide con el UTC', () => {
+    const midday = new Date(Date.UTC(2026, 1, 15, 15, 0));
+    expect(civilToday(midday, -180)).toBe('2026-02-15');
+  });
+
+  it('cruza el año hacia atrás sin inventar un mes 0', () => {
+    const newYear = new Date(Date.UTC(2027, 0, 1, 2, 0)); // 31/12/2026 23:00 en UTC−3
+    expect(civilToday(newYear, -180)).toBe('2026-12-31');
+  });
+
+  it('también funciona hacia el otro lado del meridiano', () => {
+    const evening = new Date(Date.UTC(2026, 1, 28, 22, 0)); // 01/03 09:00 en UTC+11
+    expect(civilToday(evening, 660)).toBe('2026-03-01');
   });
 });

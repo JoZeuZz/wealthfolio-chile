@@ -23,6 +23,17 @@ const NOT_DIGIT_BEFORE = '(?<![\\d.])';
 const NOT_DIGIT_AFTER = '(?![\\d])';
 
 /**
+ * What can sit between a RUT's body and its check digit.
+ *
+ * The underscore is here because Chilean banks name their downloads with it:
+ * `CartolaRut_12345678_5.csv`. Without it the engine backtracked, read
+ * `12345678` as a whole RUT — treating the body's own last digit as the check
+ * digit — and left `[RUT]_5`. Half-redacted, and wrong about which digit was
+ * which.
+ */
+const RUT_DV_SEPARATOR = '[\\s\\-_]';
+
+/**
  * Chilean national ID.
  *
  * Written every way people actually write it: `12.345.678-9`, `12345678-K`,
@@ -32,11 +43,11 @@ const NOT_DIGIT_AFTER = '(?![\\d])';
  * through a redactor untouched and into the addon's storage.
  */
 const RUT_PATTERN = new RegExp(
-  `${NOT_DIGIT_BEFORE}\\d{1,2}[.\\s]?\\d{3}[.\\s]?\\d{3}[\\s-]{0,3}[\\dkK]${NOT_DIGIT_AFTER}`,
+  `${NOT_DIGIT_BEFORE}\\d{1,2}[.\\s]?\\d{3}[.\\s]?\\d{3}${RUT_DV_SEPARATOR}{0,3}[\\dkK]${NOT_DIGIT_AFTER}`,
   'g',
 );
 const SHORT_RUT_PATTERN = new RegExp(
-  `${NOT_DIGIT_BEFORE}\\d{3}[.\\s]?\\d{3}[\\s-]{1,3}[\\dkK]${NOT_DIGIT_AFTER}`,
+  `${NOT_DIGIT_BEFORE}\\d{3}[.\\s]?\\d{3}${RUT_DV_SEPARATOR}{1,3}[\\dkK]${NOT_DIGIT_AFTER}`,
   'g',
 );
 
