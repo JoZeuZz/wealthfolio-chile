@@ -148,18 +148,50 @@ en `ctx.api.secrets` (cifrado en reposo, acotado al addon), nunca en
 
 ## Calibrar contra una cartola real
 
-`pnpm calibrate` (ver [BANK_FORMATS.md](BANK_FORMATS.md)) es el único punto del
+`pnpm calibrate` (ver [BANK_FORMATS.md](BANK_FORMATS.md) y
+[REAL_SAMPLE_WORKFLOW.md](REAL_SAMPLE_WORKFLOW.md)) es el único punto del
 proyecto que toca un archivo real a propósito, así que es el que más defensas
 lleva:
 
-- **se niega** si el archivo está dentro del repositorio y Git no lo ignora,
-  preguntándole a `git check-ignore` en vez de adivinar;
+- **dónde puede vivir el archivo.** Fuera del repositorio, o en
+  `samples/private/` y sólo mientras Git lo ignore de verdad —se le pregunta a
+  `git check-ignore` en vez de adivinar—. Cualquier otra ruta dentro del
+  repositorio se rechaza, incluidas las ignoradas. Que una carpeta esté
+  ignorada y que sea el lugar de las cartolas son propiedades distintas:
+  `.ai/`, `dist/`, `coverage/` y `node_modules/` están ignoradas y ninguna es
+  un sitio para datos bancarios; `.ai/` en particular es donde se acumulan
+  informes que después se pegan en otras herramientas;
+- **los enlaces no son una puerta lateral.** La ruta se resuelve
+  (`realpath`) antes de juzgarla, así que un symlink de fuera que apunte hacia
+  dentro no se cuela;
+- **se niega antes de leer** si el archivo no existe, es un directorio, está
+  vacío o pesa más de 10 MB —el mismo tope que el asistente de importación—;
+- **ningún mensaje de error de Node llega crudo.** `ENOENT: no such file or
+  directory, open '/home/ana/CartolaRut_12345678_5.csv'` lleva un RUT, un
+  nombre y un directorio personal, y es lo primero que ve alguien que escribe
+  mal la ruta. Se reporta la clase del fallo y nunca la ruta;
 - lee el archivo en memoria durante una llamada y no lo copia a ninguna parte
-  —ni al repositorio, ni a `.ai/`, ni a `/tmp`—;
+  —ni al repositorio, ni a `.ai/`, ni a `/tmp`—. La E/S del comando se inyecta
+  y **no contiene ninguna operación de escritura**: no es una promesa, es que
+  no hay con qué;
 - su salida son conteos, códigos y encabezados de columna. Ni glosas, ni
   montos, ni RUT, ni números de cuenta, ni el nombre del archivo. Los tests de
-  `addon/tests/calibration.test.ts` comprueban las ausencias, no sólo las
-  presencias.
+  `addon/tests/calibration.test.ts` y `addon/tests/calibration-cli.test.ts`
+  comprueban las ausencias, no sólo las presencias.
+
+### Por qué el informe imprime una huella
+
+El informe empieza con doce caracteres del SHA-256 del archivo. Se conserva a
+propósito y la razón es concreta: calibrar un perfil es un ciclo —leer el
+informe, corregir el perfil, volver a leer— y la única forma de saber que dos
+informes salieron de la **misma** exportación es esa huella. Sin ella, dos
+descargas del mismo banco en meses distintos se leen igual.
+
+Lo que no es: no se deriva de ningún dato personal, no se puede invertir, y no
+identifica a nadie que no tenga ya el archivo en la mano. Lo que sí es: un
+identificador estable de *ese* archivo, así que alguien que ya lo tenga puede
+confirmar que es el mismo. Ese es el riesgo aceptado, y se acepta porque el
+informe está pensado justamente para poder pegarse en un issue sin el archivo.
 
 Un informe de calibración no sustituye al fixture sintético. Sigue prohibido
 derivar un fixture de una cartola real cambiándole los nombres: un fixture se

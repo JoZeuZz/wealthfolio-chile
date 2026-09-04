@@ -199,9 +199,9 @@ describe('guarda del archivo privado', () => {
     let asked = false;
     const verdict = guardPrivateSample('/home/usuario/Descargas/cartola.csv', {
       repoRoot,
-      isTracked: () => {
+      isIgnored: () => {
         asked = true;
-        return true;
+        return false;
       },
     });
 
@@ -209,37 +209,64 @@ describe('guarda del archivo privado', () => {
     expect(asked).toBe(false);
   });
 
-  it('un archivo dentro del repositorio que Git ignora se acepta', () => {
+  it('dentro del repositorio, samples/private/ ignorado se acepta', () => {
     const verdict = guardPrivateSample(`${repoRoot}/samples/private/cartola.csv`, {
       repoRoot,
-      isTracked: () => false,
+      isIgnored: () => true,
     });
 
     expect(verdict.allowed).toBe(true);
   });
 
-  it('un archivo dentro del repositorio que Git no ignora se rechaza', () => {
-    const verdict = guardPrivateSample(`${repoRoot}/addon/cartola.csv`, {
+  it('samples/private/ sin ignorar se rechaza, nombrando git add', () => {
+    const verdict = guardPrivateSample(`${repoRoot}/samples/private/cartola.csv`, {
       repoRoot,
-      isTracked: () => true,
+      isIgnored: () => false,
     });
 
     expect(verdict.allowed).toBe(false);
-    if (!verdict.allowed) {
-      expect(verdict.reason).toMatch(/git add/i);
-      expect(verdict.reason).toMatch(/samples\/private/);
-    }
+    if (!verdict.allowed) expect(verdict.reason).toMatch(/git add/i);
+  });
+
+  it('otra carpeta ignorada ya no basta: estar ignorada no es ser el lugar', () => {
+    // `.ai/` está ignorado y es donde se acumulan informes que se pegan en
+    // otras herramientas. La política anterior lo aceptaba.
+    const verdict = guardPrivateSample(`${repoRoot}/.ai/cartola.csv`, {
+      repoRoot,
+      isIgnored: () => true,
+    });
+
+    expect(verdict.allowed).toBe(false);
+    if (!verdict.allowed) expect(verdict.reason).toMatch(/samples\/private/);
+  });
+
+  it('un archivo dentro del repositorio y fuera de samples/private/ se rechaza', () => {
+    const verdict = guardPrivateSample(`${repoRoot}/addon/cartola.csv`, {
+      repoRoot,
+      isIgnored: () => false,
+    });
+
+    expect(verdict.allowed).toBe(false);
   });
 
   it('el rechazo nombra la ruta relativa, no la absoluta del usuario', () => {
     const verdict = guardPrivateSample(`${repoRoot}/addon/cartola.csv`, {
       repoRoot,
-      isTracked: () => true,
+      isIgnored: () => false,
     });
 
     if (!verdict.allowed) {
       expect(verdict.reason).toContain('addon/cartola.csv');
       expect(verdict.reason).not.toContain('/home/usuario');
     }
+  });
+
+  it('una carpeta que empieza igual que la raíz no está dentro de ella', () => {
+    const verdict = guardPrivateSample('/home/usuario/wealthfolio-chile-backup/cartola.csv', {
+      repoRoot,
+      isIgnored: () => false,
+    });
+
+    expect(verdict.allowed).toBe(true);
   });
 });

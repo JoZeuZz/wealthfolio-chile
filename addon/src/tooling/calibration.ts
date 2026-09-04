@@ -182,7 +182,7 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
   const parser = chosenId ? getParser(chosenId) : undefined;
   if (!parser) {
     throw new Error(
-      'Ningún perfil reconoció el archivo. Ejecuta de nuevo indicando un perfil para ver por qué.',
+      'Ningún perfil reconoció el archivo. Ejecútalo de nuevo con --parser <id> para ver por qué falla ese perfil en concreto.',
     );
   }
 
