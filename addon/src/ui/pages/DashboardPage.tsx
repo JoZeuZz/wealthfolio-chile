@@ -155,6 +155,12 @@ export function DashboardPage() {
           </Button>
           <Button
             variant="outline"
+            onClick={() => ctx.api.navigation.navigate('/addons/wealthfolio-chile/configuracion')}
+          >
+            Configuración
+          </Button>
+          <Button
+            variant="outline"
             onClick={() => ctx.api.navigation.navigate('/addons/wealthfolio-chile/conciliacion')}
           >
             Conciliación

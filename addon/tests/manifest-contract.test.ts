@@ -24,6 +24,7 @@ const manifest = JSON.parse(readFileSync(addon('manifest.json'), 'utf8')) as {
   sdkVersion: string;
   minWealthfolioVersion: string;
   hostDependencies: Record<string, string>;
+  contributes: { routes: Array<{ id: string; path?: string }> };
 };
 const pkg = JSON.parse(readFileSync(addon('package.json'), 'utf8')) as {
   version: string;
@@ -98,5 +99,36 @@ describe('vite.config.ts', () => {
     for (const target of ['chrome107', 'edge107', 'firefox104', 'safari16']) {
       expect(viteConfig).toContain(target);
     }
+  });
+});
+
+/**
+ * Las rutas declaradas y las rutas registradas.
+ *
+ * `ctx.router.add({ id })` tiene que nombrar una entrada de
+ * `contributes.routes`, o el host pinta una página en blanco que dice que la
+ * ruta no está disponible. Nada lo comprobaba: el desajuste sólo aparecía
+ * navegando a mano, y sólo si a alguien se le ocurría navegar a esa ruta.
+ */
+describe('rutas declaradas y registradas', () => {
+  const source = readFileSync(addon('src/addon.tsx'), 'utf8');
+  const registered = [...source.matchAll(/id:\s*'([\w-]+)',\s*\n\s*path:/g)].map(
+    (match) => match[1] as string,
+  );
+
+  it('cada ruta registrada está declarada en el manifiesto', () => {
+    const declared = new Set(manifest.contributes.routes.map((route) => route.id));
+    expect(registered.length).toBeGreaterThan(0);
+    for (const id of registered) expect(declared).toContain(id);
+  });
+
+  it('y cada ruta declarada tiene quien la renderice', () => {
+    for (const route of manifest.contributes.routes) expect(registered).toContain(route.id);
+  });
+
+  it('la ruta de un enlace del sidebar existe', () => {
+    const declared = new Set(manifest.contributes.routes.map((route) => route.id));
+    const links = (manifest.contributes as { links?: { sidebar?: Array<{ route: string }> } }).links;
+    for (const link of links?.sidebar ?? []) expect(declared).toContain(link.route);
   });
 });

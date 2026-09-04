@@ -107,10 +107,19 @@ export interface FakeHostOptions {
    * Observed on a real container on 2026-08-07; `1` reproduces it.
    */
   dateFilterShiftDays?: number;
+  /**
+   * Keys already in the store when the page mounts.
+   *
+   * A page reads its settings in an effect, so writing them after `render`
+   * tests the reload path rather than the load path — which is how a page that
+   * ignores stored values passes.
+   */
+  storage?: Record<string, string>;
 }
 
 export function fakeHost(options: FakeHostOptions = {}): FakeHost {
   const store = memoryStore();
+  for (const [key, value] of Object.entries(options.storage ?? {})) store.data.set(key, value);
   const shift = options.dateFilterShiftDays ?? 0;
 
   const host: FakeHost = {

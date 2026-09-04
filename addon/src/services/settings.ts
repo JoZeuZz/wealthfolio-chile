@@ -1,6 +1,7 @@
 import { defaultRules } from '../core/rules/builtin';
 import type { Rule } from '../core/rules/engine';
-import { readJson, StorageKeys, type KeyValueStore } from './storage';
+import { loadUserRules } from './rules';
+import { readJson, writeJson, StorageKeys, type KeyValueStore } from './storage';
 
 /**
  * Addon settings and the user's rule set.
@@ -62,14 +63,38 @@ export async function loadSettings(store: KeyValueStore): Promise<ChileSettings>
 }
 
 /**
- * User-authored rules only; built-ins are merged at read time.
+ * Bounds on the reconciliation window.
  *
- * Read-only for now. There is no rule editor, so nothing writes this key, and a
- * writer with no caller is one more thing to keep true. It comes back with the
- * screen that needs it.
+ * A window of zero cannot match a transfer that settles the next day, which is
+ * most of them; a window of a month matches everything against everything and
+ * turns the reconciliation screen into noise the user has to disprove.
  */
-export async function loadUserRules(store: KeyValueStore): Promise<Rule[]> {
-  return readJson<Rule[]>(store, StorageKeys.rules, []);
+export const TRANSFER_WINDOW_MIN = 1;
+export const TRANSFER_WINDOW_MAX = 30;
+
+/**
+ * Write the settings, keeping only fields this version knows.
+ *
+ * Rebuilt field by field on the way out for the same reason `loadSettings`
+ * rebuilds them on the way in: a preference removed in a later version must
+ * not be carried forward by whoever writes next.
+ */
+export async function saveSettings(
+  store: KeyValueStore,
+  settings: ChileSettings,
+): Promise<void> {
+  await writeJson(store, StorageKeys.settings, {
+    verboseLogging: settings.verboseLogging === true,
+    transferWindowDays: clampWindow(settings.transferWindowDays),
+    disabledBuiltinRules: [...new Set(settings.disabledBuiltinRules)].filter(
+      (id): id is string => typeof id === 'string',
+    ),
+  } satisfies ChileSettings);
+}
+
+export function clampWindow(days: number): number {
+  if (!Number.isFinite(days)) return DEFAULT_SETTINGS.transferWindowDays;
+  return Math.min(TRANSFER_WINDOW_MAX, Math.max(TRANSFER_WINDOW_MIN, Math.round(days)));
 }
 
 /**

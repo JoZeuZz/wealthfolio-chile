@@ -15,7 +15,8 @@
       { "id": "wealthfolio-chile" },
       { "id": "wealthfolio-chile-import", "path": "importar" },
       { "id": "wealthfolio-chile-history", "path": "importaciones" },
-      { "id": "wealthfolio-chile-reconciliacion", "path": "conciliacion" }
+      { "id": "wealthfolio-chile-reconciliacion", "path": "conciliacion" },
+      { "id": "wealthfolio-chile-configuracion", "path": "configuracion" }
     ],
     "links": {
       "sidebar": [
