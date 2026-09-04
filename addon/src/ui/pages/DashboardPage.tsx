@@ -168,7 +168,11 @@ export function DashboardPage() {
         </Alert>
       ) : null}
 
-      {loading ? <p className="text-muted-foreground text-sm">Cargando…</p> : null}
+      {loading ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          Cargando…
+        </p>
+      ) : null}
 
       {!loading && data && data.transactions.length === 0 ? (
         <Card>

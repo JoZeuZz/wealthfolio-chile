@@ -71,6 +71,32 @@ const ACCOUNT_PATTERN = new RegExp(
 );
 const MIN_ACCOUNT_DIGITS = 7;
 
+/**
+ * Calendar dates, which the account rule would otherwise eat.
+ *
+ * A date has separators and eight digits, so `2026-09-04T10:30:00Z` came out as
+ * `[NUM]T10:30:00Z` and `Cartola 01-08-2026 al 31-08-2026` as
+ * `Cartola [NUM] al [NUM]`. Over-redacting a million-peso amount is deliberate
+ * and documented above: the two shapes are genuinely indistinguishable and
+ * losing an amount in a log costs nothing. A date is not that case. It
+ * identifies nobody, and it is exactly what makes a log line worth reading and
+ * a history row recognisable — which `sanitizeFileName` says in its own comment
+ * that it is trying to keep.
+ *
+ * Deliberately narrow: only a full four-digit year in one of the two orders
+ * Chilean exports use. `00-123-45678` does not match, and neither does a
+ * six-digit `12-34-56`.
+ */
+const DATE_SHAPES = [
+  /^\d{4}-\d{2}-\d{2}$/,
+  /^\d{1,2}[-/.]\d{1,2}[-/.]\d{4}$/,
+];
+
+function looksLikeDate(text: string): boolean {
+  const trimmed = text.trim();
+  return DATE_SHAPES.some((shape) => shape.test(trimmed));
+}
+
 /** Anything shaped like a bearer token or key. */
 const TOKEN_PATTERN = /\b(?:sk|pk|tok|key|bearer)[_-][A-Za-z0-9_-]{8,}\b/gi;
 
@@ -135,7 +161,9 @@ export function redactSensitive(input: string): string {
     .replace(TOKEN_PATTERN, '[TOKEN]')
     .replace(EMAIL_PATTERN, '[EMAIL]')
     .replace(ACCOUNT_PATTERN, (match) =>
-      match.replace(/\D/g, '').length >= MIN_ACCOUNT_DIGITS ? '[NUM]' : match,
+      !looksLikeDate(match) && match.replace(/\D/g, '').length >= MIN_ACCOUNT_DIGITS
+        ? '[NUM]'
+        : match,
     );
 }
 
@@ -162,7 +190,9 @@ export function sanitizeFileName(name: string, maxLength = 60): string {
     // `001-234-567-890` is caught here too. `\d{4,}` alone saw only contiguous
     // runs, which is not how a bank writes an account number in a file name.
     .replace(ACCOUNT_PATTERN, (match) =>
-      match.replace(/\D/g, '').length >= MIN_ACCOUNT_DIGITS ? '…' : match,
+      !looksLikeDate(match) && match.replace(/\D/g, '').length >= MIN_ACCOUNT_DIGITS
+        ? '…'
+        : match,
     )
     .replace(/\d{7,}/g, '…')
     .replace(/…(?:[\s._-]*…)+/g, '…')

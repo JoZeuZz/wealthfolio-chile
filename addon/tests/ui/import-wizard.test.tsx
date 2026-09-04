@@ -373,3 +373,53 @@ describe('una importación que falla', () => {
     expect(harness.host.toasts.some((toast) => toast.level === 'success')).toBe(false);
   });
 });
+
+/**
+ * Lo que oye quien no ve la tabla.
+ *
+ * `grep -rn "aria-" addon/src/ui/` no devolvía nada, y la vista previa es una
+ * tabla de casillas sin nombre: la columna que las contiene tiene un `<th>`
+ * vacío, así que lo único que las distinguía era la fila en la que estaban.
+ * Cuatrocientos movimientos, cuatrocientas casillas idénticas.
+ *
+ * La fila de upstream lo hace bien (`aria-label={rowAriaLabel}` en su propia
+ * casilla), así que el listón está puesto.
+ */
+describe('la vista previa se puede usar sin ver la tabla', () => {
+  it('cada casilla dice qué movimiento marca', async () => {
+    const harness = await openWizardWith(CARTOLA_BUENA);
+    await goToPreview(harness);
+
+    expect(
+      screen.getByRole('checkbox', { name: /COMPRA SUPERMERCADO/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /PAGO SERVICIO LUZ/ })).toBeInTheDocument();
+  });
+
+  it('el nombre incluye la fecha y el monto, que es lo que identifica la fila', async () => {
+    const harness = await openWizardWith(CARTOLA_BUENA);
+    await goToPreview(harness);
+
+    const box = screen.getByRole('checkbox', { name: /COMPRA SUPERMERCADO/ });
+    expect(box.getAttribute('aria-label')).toMatch(/2026/);
+    expect(box.getAttribute('aria-label')).toMatch(/10000|10\.000/);
+  });
+
+  it('marcar una casilla por su nombre desmarca sólo ese movimiento', async () => {
+    const harness = await openWizardWith(CARTOLA_BUENA);
+    await goToPreview(harness);
+
+    const box = screen.getByRole('checkbox', { name: /COMPRA SUPERMERCADO/ });
+    await harness.user.click(box);
+
+    expect(box).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /PAGO SERVICIO LUZ/ })).toBeChecked();
+  });
+
+  it('el paso actual se anuncia, no sólo se pinta en negrita', async () => {
+    const harness = await openWizardWith(CARTOLA_BUENA);
+    await goToPreview(harness);
+
+    expect(document.querySelector('[aria-current="step"]')?.textContent).toBe('Vista previa');
+  });
+});

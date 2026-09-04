@@ -102,14 +102,24 @@ export function ReconciliationPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setMonth(addMonthsToKey(month, -1))}>
-            ←
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Ver los meses anteriores"
+            onClick={() => setMonth(addMonthsToKey(month, -1))}
+          >
+            <span aria-hidden>←</span>
           </Button>
           <span className="min-w-40 text-center text-sm font-medium">
             {WINDOW_MONTHS} meses hasta {month}
           </span>
-          <Button variant="outline" size="sm" onClick={() => setMonth(addMonthsToKey(month, 1))}>
-            →
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Ver los meses siguientes"
+            onClick={() => setMonth(addMonthsToKey(month, 1))}
+          >
+            <span aria-hidden>→</span>
           </Button>
         </div>
       </header>
@@ -145,7 +155,11 @@ export function ReconciliationPage() {
         </Alert>
       ) : null}
 
-      {state.loading ? <p className="text-muted-foreground text-sm">Revisando movimientos…</p> : null}
+      {state.loading ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          Revisando movimientos…
+        </p>
+      ) : null}
 
       {result && !state.loading ? (
         <>

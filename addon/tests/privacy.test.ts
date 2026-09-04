@@ -443,3 +443,42 @@ describe('los avisos por columna tampoco citan la celda', () => {
     expect(messages).not.toContain('001234567890');
   });
 });
+
+/**
+ * Una fecha no identifica a nadie.
+ *
+ * `ACCOUNT_PATTERN` cuenta dígitos con separadores, y una fecha los tiene:
+ * `2026-09-04T10:30:00Z` salía como `[NUM]T10:30:00Z` y
+ * `Cartola 01-08-2026 al 31-08-2026` como `Cartola [NUM] al [NUM]`.
+ *
+ * La sobre-redacción de un monto de más de un millón es deliberada y está
+ * documentada: las dos formas son indistinguibles y perder un monto en un log
+ * no cuesta nada. Una fecha es distinto — no identifica a nadie y es
+ * exactamente lo que hace útil una línea de log o reconocible una fila del
+ * historial, que es lo que `sanitizeFileName` dice estar intentando conservar.
+ */
+describe('las fechas sobreviven a la redacción', () => {
+  it('una marca de tiempo ISO queda intacta', () => {
+    expect(redactSensitive('2026-09-04T10:30:00Z error al leer')).toBe(
+      '2026-09-04T10:30:00Z error al leer',
+    );
+  });
+
+  it('un período en formato chileno queda intacto', () => {
+    expect(redactSensitive('Cartola 01-08-2026 al 31-08-2026')).toBe(
+      'Cartola 01-08-2026 al 31-08-2026',
+    );
+  });
+
+  it('y el nombre de archivo conserva el período que lo hace reconocible', () => {
+    expect(sanitizeFileName('Cartola_01-08-2026_al_31-08-2026.csv')).toContain('01-08-2026');
+  });
+
+  it('pero un número de cuenta al lado de una fecha se sigue redactando', () => {
+    expect(redactSensitive('01-08-2026 cuenta 00-123-45678-90')).toBe('01-08-2026 cuenta [NUM]');
+  });
+
+  it('y un monto de siete cifras se sigue redactando, como está documentado', () => {
+    expect(redactSensitive('ABONO 1.234.567 SUELDO')).toBe('ABONO [NUM] SUELDO');
+  });
+});

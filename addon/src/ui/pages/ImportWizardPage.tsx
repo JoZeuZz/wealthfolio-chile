@@ -17,6 +17,7 @@ import type { AccountMatch, HostAccountFacts } from '../../core/accounts/match';
 import { categoryPath } from '../../core/categories/defaults';
 import { buildDuplicateIndex } from '../../core/dedupe/classify';
 import { formatIsoDate } from '../../core/dates';
+import { toDecimalString } from '../../core/money';
 import { maskAccountNumber } from '../../core/privacy';
 import type { RowStats } from '../../core/model/statement';
 import { setRowSelection, type PreparedImport, type PreviewRow } from '../../core/pipeline';
@@ -477,10 +478,19 @@ function Steps({ current }: { current: Step }) {
           >
             {index + 1}
           </span>
-          <span className={index === activeIndex ? 'font-medium' : 'text-muted-foreground'}>
+          <span
+            className={index === activeIndex ? 'font-medium' : 'text-muted-foreground'}
+            // Weight alone does not say which step this is; nothing but the
+            // pixels distinguished the current one.
+            {...(index === activeIndex ? { 'aria-current': 'step' as const } : {})}
+          >
             {step.label}
           </span>
-          {index < steps.length - 1 ? <span className="text-muted-foreground">→</span> : null}
+          {index < steps.length - 1 ? (
+            <span className="text-muted-foreground" aria-hidden>
+              →
+            </span>
+          ) : null}
         </li>
       ))}
     </ol>
@@ -753,7 +763,9 @@ function PreviewStep({
           <table className="w-full text-sm">
             <thead>
               <tr className="text-muted-foreground border-b text-left">
-                <th className="w-10 p-2" />
+                <th className="w-10 p-2">
+                  <span className="sr-only">Importar</span>
+                </th>
                 <th className="p-2">Fecha</th>
                 <th className="p-2">Descripción</th>
                 <th className="p-2 text-right">Monto</th>
@@ -809,9 +821,11 @@ function PreviewRowView({
       <td className="p-2">
         <Checkbox
           checked={row.willImport}
-          onCheckedChange={(checked) =>
-            onToggle(row.key, checked === true)
-          }
+          // Without a name this is one of 400 unlabelled checkboxes to anyone
+          // not reading the row visually. The date, the amount and the glosa
+          // are what identify the row on screen, so they are what it says.
+          aria-label={`Importar el movimiento del ${formatIsoDate(transaction.date)} por ${toDecimalString(transaction.amount)} ${transaction.amount.currency}: ${transaction.description}`}
+          onCheckedChange={(checked) => onToggle(row.key, checked === true)}
         />
       </td>
       <td className="p-2 whitespace-nowrap tabular-nums">{formatIsoDate(transaction.date)}</td>
