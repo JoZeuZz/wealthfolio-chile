@@ -1,3 +1,4 @@
+import { StatementProduct } from '../model/statement';
 import { Confidence } from '../model/kinds';
 import type { InstallmentInfo } from '../model/transaction';
 import { normalizeDescription } from '../text';
@@ -33,6 +34,7 @@ const BARE = /\b(\d{1,2})\s*\/\s*(\d{1,2})\b/;
 export function detectInstallment(
   description: string,
   column = '',
+  options: { product?: StatementProduct } = {},
 ): InstallmentInfo | undefined {
   const fromColumn = detectFromColumn(column);
   if (fromColumn) return fromColumn;
@@ -50,11 +52,32 @@ export function detectInstallment(
   // reported so the user can confirm it, never treated as established fact.
   const bare = BARE.exec(text);
   if (bare) {
+    // A date-shaped pair is not evidence of a plan. Both branches here used to
+    // return the same value, so the guard was computed and thrown away and
+    // `PARIS 03/06` produced a 3-of-6 plan. `detectInstallment` runs on every
+    // row of every product, not only on cards, so a date inside a
+    // current-account glosa manufactured a commitment that does not exist and
+    // `buildOutlook` counted it in `committedTotal`.
+    //
+    // The explicit forms are unaffected: `CUOTA 3 DE 6` and a dedicated
+    // installment column both say what they are.
+    // A date-shaped pair is only a plan where plans live. `1/3` on a CMR
+    // statement is the first of three cuotas; the same text in a
+    // current-account glosa is the first of March.
+    //
+    // The guard was computed and thrown away — both branches returned the same
+    // value — so `PARIS 03/06` produced a 3-of-6 plan on any product, and
+    // `detectInstallment` runs on every row of every statement.
+    // `buildOutlook` then counted a commitment that does not exist in
+    // `committedTotal`.
+    //
+    // A pair that cannot be read as a date (`3/24`) needs no product to be
+    // unambiguous, so it is accepted everywhere.
+    if (looksLikeDate(bare[1] as string, bare[2] as string) && !cardLike(options.product)) {
+      return undefined;
+    }
     const info = build(bare[1], bare[2], bare[0], Confidence.suggested);
-    if (info && !looksLikeDate(bare[1] as string, bare[2] as string)) return info;
-    // A date-shaped match with a plausible plan size is still worth surfacing,
-    // but only as the weakest kind of hint.
-    if (info) return { ...info, confidence: Confidence.suggested };
+    if (info) return info;
   }
 
   return undefined;
@@ -92,6 +115,11 @@ function build(
  *
  * `03/06` reads as 3 June; `03/24` cannot, because there is no 24th month.
  */
+/** Products on which an unlabelled `n/m` is more likely a cuota than a date. */
+function cardLike(product?: StatementProduct): boolean {
+  return product === StatementProduct.credit_card || product === StatementProduct.credit_line;
+}
+
 function looksLikeDate(a: string, b: string): boolean {
   const day = Number(a);
   const month = Number(b);

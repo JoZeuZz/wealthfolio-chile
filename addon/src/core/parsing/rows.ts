@@ -221,7 +221,9 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
   const balanceAfter = readOptionalMoney(cell(row, map, ColumnRole.balance), profile, currency);
   const direction = sign(amount) < 0 ? Direction.out : Direction.in;
 
-  const installment = detectInstallment(description, cell(row, map, ColumnRole.installment));
+  const installment = detectInstallment(description, cell(row, map, ColumnRole.installment), {
+    product: profile.product,
+  });
   if (installment?.confidence === Confidence.suggested) {
     warnings.push({
       code: 'ambiguous-installment',

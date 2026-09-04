@@ -325,9 +325,21 @@ function splitDecimal(text: string, format: NumberFormatHint): DecimalSplit {
   const occurrences = dots > 0 ? dots : commas;
   const tail = text.slice(text.lastIndexOf(mark) + 1);
 
-  // Repeated separators can only be thousands grouping: 1.234.567
+  // Repeated separators can only be thousands grouping: 1.234.567. But that is
+  // a claim about the *shape*, and it was never checked — `12.345.6` came back
+  // as `123456`, ten times the number, with `ambiguous: false` and no throw. A
+  // truncated or malformed cell became a plausible figure instead of a failed
+  // row, which is the one thing the import gate needs it not to do.
   if (occurrences > 1) {
-    return { integerPart: text.split(mark).join(''), fractionPart: '', ambiguous: false };
+    const groups = text.split(mark);
+    const wellFormed =
+      (groups[0] ?? '').length >= 1 &&
+      (groups[0] ?? '').length <= 3 &&
+      groups.slice(1).every((group) => group.length === 3);
+    if (!wellFormed) {
+      throw new MoneyError(`amount has malformed thousands grouping: ${text}`);
+    }
+    return { integerPart: groups.join(''), fractionPart: '', ambiguous: false };
   }
 
   // A single separator with a group of exactly three digits after it is the

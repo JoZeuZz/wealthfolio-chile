@@ -192,3 +192,32 @@ describe('marcador explícito de cargo/abono', () => {
     expect(() => parseAmount('80.000 CR', { currency: 'CLP' })).toThrow(MoneyError);
   });
 });
+
+/**
+ * Un separador repetido no prueba que sean miles.
+ *
+ * `occurrences > 1` se leía como «esto sólo puede ser agrupación de miles», sin
+ * comprobar que los grupos midieran tres dígitos. `12.345.6` salía como
+ * `123456`: diez veces el número, sin `ambiguous` y sin excepción. Una celda
+ * truncada o mal formada se convertía en una cifra plausible en vez de en una
+ * fila fallida — que es justo lo que el gate de importación necesita que pase.
+ */
+describe('agrupación de miles mal formada', () => {
+  it('rechaza un grupo final de un dígito', () => {
+    expect(() => parseAmount('12.345.6', { currency: 'CLP' })).toThrow(MoneyError);
+  });
+
+  it('rechaza un grupo final de dos dígitos', () => {
+    expect(() => parseAmount('1.234.56', { currency: 'CLP' })).toThrow(MoneyError);
+  });
+
+  it('rechaza un grupo intermedio que no mide tres', () => {
+    expect(() => parseAmount('1.23.456', { currency: 'CLP' })).toThrow(MoneyError);
+  });
+
+  it('sigue aceptando la agrupación de verdad', () => {
+    expect(parseAmount('1.234.567', { currency: 'CLP' }).money.minor).toBe(1234567);
+    expect(parseAmount('12.345.678', { currency: 'CLP' }).money.minor).toBe(12345678);
+    expect(parseAmount('123.456.789', { currency: 'CLP' }).money.minor).toBe(123456789);
+  });
+});

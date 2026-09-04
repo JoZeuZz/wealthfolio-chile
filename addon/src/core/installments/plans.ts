@@ -51,8 +51,6 @@ export function buildInstallmentPlans(
       merchant,
       institution: transaction.sourceInstitution,
       total: installment.total,
-      amountMinor: abs(transaction.amount).minor,
-      scale: transaction.amount.scale,
       currency: transaction.amount.currency,
     });
 
@@ -63,8 +61,18 @@ export function buildInstallmentPlans(
 
   const plans: InstallmentPlan[] = [];
   for (const [key, charges] of groups) {
-    const plan = buildPlan(key, charges);
-    if (plan) plans.push(plan);
+    // The exact amount used to be part of the key, which split one plan in two
+    // whenever the last cuota was uneven — 16.667 / 16.667 / 16.665, routine in
+    // Chile because cuotas rarely divide evenly. Neither half had gaps, so
+    // nothing flagged it, and the first went on claiming a cuota still owed on
+    // a plan that was fully paid.
+    //
+    // What actually separates two plans at one merchant with the same length is
+    // a repeated cuota number: one plan numbers each charge once.
+    for (const [n, run] of splitOnRepeatedCounter(charges).entries()) {
+      const plan = buildPlan(n === 0 ? key : `${key}-${n}`, run);
+      if (plan) plans.push(plan);
+    }
   }
 
   return plans.sort((a, b) => (a.startDate < b.startDate ? 1 : a.startDate > b.startDate ? -1 : a.id < b.id ? -1 : 1));
@@ -74,8 +82,6 @@ interface GroupKeyInput {
   merchant: string;
   institution: string;
   total: number;
-  amountMinor: number;
-  scale: number;
   currency: string;
 }
 
@@ -85,10 +91,38 @@ function groupKey(input: GroupKeyInput): string {
     input.institution,
     input.merchant.toUpperCase(),
     String(input.total),
-    String(input.amountMinor),
-    String(input.scale),
     input.currency,
   ]);
+}
+
+/**
+ * Split charges that share a merchant and a plan length into separate plans.
+ *
+ * A plan numbers each of its charges once, so a cuota number appearing twice
+ * means a second plan. Charges are walked in date order and a repeat opens a
+ * new run — which keeps two real plans apart without letting a few pesos of
+ * rounding pull one plan apart.
+ */
+function splitOnRepeatedCounter(charges: NormalizedTransaction[]): NormalizedTransaction[][] {
+  const ordered = [...charges].sort((a, b) =>
+    a.date < b.date ? -1 : a.date > b.date ? 1 : a.fingerprint < b.fingerprint ? -1 : 1,
+  );
+  const runs: NormalizedTransaction[][] = [];
+  let current: NormalizedTransaction[] = [];
+  let seen = new Set<number>();
+
+  for (const charge of ordered) {
+    const counter = charge.installment?.current ?? 0;
+    if (seen.has(counter)) {
+      runs.push(current);
+      current = [];
+      seen = new Set<number>();
+    }
+    seen.add(counter);
+    current.push(charge);
+  }
+  if (current.length > 0) runs.push(current);
+  return runs;
 }
 
 function buildPlan(id: string, charges: NormalizedTransaction[]): InstallmentPlan | undefined {

@@ -7,8 +7,9 @@ import { Confidence, Direction, TransactionKind } from '../src/core/model/kinds'
 import type { NormalizedTransaction } from '../src/core/model/transaction';
 import { prepareImport } from '../src/core/pipeline';
 import { defaultRules } from '../src/core/rules/builtin';
+import { StatementProduct } from '../src/core/model/statement';
 import { normalizeDescription } from '../src/core/text';
-import { loadFixture } from './fixtures';
+import { loadFixture, makeTransaction } from './fixtures';
 
 describe('detectInstallment', () => {
   it('reads an explicit CUOTA n DE m', () => {
@@ -36,7 +37,11 @@ describe('detectInstallment', () => {
   });
 
   it('treats a bare n/m as a suggestion, never a fact', () => {
-    expect(detectInstallment('RIPLEY MALL 1/3')).toMatchObject({
+    // `1/3` es también el 1 de marzo, así que sólo cuenta como cuota donde
+    // existen las cuotas. Ver «una fecha suelta no es un plan de cuotas».
+    expect(
+      detectInstallment('RIPLEY MALL 1/3', '', { product: StatementProduct.credit_card }),
+    ).toMatchObject({
       current: 1,
       total: 3,
       confidence: Confidence.suggested,
@@ -44,7 +49,9 @@ describe('detectInstallment', () => {
   });
 
   it('does not promote a date-shaped 03/06 to a confirmed plan', () => {
-    const result = detectInstallment('COMPRA ALGO 03/06');
+    const result = detectInstallment('COMPRA ALGO 03/06', '', {
+      product: StatementProduct.credit_card,
+    });
     expect(result?.confidence).toBe(Confidence.suggested);
   });
 
@@ -213,5 +220,94 @@ describe('installments from a real CMR-shaped statement', () => {
     expect(merchants).toContain('Falabella');
     expect(merchants).toContain('Sodimac');
     expect(merchants).toContain('Ripley');
+  });
+});
+
+/**
+ * Dos guardas de cuotas que no guardaban nada.
+ *
+ * `looksLikeDate` se calculaba y se descartaba: las dos ramas devolvían el
+ * mismo valor, así que `PARIS 03/06` producía un plan de 3 de 6. Y
+ * `detectInstallment` corre sobre **cada** fila de cada producto, no sólo sobre
+ * tarjetas, así que una fecha dentro de una glosa de cuenta corriente fabricaba
+ * un compromiso que no existe e inflaba `committedTotal`.
+ *
+ * Y la clave de agrupación hasheaba el monto exacto, así que un plan con la
+ * última cuota desigual —16.667 / 16.667 / 16.665, lo normal en Chile, porque
+ * las cuotas rara vez dividen exacto— se partía en dos planes. Ninguno tenía
+ * huecos, así que nada lo señalaba, y el primero seguía diciendo que quedaba
+ * una cuota por pagar de un plan ya terminado.
+ */
+describe('una fecha suelta no es un plan de cuotas', () => {
+  it('un 03/06 en una cuenta corriente no produce plan', () => {
+    expect(
+      detectInstallment('PARIS 03/06', '', { product: StatementProduct.checking }),
+    ).toBeUndefined();
+  });
+
+  it('sin decir el producto tampoco, porque el default es no adivinar', () => {
+    expect(detectInstallment('PARIS 03/06')).toBeUndefined();
+  });
+
+  it('pero en una tarjeta 03/06 sí es una cuota', () => {
+    expect(
+      detectInstallment('PARIS 03/06', '', { product: StatementProduct.credit_card }),
+    ).toMatchObject({ current: 3, total: 6, confidence: Confidence.suggested });
+  });
+
+  it('y 3/24 vale en cualquier producto, porque 24 no es un mes', () => {
+    expect(
+      detectInstallment('FALABELLA 3/24', '', { product: StatementProduct.checking }),
+    ).toMatchObject({ current: 3, total: 24 });
+  });
+
+  it('y la palabra cuota lo vuelve explícito de todos modos', () => {
+    expect(detectInstallment('PARIS CUOTA 3 DE 6')).toMatchObject({
+      current: 3,
+      total: 6,
+      confidence: Confidence.confirmed,
+    });
+  });
+});
+
+describe('una última cuota desigual sigue siendo el mismo plan', () => {
+  function charge(current: number, minor: number, date: string) {
+    return makeTransaction({
+      amount: -minor,
+      date,
+      description: `PARIS CUOTA ${current} DE 3`,
+      merchant: 'PARIS',
+      installment: {
+        current,
+        total: 3,
+        confidence: Confidence.confirmed,
+        matchedText: `CUOTA ${current} DE 3`,
+      },
+    });
+  }
+
+  it('no se parte en dos planes por unos pesos de diferencia', () => {
+    const plans = buildInstallmentPlans([
+      charge(1, 16667, '2026-01-05'),
+      charge(2, 16667, '2026-02-05'),
+      charge(3, 16665, '2026-03-05'),
+    ]);
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      totalInstallments: 3,
+      currentInstallment: 3,
+      remainingInstallments: 0,
+    });
+  });
+
+  it('dos planes de verdad en el mismo comercio siguen separados', () => {
+    const plans = buildInstallmentPlans([
+      charge(1, 16667, '2026-01-05'),
+      charge(2, 16667, '2026-02-05'),
+      charge(1, 40000, '2026-02-20'),
+    ]);
+
+    expect(plans).toHaveLength(2);
   });
 });
