@@ -286,3 +286,86 @@ describe('el saldo se recorre en el orden del libro, no en el del archivo', () =
     expect(prepared.validation.ok).toBe(true);
   });
 });
+
+/**
+ * Una fila con datos no puede desaparecer sin decirlo.
+ *
+ * `skipped` existe para las filas que no son movimientos: un pie `TOTAL`, una
+ * línea de página, una fila vacía. Tres caminos distintos mandaban a ese mismo
+ * cubo filas que **sí** llevaban dinero:
+ *
+ * - `/^\s*$/` en `COMMON_IGNORE_PATTERNS`. `isBlankRow` ya descarta las filas
+ *   realmente vacías, así que ese patrón sólo llegaba a dispararse sobre filas
+ *   con datos y la celda de glosa en blanco — y las clasificaba como pie.
+ * - una fecha vacía con un monto presente.
+ * - un monto vacío con una fecha presente.
+ *
+ * En los tres casos `validation.ok` seguía en `true` y la vista previa decía
+ * «N omitidas», indistinguible del caso esperado. Un cargo de $250.000
+ * desaparecía sin error, sin advertencia y sin bloqueo: exactamente el fallo
+ * que todo el gate de importación existe para evitar.
+ */
+describe('ninguna fila con dinero se omite en silencio', () => {
+  function parse(rows: string[]) {
+    return prepareImport({
+      file: fromText('cartola.csv', ['Fecha;Descripcion;Cargo;Abono', ...rows].join('\n')),
+      accountId: 'acc-1',
+      parserId: 'banco-estado.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+  }
+
+  it('una glosa en blanco no convierte un cargo en un pie de tabla', () => {
+    const prepared = parse([
+      '01/02/2026;COMPRA LIDER;10.000;',
+      '15/02/2026;;250.000;',
+      '20/02/2026;SUELDO;;500.000',
+    ]);
+
+    expect(prepared.statement.rowStats).toMatchObject({ dataRows: 3, skipped: 0 });
+    expect(prepared.rows).toHaveLength(3);
+    expect(prepared.rows[1]?.transaction.amount.minor).toBe(-250000);
+  });
+
+  it('y la fila queda marcada, porque una glosa vacía sí es raro', () => {
+    const prepared = parse(['01/02/2026;;250.000;']);
+    expect(prepared.rows[0]?.transaction.warnings.map((w) => w.code)).toContain(
+      'missing-description',
+    );
+  });
+
+  it('un monto sin fecha falla la fila en vez de omitirla', () => {
+    const prepared = parse(['01/02/2026;COMPRA LIDER;10.000;', ';COMPRA SIN FECHA;99.000;']);
+
+    expect(prepared.statement.rowStats).toMatchObject({ failed: 1, skipped: 0 });
+    expect(prepared.validation.ok).toBe(false);
+  });
+
+  it('una fila sin monto en ninguna columna sí se omite: no lleva dinero', () => {
+    // El límite es el dinero, no la forma. Una fila con fecha y glosa pero sin
+    // monto es una línea de continuación o un separador; omitirla no pierde
+    // nada. Lo que no puede omitirse es una fila que sí trae plata.
+    const prepared = parse(['01/02/2026;COMPRA LIDER;10.000;', '02/02/2026;GLOSA SIN MONTO;;']);
+
+    expect(prepared.statement.rowStats).toMatchObject({ mapped: 1, skipped: 1, failed: 0 });
+    expect(prepared.validation.ok).toBe(true);
+  });
+
+  it('un cargo con contenido ilegible sí falla', () => {
+    const prepared = parse(['01/02/2026;COMPRA LIDER;10.000;', '02/02/2026;COMPRA RARA;no-es-un-monto;']);
+
+    expect(prepared.statement.rowStats).toMatchObject({ failed: 1, skipped: 0 });
+    expect(prepared.validation.ok).toBe(false);
+  });
+
+  it('un pie de tabla de verdad se sigue omitiendo sin ruido', () => {
+    const prepared = parse([
+      '01/02/2026;COMPRA LIDER;10.000;',
+      ';TOTAL DEL PERIODO;10.000;',
+    ]);
+
+    expect(prepared.statement.rowStats).toMatchObject({ mapped: 1, skipped: 1, failed: 0 });
+    expect(prepared.validation.ok).toBe(true);
+  });
+});

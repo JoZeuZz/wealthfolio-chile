@@ -122,6 +122,7 @@ export type TransactionWarningCode =
   | 'ambiguous-installment'
   | 'ambiguous-installment-amount'
   | 'missing-balance'
+  | 'missing-description'
   | 'unparsed-column'
   | 'zero-amount'
   | 'future-date'

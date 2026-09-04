@@ -57,10 +57,7 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
   const votingRows = sheet.rows
     .slice(firstDataRow)
     .filter((row) => !isBlankRow(row as string[]))
-    .filter((row) => {
-      const description = cell(row as string[], map, ColumnRole.description);
-      return !ignorePatterns.some((pattern) => pattern.test(description.trim()));
-    });
+    .filter((row) => !isIgnoredRow(row as string[], map, ignorePatterns));
 
   const dateOrder = resolveDateOrder(
     votingRows.flatMap((row) => [
@@ -93,8 +90,7 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
       continue;
     }
 
-    const rawDescription = cell(row, map, ColumnRole.description);
-    if (ignorePatterns.some((pattern) => pattern.test(rawDescription.trim()))) {
+    if (isIgnoredRow(row, map, ignorePatterns)) {
       skipped += 1;
       continue;
     }
@@ -157,7 +153,19 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
   const warnings: TransactionWarning[] = [];
 
   const rawDate = cell(row, map, ColumnRole.date);
-  if (rawDate === '') return null;
+
+  // No money in any column that could hold it: the row is a separator, a
+  // continuation line or a zero-value artefact. Not a movement, and skipping it
+  // is the honest answer — the same three spellings `parseOptional` calls
+  // "nothing here".
+  if (!hasAmountContent(row, map)) return null;
+
+  // From here on the row *does* carry money, so it can no longer be "omitted".
+  // Every remaining failure is a movement we could not read, and calling that
+  // an omission is how a charge leaves the ledger without a trace.
+  if (rawDate === '') {
+    throw new Error('la fila tiene monto pero no fecha');
+  }
 
   // No per-row ambiguity warning: the order was settled for the file, and a
   // flag that fires on every row with a day of 12 or less stops being read.
@@ -180,6 +188,15 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
   }
 
   const description = cell(row, map, ColumnRole.description);
+  if (description.trim() === '') {
+    // Not fatal — the date and the amount are what make it a movement — but
+    // rare enough in a real export that it usually means the columns are out
+    // of step by one.
+    warnings.push({
+      code: 'missing-description',
+      message: 'La fila no trae glosa. Comprueba que las columnas estén alineadas.',
+    });
+  }
   const amountResult = readAmount({
     row,
     map,
@@ -190,7 +207,9 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
       ? { directionFlagHeader: input.directionFlagHeader }
       : {}),
   });
-  if (amountResult === null) return null;
+  if (amountResult === null) {
+    throw new Error('la fila tiene fecha pero ninguna columna de monto con contenido');
+  }
   const amount = amountResult;
 
   if (isZero(amount)) {
@@ -354,6 +373,51 @@ function describeOrder(order: StatementProfile['dateOrder']): string {
     default:
       return 'DD/MM/AAAA';
   }
+}
+
+/**
+ * Whether a row is decoration rather than a movement.
+ *
+ * The label is normally in the description column, but not always: a footer
+ * printed as `SALDO FINAL;;;;1.473.430;` puts it in the date column and leaves
+ * the description empty. That case used to be caught by a `/^\s*$/` entry in
+ * the shared ignore list — which also swallowed every *real* row whose glosa
+ * cell happened to be blank, silently, as though it were a footer.
+ *
+ * So the label is looked for where it actually is: the description cell, and
+ * failing that the row's first cell with anything in it. Narrower than joining
+ * the whole row, which would let a glosa containing the word `TOTAL` erase its
+ * own movement.
+ */
+function isIgnoredRow(row: string[], map: ColumnMap, patterns: readonly RegExp[]): boolean {
+  const description = cell(row, map, ColumnRole.description).trim();
+  const label = description !== '' ? description : (row.find((c) => c.trim() !== '') ?? '').trim();
+  if (label === '') return false;
+  return patterns.some((pattern) => pattern.test(label));
+}
+
+/**
+ * Whether any column that can hold money has something in it.
+ *
+ * Used to tell "this row is not a movement" from "this row is a movement we
+ * could not read". The two used to share the `skipped` bucket, and the second
+ * is money leaving the statement without a trace.
+ */
+function hasAmountContent(row: string[], map: ColumnMap): boolean {
+  const AMOUNT_ROLES = [
+    ColumnRole.amount,
+    ColumnRole.debit,
+    ColumnRole.credit,
+    ColumnRole.installmentAmount,
+    ColumnRole.purchaseAmount,
+  ] as const;
+  // The same three spellings `parseOptional` treats as "nothing here". A
+  // separator line printing `0` in the cargo column is not a movement we failed
+  // to read; it is a movement that is not there.
+  return AMOUNT_ROLES.some((role) => {
+    const text = cell(row, map, role).trim();
+    return text !== '' && text !== '-' && text !== '0';
+  });
 }
 
 interface ReadAmountInput {

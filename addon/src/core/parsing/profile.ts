@@ -80,5 +80,4 @@ export const COMMON_IGNORE_PATTERNS: RegExp[] = [
   /^RESUMEN\b/i,
   /^MOVIMIENTOS?\s+(DEL|ENTRE)\b/i,
   /^P[AÁ]GINA\s+\d+/i,
-  /^\s*$/,
 ];
