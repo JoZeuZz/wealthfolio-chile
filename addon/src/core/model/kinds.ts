@@ -82,12 +82,23 @@ export const NON_SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
   TransactionKind.unknown,
 ]);
 
-/** Kinds that count as real outflow in cash-flow and category reports. */
+/**
+ * Kinds that count as real outflow in cash-flow and category reports.
+ *
+ * `interest` is here for the charged direction only — the direction gate in
+ * `isSpending` handles that, and `isIncome` keeps interest *earned* as income.
+ * It used to be in none of the three sets, so an outgoing interest charge was
+ * neither spending, nor income, nor deliberately excluded: it appeared in no
+ * total at all. `builtin.intereses` assigns exactly that kind, and on a
+ * Chilean card statement the rotativo and the mora are among the numbers that
+ * matter most. Borrowing costs money, and that money is spent.
+ */
 export const SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
   TransactionKind.expense,
   TransactionKind.credit_card_purchase,
   TransactionKind.fee,
   TransactionKind.tax,
+  TransactionKind.interest,
 ]);
 
 /** Kinds that count as real inflow. */

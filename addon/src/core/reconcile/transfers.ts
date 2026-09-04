@@ -397,9 +397,13 @@ function scoreEvidence(outflow: ScopedTransaction, inflow: ScopedTransaction): E
 
   const outInstitution = institutionWords(outflow.transaction.sourceInstitution);
   const inInstitution = institutionWords(inflow.transaction.sourceInstitution);
+  // Whole words, like every other marker in this file. A raw `includes` let
+  // `banco-estado`'s bare token `ESTADO` match `TRANSFERENCIA A ESTADOS UNIDOS
+  // SPA`, and with the amount and the day agreeing that was enough to confirm
+  // an internal transfer between two unrelated movements — erasing a real
+  // expense and a real deposit in one step.
   const institutionMentioned =
-    inInstitution.some((word) => outText.includes(normalizeDescription(word))) ||
-    outInstitution.some((word) => inText.includes(normalizeDescription(word)));
+    mentionsWord(outText, inInstitution) || mentionsWord(inText, outInstitution);
 
   const sharedReference =
     isMeaningfulReference(outflow.transaction.reference) &&

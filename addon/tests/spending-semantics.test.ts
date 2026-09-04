@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { summarizeMonth, totalsByCategory } from '../src/core/metrics/monthly';
-import { TransactionKind } from '../src/core/model/kinds';
+import {
+  Direction,
+  INCOME_KINDS,
+  isIncome,
+  isSpending,
+  NON_SPENDING_KINDS,
+  SPENDING_KINDS,
+  TRANSACTION_KINDS,
+  TransactionKind,
+} from '../src/core/model/kinds';
 import { makeTransaction } from './fixtures';
 
 /**
@@ -164,5 +173,39 @@ describe('gasto por categoría', () => {
 
     const totals = totalsByCategory([compra(), grande]);
     expect(totals.find((entry) => entry.category === 'compras')?.amount.minor).toBe(-50000);
+  });
+});
+
+/**
+ * Ningún tipo puede quedarse fuera de las tres listas.
+ *
+ * `interest` no estaba en ninguna: ni gasto, ni ingreso, ni excluido a
+ * propósito. `isSpending(interest, out)` e `isIncome(interest, out)` daban
+ * ambos `false`, así que un cargo por intereses no aparecía en ningún total —
+ * no en el gasto, no como transferencia, no como algo deliberadamente omitido.
+ * Simplemente no estaba.
+ *
+ * `builtin.intereses` asigna ese tipo, y en un estado de cuenta chileno el
+ * interés rotativo y la mora están entre las cifras que más importan. El mismo
+ * silencio se propagaba a `computeTotals`, `totalsByCategory`,
+ * `totalsByMerchant` y `findRecurringCharges`, todos condicionados a
+ * `isSpending`.
+ */
+describe('cobertura de los tipos de movimiento', () => {
+  it('cada tipo está en gasto, en ingreso o excluido a propósito', () => {
+    const uncovered = TRANSACTION_KINDS.filter(
+      (kind) =>
+        !SPENDING_KINDS.has(kind) && !INCOME_KINDS.has(kind) && !NON_SPENDING_KINDS.has(kind),
+    );
+    expect(uncovered).toEqual([]);
+  });
+
+  it('un cargo por intereses es gasto', () => {
+    expect(isSpending(TransactionKind.interest, Direction.out)).toBe(true);
+  });
+
+  it('un interés ganado sigue siendo ingreso, no gasto', () => {
+    expect(isIncome(TransactionKind.interest, Direction.in)).toBe(true);
+    expect(isSpending(TransactionKind.interest, Direction.in)).toBe(false);
   });
 });

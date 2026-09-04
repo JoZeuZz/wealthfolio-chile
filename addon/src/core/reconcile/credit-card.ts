@@ -1,4 +1,5 @@
 import {
+  classifyCardInflow,
   mentionsCardSidePayment,
   mentionsCashSideCardPayment,
 } from '../classify/card-semantics';
@@ -60,8 +61,25 @@ export function matchCardPayments(
     )
     .sort(byDate);
 
+  // A credit whose glosa says it undoes a purchase is not the counterpart of a
+  // bill payment, however close in time it sits. Without this filter the loop
+  // asked only "is it an inflow on a card?", so a `DEVOLUCION COMERCIO` on the
+  // 11th beat the real `PAGO RECIBIDO` on the 14th on gap alone and the pair
+  // came back `confirmed`. `applyCardPaymentMatch` then overwrote the `refund`
+  // that `classifyCardInflow` had got right with `credit_card_payment`: the
+  // refund stopped reducing the month's spending and the actual payment was
+  // left with no counterpart at all.
+  //
+  // `ambiguous` credits stay candidates. Most banks print nothing useful on
+  // that side, and there the cash-side glosa plus an equal amount and a close
+  // date is what identifies the pair.
   const cardCredits = scoped
-    .filter((s) => s.transaction.direction === Direction.in && isCardProduct(s))
+    .filter(
+      (s) =>
+        s.transaction.direction === Direction.in &&
+        isCardProduct(s) &&
+        classifyCardInflow(s.transaction.description) !== 'reversal',
+    )
     .sort(byDate);
 
   interface Pairing {

@@ -353,3 +353,79 @@ describe('abonos de tarjeta sin clasificar', () => {
     expect(matches[0]?.confidence).toBe(Confidence.suggested);
   });
 });
+
+/**
+ * Una devolución no es la contraparte de un pago de tarjeta.
+ *
+ * El bucle de emparejado filtraba los candidatos del lado tarjeta sólo por
+ * `direction === in` y «es un producto de tarjeta»; nunca preguntaba si el
+ * abono se leía como pago. `mentionsCardSidePayment` se consultaba únicamente
+ * en la rama de sobrantes, cuando ya era tarde.
+ *
+ * Con un pago de $50.000 el día 10, una devolución de $50.000 el 11 y el pago
+ * de verdad el 14, la devolución ganaba por cercanía y el par se devolvía como
+ * `confirmed`. `applyCardPaymentMatch` sobrescribía entonces el `refund` que
+ * `classifyCardInflow` había clasificado bien con `credit_card_payment`: la
+ * devolución dejaba de reducir el gasto del mes y el pago real se quedaba sin
+ * contraparte.
+ *
+ * Contradice directamente a `core/classify/card-semantics`, que existe para que
+ * un abono en tarjeta no sea automáticamente un pago.
+ */
+describe('el conciliador de tarjeta no confunde una devolución con un pago', () => {
+  const cash = {
+    accountId: 'acc-cuenta',
+    transaction: makeTransaction({
+      amount: -50000,
+      date: '2026-02-10',
+      description: 'PAGO TARJETA CMR',
+      sourceInstitution: 'banco-chile',
+      sourceParser: 'banco-chile.cuenta-corriente',
+    }),
+  };
+
+  const refund = {
+    accountId: 'acc-tarjeta',
+    transaction: makeTransaction({
+      amount: 50000,
+      date: '2026-02-11',
+      description: 'DEVOLUCION COMERCIO FALABELLA',
+      sourceInstitution: 'banco-falabella',
+      sourceParser: 'banco-falabella.cmr',
+    }),
+  };
+
+  const payment = {
+    accountId: 'acc-tarjeta',
+    transaction: makeTransaction({
+      amount: 50000,
+      date: '2026-02-14',
+      description: 'PAGO RECIBIDO GRACIAS',
+      sourceInstitution: 'banco-falabella',
+      sourceParser: 'banco-falabella.cmr',
+    }),
+  };
+
+  it('empareja el pago recibido, no la devolución más cercana', () => {
+    const matches = matchCardPayments([cash, refund, payment]);
+    const confirmed = matches.find((m) => m.confidence === Confidence.confirmed);
+
+    expect(confirmed?.cardCredit?.transaction.description).toBe('PAGO RECIBIDO GRACIAS');
+  });
+
+  it('la devolución no queda emparejada con nada', () => {
+    const matches = matchCardPayments([cash, refund, payment]);
+
+    expect(
+      matches.some((m) => m.cardCredit?.transaction.description === 'DEVOLUCION COMERCIO FALABELLA'),
+    ).toBe(false);
+  });
+
+  it('sin ningún abono con glosa de pago, el cargo queda sugerido y sin contraparte', () => {
+    const matches = matchCardPayments([cash, refund]);
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.confidence).toBe(Confidence.suggested);
+    expect(matches[0]?.cardCredit).toBeUndefined();
+  });
+});

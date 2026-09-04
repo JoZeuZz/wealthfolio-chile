@@ -487,3 +487,70 @@ describe('índice por monto', () => {
     expect(result.matchedFingerprints.size).toBe(0);
   });
 });
+
+/**
+ * El nombre del banco tiene que ser una palabra, no una subcadena.
+ *
+ * Todos los demás marcadores de este módulo pasan por `mentionsWord` —se añadió
+ * justamente porque `TERCERO` como subcadena hacía coincidir `TERCEROSOFT`— pero
+ * la comprobación de institución usaba `.includes()` crudo, y la lista de
+ * `banco-estado` contiene el token suelto `ESTADO`.
+ *
+ * Resultado: un cargo `TRANSFERENCIA A ESTADOS UNIDOS SPA` en Banco de Chile y
+ * un abono no relacionado del mismo monto y día en BancoEstado se emparejaban
+ * como transferencia interna **confirmada**, con el motivo «la glosa nombra al
+ * otro banco». Aplicarlo borra un gasto real y un ingreso real a la vez, que es
+ * lo que el encabezado de este módulo llama el error más caro que puede
+ * cometer una herramienta de finanzas personales.
+ */
+describe('la institución se nombra por palabra completa', () => {
+  it('ESTADOS UNIDOS no nombra a BancoEstado', () => {
+    const result = matchTransfers([
+      {
+        accountId: 'acc-chile',
+        transaction: makeTransaction({
+          amount: -500000,
+          date: '2026-02-10',
+          description: 'TRANSFERENCIA A ESTADOS UNIDOS SPA',
+          sourceInstitution: 'banco-chile',
+        }),
+      },
+      {
+        accountId: 'acc-estado',
+        transaction: makeTransaction({
+          amount: 500000,
+          date: '2026-02-10',
+          description: 'ABONO HONORARIOS CLIENTE',
+          sourceInstitution: 'banco-estado',
+        }),
+      },
+    ]);
+
+    expect(result.matches.map((m) => m.confidence)).not.toContain(Confidence.confirmed);
+  });
+
+  it('pero BANCOESTADO sí lo nombra, y sigue confirmando', () => {
+    const result = matchTransfers([
+      {
+        accountId: 'acc-chile',
+        transaction: makeTransaction({
+          amount: -500000,
+          date: '2026-02-10',
+          description: 'TRANSFERENCIA A CUENTA BANCOESTADO',
+          sourceInstitution: 'banco-chile',
+        }),
+      },
+      {
+        accountId: 'acc-estado',
+        transaction: makeTransaction({
+          amount: 500000,
+          date: '2026-02-10',
+          description: 'ABONO TRANSFERENCIA',
+          sourceInstitution: 'banco-estado',
+        }),
+      },
+    ]);
+
+    expect(result.matches[0]?.confidence).toBe(Confidence.confirmed);
+  });
+});

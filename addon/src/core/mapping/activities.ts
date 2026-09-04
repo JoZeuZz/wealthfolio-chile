@@ -138,6 +138,22 @@ export interface ChileMetadata {
 export type ReviewableActivityCreate = ActivityCreate & {
   needsReview?: boolean;
   /**
+   * Companion to `needsReview`, and not optional in practice.
+   *
+   * Wealthfolio's "needs review" filter does not read `needs_review` at all: it
+   * filters on `status = 'DRAFT'`
+   * (`storage-sqlite/src/activities/repository.rs`, where the parameter is
+   * literally commented "maps to DRAFT status"). Verified against a real 3.7.0
+   * container — an activity created with `needsReview: true` and no status is
+   * stored flagged, shows the amber badge, and `needsReviewFilter: true`
+   * returns nothing. The host's own sync path sets both fields together, which
+   * is why nobody noticed the flag alone does not reach the list.
+   *
+   * `DRAFT` does not remove the row from any portfolio calculation; the status
+   * is consulted for asset splits and for this filter, nowhere else.
+   */
+  status?: 'DRAFT';
+  /**
    * The host's own duplicate key, which it derives itself when absent.
    *
    * Set by `import-runner` so the addon's identity and Wealthfolio's are the
@@ -238,7 +254,11 @@ export function toActivityCreate(
     // Only when the stored row does not say what the movement is. Marking every
     // import would make the flag mean nothing, and a person who has to review
     // 400 rows reviews none of them.
-    ...(needsReview(transaction.kind, substituted) ? { needsReview: true } : {}),
+    // Both fields, always together: the flag is what the row shows, the status
+    // is what the filter finds. See `ReviewableActivityCreate`.
+    ...(needsReview(transaction.kind, substituted)
+      ? { needsReview: true, status: 'DRAFT' as const }
+      : {}),
   };
 }
 

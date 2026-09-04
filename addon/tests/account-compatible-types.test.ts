@@ -209,6 +209,13 @@ describe('lo que no se pudo clasificar queda marcado para revisión', () => {
 
     expect(create.activityType).toBe('CREDIT');
     expect(create.needsReview).toBe(true);
+    // La marca sola no basta: el filtro «necesita revisión» del host consulta
+    // `status = 'DRAFT'`, no `needs_review`
+    // (`storage-sqlite/src/activities/repository.rs`). Comprobado contra un host
+    // 3.7.0 real: con `needsReview: true` y `status` por defecto, la actividad
+    // se guarda marcada y `needsReviewFilter: true` devuelve cero filas. El
+    // propio camino de sincronización del host pone los dos campos.
+    expect(create.status).toBe('DRAFT');
   });
 
   it('también se marca en una cuenta de efectivo, donde queda como UNKNOWN', () => {
@@ -256,6 +263,7 @@ describe('lo que no se pudo clasificar queda marcado para revisión', () => {
 
     expect(create.activityType).toBe('WITHDRAWAL');
     expect(create.needsReview).toBeUndefined();
+    expect(create.status).toBeUndefined();
   });
 
   it('una devolución reconocida por su glosa no pide revisión', () => {
