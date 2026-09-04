@@ -5,11 +5,13 @@ en Chile: importa cartolas de bancos chilenos, concilia transferencias entre tus
 cuentas, detecta compras en cuotas y responde en qué se te va el sueldo.
 
 > **Estado: 0.2.0-rc.1 — validado contra un Wealthfolio v3.7.0 real, todavía sin
-> cartolas reales.** 582 tests cubren el motor, la capa de servicios y la
+> cartolas reales.** 697 tests cubren el motor, la capa de servicios y la
 > interfaz sobre un DOM. El addon se ha ejecutado dentro de un Wealthfolio
-> corriendo en dos sesiones de validación —3.6.2 primero, 3.7.0 después— y las
-> dos encontraron errores que ningún test unitario podía ver, porque estaban en
-> la frontera con el host. Todos corregidos y reverificados.
+> corriendo en tres sesiones de validación —3.6.2 primero, 3.7.0 después, y el
+> paquete 0.2.0-rc.1 al cerrar— y las tres encontraron errores que ningún test
+> unitario podía ver, porque estaban en la frontera con el host: entre ellos,
+> que la clave de idempotencia del host no coincidía con la nuestra y rechazaba
+> lotes enteros. Todos corregidos y reverificados.
 >
 > Sigue siendo un *release candidate* por una razón concreta: los adaptadores de
 > Banco de Chile, BancoEstado y Falabella/CMR están construidos sobre

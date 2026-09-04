@@ -829,3 +829,90 @@ provenientes del addon.
 Se eliminaron las 14 actividades creadas por esta sesión (identificadas por su
 `runId`) y la cuenta `Validacion USD` creada para el escenario 5. Las 3
 actividades de octubre con `runId` de una sesión anterior se dejaron intactas.
+
+---
+
+# Sesión 3 — cierre de 0.2.0-rc.1 (2026-09-04)
+
+Wealthfolio **3.7.0**, `@wealthfolio/addon-sdk` 3.7.0, addon **0.2.0-rc.1**
+—el artefacto empaquetado, no un build de trabajo—. El pipeline real
+(`prepareImportFromHost` + `runImport`) se ejecutó contra el contenedor a través
+de un `AddonContext` respaldado por HTTP, de modo que lo que se prueba es el
+mismo código que corre dentro del iframe.
+
+## Lo que sólo el host podía decir
+
+Tres afirmaciones que estaban en el código como comentarios y que resultaron
+falsas al comprobarlas contra el binario:
+
+| Afirmación | Realidad |
+| --- | --- |
+| «`UNKNOWN` llega al host y queda `needs_review`» | El host sólo fuerza esa marca en modo sincronización (`mode.is_sync()`). Una actividad creada por `activities/bulk` vuelve con `needsReview: false` |
+| «el filtro *necesita revisión* lee `needs_review`» | Lee `status = 'DRAFT'` (`storage-sqlite/.../repository.rs`). Con la marca puesta y sin status, el filtro devuelve cero filas |
+| «`DRAFT` no saca la fila de ningún cálculo» | `DefaultActivityCompiler::compile` devuelve `vec![]` para todo lo que no esté `POSTED`. Una fila en borrador no entra en ningún saldo |
+
+La tercera es la que decidió el diseño final: `DRAFT` sólo acompaña a un
+movimiento sin clasificar —donde sacarlo de los cálculos es lo correcto, igual
+que hace `UNKNOWN` en una cuenta de efectivo— y nunca a una sustitución de tipo,
+donde borraría plata que el addon leyó bien.
+
+## Clave de idempotencia: dos identidades que no coincidían
+
+Wealthfolio deriva su propia clave para todo create que no traiga una, con
+`(cuenta, tipo, fecha, símbolo, cantidad, precio, monto, comisión, moneda,
+sourceRecordId, notes)`, y la protege con un índice único. No incluye la
+referencia bancaria; la nuestra sí. El create masivo es un `insert_into` sin
+`ON CONFLICT` dentro de una sola transacción.
+
+Comprobado por HTTP directo: dos giros de $20.000 el mismo día con la misma
+glosa y documentos distintos devuelven
+
+```
+400  Activity error: Invalid data: Duplicate activity detected.
+```
+
+y **no escriben ninguna** fila del lote. El addon manda ahora su huella como
+`idempotencyKey`, así que hay una sola función de identidad; verificado que el
+host la almacena literalmente y que las dos filas se aceptan.
+
+## Matriz de la sesión
+
+| Caso | Resultado |
+| --- | --- |
+| Addon carga y habilita en 3.7.0, versión 0.2.0-rc.1 | ✅ |
+| Import Banco de Chile | ✅ |
+| Dos giros indistinguibles el mismo día | ✅ ambos escritos |
+| Reimport / dedupe | ✅ exactos, cero a importar |
+| Actividad editada en el host | ✅ baja a posible duplicado |
+| Cartola inválida | ✅ bloqueada, cero escrituras |
+| Cuenta equivocada por moneda | ✅ bloqueada |
+| Cuenta equivocada por número | ✅ bloqueada |
+| Import CMR en cuenta `CREDIT_CARD` | ✅ ningún tipo rechazado |
+| CMR: compra, cuota, devolución, pago, seguro, impuesto, interés, abono ilegible | ✅ |
+| Filtro «necesita revisión» del host encuentra lo marcado | ✅ |
+| Import BancoEstado | ✅ |
+| Conciliación: par claro, sin reutilizar contrapartes | ✅ |
+| Multi-moneda incompatible | ✅ bloqueada |
+
+## Tipos escritos en la cuenta de tarjeta
+
+Sólo `WITHDRAWAL`, `TRANSFER_IN`, `CREDIT` y `FEE` — el subconjunto que
+`account_activity_validation_message` acepta. El impuesto llega como `FEE`
+marcado para revisión pero `POSTED`; el abono que nadie pudo leer llega como
+`CREDIT` en `DRAFT`.
+
+## Limpieza
+
+Las 28 actividades creadas por esta sesión se identificaron por diferencia
+contra el listado tomado al empezar y se borraron una a una. Las 39
+preexistentes quedaron intactas, comprobado por comparación de conjuntos de ids.
+No se creó ni se borró ninguna cuenta.
+
+## Entorno al cerrar
+
+El overlay de desarrollo (`infra/compose.dev.yml`) se usó durante la validación
+y **se retiró al terminar**: el contenedor volvió a `compose.yml` solo, con
+`WF_AUTH_REQUIRED=true` y su hash de contraseña. Comprobado que la API responde
+`401` sin token. El overlay desactiva la autenticación y su propio archivo lo
+advierte: es para datos sintéticos en local, nunca para la máquina que guarda
+datos reales.

@@ -28,9 +28,9 @@ release candidate y no un `0.2.0`.
 ```
 typecheck   ✅  tsc --noEmit, strict + noUncheckedIndexedAccess
 lint        ✅  eslint, 0 errores, 0 warnings, sin `any`
-tests       ✅  672 pasando (35 archivos), incluidos 37 de UI sobre DOM
-build       ✅  dist/addon.js — un solo archivo, 806 KB (212 KB gzip)
-package     ✅  wealthfolio-chile-<versión>.zip, 211 KB
+tests       ✅  697 pasando (35 archivos), incluidos 37 de UI sobre DOM
+build       ✅  dist/addon.js — un solo archivo, 808 KB (212 KB gzip)
+package     ✅  wealthfolio-chile-0.2.0-rc.1.zip, 209 KB · manifest + dist/addon.js + README
 coverage    ✅  94 % de líneas y 88 % de ramas sobre `src/core/`
 ```
 
