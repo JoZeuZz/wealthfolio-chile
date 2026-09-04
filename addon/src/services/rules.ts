@@ -9,7 +9,7 @@ import {
   type RuleContext,
 } from '../core/rules/engine';
 import type { NormalizedTransaction } from '../core/model/transaction';
-import { readJson, writeJson, StorageKeys, type KeyValueStore } from './storage';
+import { readJson, writeJson, StorageError, StorageKeys, type KeyValueStore } from './storage';
 
 /**
  * User-authored rules: what a screen may ask the engine to do, and what
@@ -63,16 +63,26 @@ export const EDITABLE_ACTIONS: readonly RuleActionType[] = [
   'ignore',
 ];
 
-/** Condition fields a rule editor may offer, in the order they read best. */
+/**
+ * Condition fields a rule editor may offer, in the order they read best.
+ *
+ * `product` and `operationType` are deliberately absent even though the engine
+ * evaluates both. Neither survives into a movement rebuilt from a Wealthfolio
+ * activity — the statement's product is not stored and the bank's own label is
+ * not in the metadata — so the preview, which runs over exactly those rebuilt
+ * movements, would answer "no cambiaría ninguno" for a rule that then fires on
+ * every row of the next import. An unpreviewable condition is worse than a
+ * missing one: it is the preview promising the opposite of what happens.
+ *
+ * The engine keeps both, because the built-in card rules need `product`.
+ */
 export const EDITABLE_FIELDS: readonly ConditionField[] = [
   'description',
   'merchant',
   'absAmount',
   'amount',
   'direction',
-  'operationType',
   'institution',
-  'product',
 ];
 
 const TEXT_OPERATORS: readonly ConditionOperator[] = [
@@ -95,6 +105,52 @@ export function operatorsFor(field: ConditionField): readonly ConditionOperator[
 /** Schema version of the stored rule set. Bump when the shape changes. */
 export const RULES_SCHEMA_VERSION = 1;
 
+/**
+ * The one priority a user rule may have: after every built-in.
+ *
+ * The built-ins occupy 10 to 110 and three of them cut the evaluation short.
+ * That ordering is the safety model — parser, then the audited rules that
+ * decide what a movement *is*, then the user's labels — so the priority is not
+ * something a rule carries, it is something the tier is.
+ */
+export const USER_RULE_PRIORITY = 500;
+
+/** Id namespace the shipped rules live in. Off limits to a user rule. */
+const BUILTIN_ID_PREFIX = 'builtin.';
+
+/**
+ * Longest pattern a `matches` condition may hold.
+ *
+ * Not a security boundary — the pattern is the user's own — but the editor runs
+ * it on every keystroke to compute the preview, so an unbounded one turns
+ * typing into an unbounded amount of work in the same tab that is being typed
+ * in. No Chilean glosa needs 200 characters of pattern to be recognised.
+ */
+const MAX_PATTERN_LENGTH = 200;
+
+/**
+ * A quantifier applied to a group that already contains one.
+ *
+ * `(a+)+`, `(x*)*`, `(\d{2,}){3,}` — the classic catastrophic-backtracking
+ * shapes. Against a description that *almost* matches, these take exponential
+ * time, and the preview runs them synchronously while the user is still
+ * typing: the tab stops responding halfway through writing the rule, with
+ * nothing on screen to say why.
+ *
+ * A heuristic, not a decision procedure. It rejects some patterns that would
+ * have been fine — `(FARMACIA|BOTICA)+` is deliberately not one of them, since
+ * the group holds no quantifier — and that trade is right for a field whose
+ * job is matching a bank's wording.
+ *
+ * The `?:` is matched rather than skipped. The first version excluded every
+ * `(?…` group to leave lookarounds alone, and took non-capturing groups out
+ * with them: `(?:[A-Z]+)+$` was accepted, and against a 37-character glosa it
+ * does not finish. A lookaround still slips past, because `?=` and `?!` are not
+ * `?:`.
+ */
+const NESTED_QUANTIFIER =
+  /\((?:\?:)?[^()]*(?:[+*]|\{\d+,\d*\})[^()]*\)\s*(?:[+*]|\{\d+,\d*\})/;
+
 interface StoredRules {
   v: number;
   rules: unknown[];
@@ -116,6 +172,13 @@ export function validateUserRule(rule: Rule): RuleValidation {
   const errors: string[] = [];
 
   if (rule.name.trim() === '') errors.push('La regla necesita un nombre.');
+  if (rule.id.startsWith(BUILTIN_ID_PREFIX)) {
+    // `loadEffectiveRules` drops the built-in whose id a user rule repeats, to
+    // implement "edit this built-in". No screen offers that, so an id in this
+    // namespace can only *delete* an audited rule — while its switch still
+    // reads as on.
+    errors.push('El identificador de una regla predefinida no puede usarse para una regla propia.');
+  }
   if (rule.conditions.length === 0) {
     errors.push('La regla necesita al menos una condición; si no, se aplicaría a todo.');
   }
@@ -161,11 +224,20 @@ function conditionErrors(condition: RuleCondition): string[] {
   if (String(value).trim() === '') return ['La condición necesita un valor con el que comparar.'];
 
   if (operator === 'matches') {
+    const pattern = String(value);
+    if (pattern.length > MAX_PATTERN_LENGTH) {
+      return [`La expresión regular es demasiado larga (máximo ${MAX_PATTERN_LENGTH} caracteres).`];
+    }
+    if (NESTED_QUANTIFIER.test(pattern)) {
+      return [
+        'La expresión regular repite un grupo que ya se repite por dentro. Sobre una glosa larga puede tardar minutos, así que no se acepta; escribe el patrón sin cuantificadores anidados.',
+      ];
+    }
     try {
       // The engine swallows a bad pattern on purpose, so one broken rule cannot
       // take an import down with it. In an editor that is the opposite of
       // helpful: the rule would save, look fine and never fire.
-      new RegExp(String(value), 'i');
+      new RegExp(pattern, 'i');
     } catch {
       return ['La expresión regular no es válida.'];
     }
@@ -188,6 +260,12 @@ function conditionErrors(condition: RuleCondition): string[] {
  */
 export async function loadUserRules(store: KeyValueStore): Promise<Rule[]> {
   const raw = await readJson<unknown>(store, StorageKeys.rules, []);
+  // A blob from a later version is not read with this version's rules. Its
+  // actions may carry their operands somewhere this loader does not look, and
+  // reading it here produced an empty rule set that looked like "you have no
+  // rules" — one click away from writing that emptiness back over both devices.
+  if (isStoredRules(raw) && storedVersion(raw) > RULES_SCHEMA_VERSION) return [];
+
   const list = Array.isArray(raw)
     ? raw
     : isStoredRules(raw)
@@ -199,14 +277,60 @@ export async function loadUserRules(store: KeyValueStore): Promise<Rule[]> {
     const rule = normalizeRule(entry);
     if (rule && validateUserRule(rule).errors.length === 0) out.push(rule);
   }
-  return out;
+  return dedupeById(out);
+}
+
+/**
+ * One rule per id, the last one winning.
+ *
+ * An id is how a rule is edited and how it is deleted, so two rules sharing one
+ * make both operations a coin toss: `map(r => r.id === id ? next : r)` rewrites
+ * both, and `filter(r => r.id !== id)` removes both. Saving is the write, so
+ * the later entry is the more recent intent.
+ */
+function dedupeById(rules: readonly Rule[]): Rule[] {
+  const byId = new Map<string, Rule>();
+  for (const rule of rules) byId.set(rule.id, rule);
+  // Insertion order of a Map follows first insertion, which keeps the order the
+  // user arranged even when a later duplicate replaced the contents.
+  return [...byId.values()];
+}
+
+/**
+ * An id no existing rule is using.
+ *
+ * `Date.now()` alone collides: creating a rule, saving it and creating another
+ * inside the same millisecond — which two clicks on a fast machine manage —
+ * produced one id for both, and the second silently replaced the first.
+ */
+export function newRuleId(existing: readonly Rule[]): string {
+  const taken = new Set(existing.map((rule) => rule.id));
+  const stamp = Date.now().toString(36);
+  for (let suffix = 0; ; suffix += 1) {
+    const id = suffix === 0 ? `user.${stamp}` : `user.${stamp}-${suffix.toString(36)}`;
+    if (!taken.has(id)) return id;
+  }
 }
 
 export async function saveUserRules(store: KeyValueStore, rules: readonly Rule[]): Promise<void> {
+  const existing = await readJson<unknown>(store, StorageKeys.rules, []);
+  if (isStoredRules(existing) && storedVersion(existing) > RULES_SCHEMA_VERSION) {
+    throw new StorageError(
+      'Tus reglas las guardó una versión más reciente de Wealthfolio Chile. No se sobreescriben desde aquí; actualiza el addon en este dispositivo.',
+    );
+  }
+
   await writeJson(store, StorageKeys.rules, {
     v: RULES_SCHEMA_VERSION,
-    rules: rules.map((rule) => normalizeRule(rule)).filter((rule): rule is Rule => rule !== undefined),
+    rules: dedupeById(
+      rules.map((rule) => normalizeRule(rule)).filter((rule): rule is Rule => rule !== undefined),
+    ),
   } satisfies StoredRules);
+}
+
+/** Version an envelope declares. Absent means the first one, which had none. */
+function storedVersion(value: StoredRules): number {
+  return typeof value.v === 'number' && Number.isFinite(value.v) ? value.v : 1;
 }
 
 function isStoredRules(value: unknown): value is StoredRules {
@@ -242,11 +366,17 @@ function normalizeRule(value: unknown): Rule | undefined {
     id: raw.id,
     name: typeof raw.name === 'string' ? raw.name : raw.id,
     enabled: raw.enabled !== false,
-    priority: typeof raw.priority === 'number' && Number.isFinite(raw.priority) ? raw.priority : 500,
+    // Forced, like `origin`, and for a sharper reason. These two fields are how
+    // a rule made only of *safe* actions disarms a dangerous built-in: priority
+    // 1 plus `stopProcessing` breaks the loop before
+    // `builtin.transferencia-propia` runs, and a traspaso between the holder's
+    // own accounts goes back to counting as spending. No risky action is
+    // involved, so the action gate never sees it. The screen can only produce
+    // `USER_RULE_PRIORITY` and no cut, so that is all that is read back.
+    priority: USER_RULE_PRIORITY,
     match: raw.match === 'all' ? 'all' : 'any',
     conditions,
     actions,
-    ...(raw.stopProcessing === true ? { stopProcessing: true as const } : {}),
     origin: 'user',
   };
 }

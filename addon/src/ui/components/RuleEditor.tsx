@@ -42,13 +42,22 @@ export interface RuleEditorProps {
   rule: Rule;
   /** Runs the candidate against the movements already imported. Pure. */
   preview: (candidate: Rule) => RulePreview;
+  /** One sentence naming the set the preview counted over. */
+  scope: string;
   onSave: (rule: Rule) => void;
   onCancel: () => void;
 }
 
-export function RuleEditor({ rule, preview, onSave, onCancel }: RuleEditorProps) {
+export function RuleEditor({ rule, preview, scope, onSave, onCancel }: RuleEditorProps) {
   const [draft, setDraft] = useState<Rule>(rule);
   const [attempted, setAttempted] = useState(false);
+  // The operand is text while it is being typed. Re-parsing on every keystroke
+  // rewrote what the user had half-written: typing `1` into a range produced
+  // `[1, NaN → 0]`, the field re-rendered as `1-0`, and the next digit landed
+  // after the max — a range above 9 could not be typed at all, and the rule
+  // could not be saved because `[1, 0]` is inverted. Same shape as the
+  // reconciliation window on the settings page.
+  const [operandDraft, setOperandDraft] = useState<string | undefined>();
 
   const validation = useMemo(() => validateUserRule(draft), [draft]);
   // Only previewed once the rule is coherent: running a half-typed condition
@@ -68,6 +77,14 @@ export function RuleEditor({ rule, preview, onSave, onCancel }: RuleEditorProps)
       ...current,
       conditions: [{ ...condition, ...patch } as typeof condition],
     }));
+
+  /** Turn what was typed into what the condition holds. */
+  const commitOperand = () => {
+    if (operandDraft === undefined) return;
+    const text = operandDraft;
+    setOperandDraft(undefined);
+    setCondition({ value: parseOperand(condition.operator, text) });
+  };
 
   return (
     <Card role="dialog" aria-label="Editar regla">
@@ -141,8 +158,9 @@ export function RuleEditor({ rule, preview, onSave, onCancel }: RuleEditorProps)
               <Input
                 id="condition-value"
                 className="w-56"
-                value={Array.isArray(condition.value) ? condition.value.join('-') : String(condition.value)}
-                onChange={(event) => setCondition({ value: parseOperand(condition.operator, event.target.value) })}
+                value={operandDraft ?? operandText(condition.value)}
+                onChange={(event) => setOperandDraft(event.target.value)}
+                onBlur={() => commitOperand()}
               />
             </div>
           </div>
@@ -211,13 +229,28 @@ export function RuleEditor({ rule, preview, onSave, onCancel }: RuleEditorProps)
           </Alert>
         ) : null}
 
-        {impact ? <PreviewPanel impact={impact} /> : null}
+        {impact ? <PreviewPanel impact={impact} scope={scope} /> : null}
 
         <div className="flex gap-2">
           <Button
+            // `onMouseDown` fires before the input's `blur`, and a click on
+            // Guardar is exactly how someone finishes typing a value. Committing
+            // here as well means the last thing typed is part of what is saved.
+            onMouseDown={commitOperand}
             onClick={() => {
+              const pending =
+                operandDraft === undefined
+                  ? draft
+                  : {
+                      ...draft,
+                      conditions: [
+                        { ...condition, value: parseOperand(condition.operator, operandDraft) },
+                      ],
+                    };
+              setOperandDraft(undefined);
+              setDraft(pending);
               setAttempted(true);
-              if (validation.errors.length === 0) onSave(draft);
+              if (validateUserRule(pending).errors.length === 0) onSave(pending);
             }}
           >
             Guardar regla
@@ -238,7 +271,7 @@ export function RuleEditor({ rule, preview, onSave, onCancel }: RuleEditorProps)
  * would hide the interesting case: a rule can match plenty of movements and
  * change none, because a rule that runs earlier already did the same thing.
  */
-function PreviewPanel({ impact }: { impact: RulePreview }) {
+function PreviewPanel({ impact, scope }: { impact: RulePreview; scope: string }) {
   return (
     <div className="bg-muted/40 flex flex-col gap-2 rounded-md p-3" aria-live="polite">
       <p className="text-sm font-medium">
@@ -257,6 +290,8 @@ function PreviewPanel({ impact }: { impact: RulePreview }) {
           {impact.ignored} quedarían fuera de la importación.
         </p>
       ) : null}
+
+      <p className="text-muted-foreground text-xs">{scope}</p>
 
       {impact.samples.length > 0 ? (
         <ul className="flex flex-col gap-1 text-xs">
@@ -284,6 +319,11 @@ function PreviewPanel({ impact }: { impact: RulePreview }) {
  * makes the saved rule depend on that coercion, and a rule set is written once
  * and read by every later version.
  */
+/** How a stored operand reads back into the field. */
+function operandText(value: Rule['conditions'][number]['value']): string {
+  return Array.isArray(value) ? value.join('-') : String(value);
+}
+
 function parseOperand(operator: ConditionOperator, text: string): string | number | [number, number] {
   if (operator === 'between') {
     const [min, max] = text.split(/[-–a]/).map((part) => Number(part.trim()));

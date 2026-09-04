@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   actionRisk,
   EDITABLE_ACTIONS,
+  EDITABLE_FIELDS,
   loadUserRules,
   previewRuleImpact,
+  newRuleId,
   RULES_SCHEMA_VERSION,
   saveUserRules,
   validateUserRule,
@@ -12,7 +14,7 @@ import { loadEffectiveRules } from '../src/services/settings';
 import { StorageKeys } from '../src/services/storage';
 import { defaultRules } from '../src/core/rules/builtin';
 import { TransactionKind } from '../src/core/model/kinds';
-import type { Rule } from '../src/core/rules/engine';
+import { sortRules, type Rule } from '../src/core/rules/engine';
 import { makeTransaction } from './fixtures';
 import { memoryStore } from './host';
 
@@ -292,5 +294,256 @@ describe('vista previa del efecto de una regla', () => {
     );
 
     expect(preview.matched).toBe(3);
+  });
+});
+
+/**
+ * Una expresión regular escrita a mano, tratada como entrada hostil.
+ *
+ * No porque venga de un atacante —viene del propio usuario— sino porque el
+ * editor la ejecuta en cada pulsación para calcular la vista previa. Un patrón
+ * con retroceso catastrófico no compromete nada, pero cuelga la pestaña de
+ * quien lo escribió, en medio de escribirlo, sin explicación.
+ */
+describe('expresiones regulares', () => {
+  const withPattern = (value: string) =>
+    validateUserRule(
+      rule({ conditions: [{ field: 'description', operator: 'matches', value }] }),
+    );
+
+  it('una que no compila se rechaza antes de guardarse', () => {
+    expect(withPattern('([').errors[0]).toMatch(/expresión regular/i);
+  });
+
+  it('una vacía se rechaza por vacía, no por inválida', () => {
+    expect(withPattern('').errors[0]).toMatch(/valor/i);
+  });
+
+  it('una válida pasa', () => {
+    expect(withPattern('^FARMACIA\\s+\\w+').errors).toEqual([]);
+  });
+
+  it('una desmesuradamente larga se rechaza', () => {
+    expect(withPattern('a'.repeat(500)).errors[0]).toMatch(/larga/i);
+  });
+
+  it('los cuantificadores anidados se rechazan por lo que tardan, no por lo que hacen', () => {
+    // `(a+)+$` sobre una glosa que casi encaja recorre exponencialmente. El
+    // motor lo ejecutaría igual que cualquier otro patrón.
+    expect(withPattern('(a+)+$').errors[0]).toMatch(/tardar|anidad/i);
+    expect(withPattern('(x*)*y').errors[0]).toMatch(/tardar|anidad/i);
+  });
+
+  it('un cuantificador que no está anidado sigue permitido', () => {
+    expect(withPattern('(FARMACIA|BOTICA)+').errors).toEqual([]);
+    expect(withPattern('CRUZ\\s*VERDE').errors).toEqual([]);
+  });
+
+  it('una regla con patrón inválido guardada por otra versión no se carga', async () => {
+    const store = memoryStore();
+    await store.set(
+      StorageKeys.rules,
+      JSON.stringify({
+        v: 1,
+        rules: [rule({ conditions: [{ field: 'description', operator: 'matches', value: '([' }] })],
+      }),
+    );
+
+    expect(await loadUserRules(store)).toEqual([]);
+  });
+});
+
+/**
+ * Identidad y orden.
+ *
+ * Una regla se identifica por su id: editarla es guardar otra con el mismo id,
+ * y borrarla es quitarlo. Dos reglas compartiendo id convierten ambas
+ * operaciones en un sorteo.
+ */
+describe('identidad de las reglas', () => {
+  it('un id nuevo no choca con los que ya existen', () => {
+    const existing = [rule({ id: 'user.a' }), rule({ id: 'user.b' })];
+    const ids = new Set(existing.map((r) => r.id));
+
+    for (let n = 0; n < 50; n += 1) {
+      const id = newRuleId([...ids].map((value) => ({ id: value }) as Rule));
+      expect(ids.has(id)).toBe(false);
+      ids.add(id);
+    }
+  });
+
+  it('guardar dos reglas con el mismo id conserva una sola', async () => {
+    const store = memoryStore();
+    await saveUserRules(store, [
+      rule({ id: 'user.x', name: 'Primera' }),
+      rule({ id: 'user.x', name: 'Segunda' }),
+    ]);
+
+    const loaded = await loadUserRules(store);
+    expect(loaded).toHaveLength(1);
+    // La última gana: guardar es la operación de escritura, y la última
+    // escritura es la intención más reciente.
+    expect(loaded[0]?.name).toBe('Segunda');
+  });
+
+  it('leer un almacén con ids repetidos tampoco los duplica', async () => {
+    const store = memoryStore();
+    await store.set(
+      StorageKeys.rules,
+      JSON.stringify({
+        v: 1,
+        rules: [rule({ id: 'user.x', name: 'Primera' }), rule({ id: 'user.x', name: 'Segunda' })],
+      }),
+    );
+
+    expect(await loadUserRules(store)).toHaveLength(1);
+  });
+
+  it('el orden se conserva entre guardar y leer', async () => {
+    const store = memoryStore();
+    const ids = ['user.c', 'user.a', 'user.b'];
+    await saveUserRules(store, ids.map((id) => rule({ id, priority: 500 })));
+
+    expect((await loadUserRules(store)).map((r) => r.id)).toEqual(ids);
+  });
+
+  it('el orden efectivo no depende del orden de escritura', () => {
+    // `sortRules` ordena por prioridad y desempata por id, así que dos
+    // conjuntos con las mismas reglas en distinto orden corren igual.
+    const a = sortRules([rule({ id: 'user.b', priority: 500 }), rule({ id: 'user.a', priority: 500 })]);
+    const b = sortRules([rule({ id: 'user.a', priority: 500 }), rule({ id: 'user.b', priority: 500 })]);
+
+    expect(a.map((r) => r.id)).toEqual(b.map((r) => r.id));
+  });
+});
+
+/**
+ * Lo que una regla escrita por otra versión puede intentar.
+ *
+ * `origin` ya se forzaba, pero `priority` y `stopProcessing` viajaban tal cual,
+ * y ésos son los dos campos con los que una regla «segura» desarma a una
+ * peligrosa: prioridad 1 y `stopProcessing` cortan la evaluación antes de que
+ * corra `builtin.transferencia-propia`, y un traspaso entre cuentas propias
+ * vuelve a contarse como gasto. Ninguna acción arriesgada hace falta para eso,
+ * así que la puerta de riesgo no se entera.
+ *
+ * La pantalla sólo sabe producir prioridad 500 sin corte, así que eso es lo
+ * único que se acepta al leer.
+ */
+describe('una regla de usuario no puede colarse delante de las predefinidas', () => {
+  it('la prioridad guardada se normaliza a la que produce la pantalla', async () => {
+    const store = memoryStore();
+    await store.set(
+      StorageKeys.rules,
+      JSON.stringify({ v: 1, rules: [{ ...rule(), priority: 1 }] }),
+    );
+
+    expect((await loadUserRules(store))[0]?.priority).toBe(500);
+  });
+
+  it('`stopProcessing` no sobrevive a la lectura', async () => {
+    const store = memoryStore();
+    await store.set(
+      StorageKeys.rules,
+      JSON.stringify({ v: 1, rules: [{ ...rule(), stopProcessing: true }] }),
+    );
+
+    expect((await loadUserRules(store))[0]?.stopProcessing).toBeUndefined();
+  });
+
+  it('ni a la escritura', async () => {
+    const store = memoryStore();
+    await saveUserRules(store, [{ ...rule(), priority: 1, stopProcessing: true }]);
+
+    const raw = JSON.parse(store.data.get(StorageKeys.rules) as string) as {
+      rules: Array<{ priority: number; stopProcessing?: boolean }>;
+    };
+    expect(raw.rules[0]?.priority).toBe(500);
+    expect(raw.rules[0]?.stopProcessing).toBeUndefined();
+  });
+
+  it('una regla que se hace pasar por predefinida se descarta', async () => {
+    // `loadEffectiveRules` deja fuera la predefinida cuyo id repite una del
+    // usuario, para implementar «editar una predefinida». No existe esa
+    // función en la pantalla, así que un id `builtin.*` en la clave del usuario
+    // sólo puede *borrar* una regla auditada — con su interruptor todavía
+    // encendido en la pantalla.
+    const store = memoryStore();
+    await store.set(
+      StorageKeys.rules,
+      JSON.stringify({ v: 1, rules: [rule({ id: 'builtin.transferencia-propia' })] }),
+    );
+
+    expect(await loadUserRules(store)).toEqual([]);
+    const effective = await loadEffectiveRules(store);
+    expect(effective.some((r) => r.id === 'builtin.transferencia-propia')).toBe(true);
+  });
+});
+
+/**
+ * La versión del esquema tiene que servir para algo.
+ *
+ * `v` se escribía y no se leía nunca, así que un valor escrito por una versión
+ * posterior se interpretaba con las reglas de ésta —quedando en nada— y la
+ * siguiente escritura lo pisaba en los dos dispositivos. Degradar donde había
+ * que negarse.
+ */
+describe('versión del esquema', () => {
+  const future = JSON.stringify({
+    v: RULES_SCHEMA_VERSION + 1,
+    rules: [{ id: 'user.a', name: 'A', actions: [{ type: 'set_category', params: { value: 'x' } }] }],
+  });
+
+  it('un esquema posterior no se interpreta con las reglas de esta versión', async () => {
+    const store = memoryStore();
+    await store.set(StorageKeys.rules, future);
+
+    expect(await loadUserRules(store)).toEqual([]);
+  });
+
+  it('y no se sobreescribe', async () => {
+    const store = memoryStore();
+    await store.set(StorageKeys.rules, future);
+
+    await expect(saveUserRules(store, [rule()])).rejects.toThrow(/versión/i);
+    expect(store.data.get(StorageKeys.rules)).toBe(future);
+  });
+
+  it('el esquema actual sí se puede escribir', async () => {
+    const store = memoryStore();
+    await saveUserRules(store, [rule()]);
+    await saveUserRules(store, [rule({ name: 'Otra' })]);
+
+    expect((await loadUserRules(store))[0]?.name).toBe('Otra');
+  });
+});
+
+describe('cuantificadores anidados en grupos sin captura', () => {
+  const withPattern = (value: string) =>
+    validateUserRule(rule({ conditions: [{ field: 'description', operator: 'matches', value }] }));
+
+  it('`(?:...)+` también retrocede exponencialmente y también se rechaza', () => {
+    // Medido: `(?:[A-Z]+)+$` sobre una glosa de 37 caracteres no termina.
+    expect(withPattern('(?:[A-Z]+)+$').errors[0]).toMatch(/tardar|anidad/i);
+  });
+
+  it('un grupo sin captura sin cuantificador anidado sigue permitido', () => {
+    expect(withPattern('(?:FARMACIA|BOTICA)').errors).toEqual([]);
+  });
+
+  it('una mirada hacia delante no se confunde con un grupo', () => {
+    expect(withPattern('(?=FARMACIA).*').errors).toEqual([]);
+  });
+});
+
+describe('campos que la pantalla ofrece', () => {
+  it('no ofrece ninguno que la vista previa no pueda evaluar', () => {
+    // `product` lo pone el parser de la cartola y `operationType` lo trae la
+    // fila del banco; ninguno de los dos sobrevive en una Activity releída, así
+    // que una condición sobre ellos daría siempre «no cambiaría ninguno» y
+    // luego dispararía en cada fila al importar.
+    expect(EDITABLE_FIELDS).not.toContain('product');
+    expect(EDITABLE_FIELDS).not.toContain('operationType');
+    expect(EDITABLE_FIELDS).toContain('description');
   });
 });

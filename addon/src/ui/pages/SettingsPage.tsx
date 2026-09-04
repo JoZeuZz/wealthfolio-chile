@@ -24,6 +24,7 @@ import { loadImportedTransactions } from '../../services/imported-transactions';
 import {
   actionRisk,
   loadUserRules,
+  newRuleId,
   previewRuleImpact,
   saveUserRules,
   validateUserRule,
@@ -112,51 +113,96 @@ export function SettingsPage() {
     };
   }, [ctx]);
 
+  /**
+   * Apply a change to the settings and write the result.
+   *
+   * Takes an updater rather than a finished value, and computes the next state
+   * inside `setState`, because the alternative loses writes. Two switches
+   * flipped before React re-renders both read the `settings` their own render
+   * closed over, so the second write carries the first's *old*
+   * `disabledBuiltinRules` and undoes it — a toggle that visibly moved and then
+   * came back on the next reload.
+   *
+   * The store offers no compare-and-set, so this closes the window inside one
+   * screen and no further: two Wealthfolio windows editing settings at once can
+   * still overwrite each other, which is the same limit every other addon
+   * preference has.
+   */
   const persist = useCallback(
-    async (settings: ChileSettings) => {
-      setState((previous) => ({ ...previous, settings }));
+    (update: (current: ChileSettings) => ChileSettings) => {
       setSaving(true);
-      try {
-        await saveSettings(ctx.api.storage, settings);
-      } catch (err) {
-        setState((previous) => ({
-          ...previous,
-          error: err instanceof Error ? err.message : String(err),
-        }));
-      } finally {
-        setSaving(false);
-      }
+      setState((previous) => {
+        const settings = update(previous.settings);
+        void saveSettings(ctx.api.storage, settings)
+          .catch((err: unknown) =>
+            setState((latest) => ({
+              ...latest,
+              error: err instanceof Error ? err.message : String(err),
+            })),
+          )
+          .finally(() => setSaving(false));
+        return { ...previous, settings };
+      });
     },
     [ctx],
   );
 
   const persistRules = useCallback(
-    async (userRules: Rule[]) => {
-      setState((previous) => ({ ...previous, userRules }));
+    (update: (current: Rule[]) => Rule[]) => {
       setSaving(true);
-      try {
-        await saveUserRules(ctx.api.storage, userRules);
-      } catch (err) {
-        setState((previous) => ({
-          ...previous,
-          error: err instanceof Error ? err.message : String(err),
-        }));
-      } finally {
-        setSaving(false);
-      }
+      setState((previous) => {
+        const userRules = update(previous.userRules);
+        void saveUserRules(ctx.api.storage, userRules)
+          .catch((err: unknown) =>
+            setState((latest) => ({
+              ...latest,
+              error: err instanceof Error ? err.message : String(err),
+            })),
+          )
+          .finally(() => setSaving(false));
+        return { ...previous, userRules };
+      });
     },
     [ctx],
   );
 
+  /**
+   * What the preview actually looked at, in the preview's own words.
+   *
+   * A count of zero is only informative next to the set it was counted over.
+   * On a real instance the sentence "no cambiaría ninguno" appeared for a rule
+   * whose match was sitting in Wealthfolio in plain sight — seven months back,
+   * outside the window — and read as "this rule is useless" rather than "this
+   * rule matches nothing recent". The caveat has to live beside the number,
+   * not in another card.
+   */
+  const previewScope =
+    state.movements.length === 0
+      ? 'Todavía no hay movimientos importados contra los que probarla, así que esto no dice nada sobre una cartola futura.'
+      : `Revisados ${state.movements.length} movimientos de los últimos ${PREVIEW_MONTHS} meses. Un movimiento más antiguo no se cuenta aquí, y la regla igual lo alcanzará cuando se importe.`;
+
+  /**
+   * The rule set the preview runs against — the same one the import builds.
+   *
+   * It used to be `defaultRules()` unfiltered, which is not what
+   * `loadEffectiveRules` produces the moment a built-in is switched off. With
+   * "Pago de tarjeta de crédito" disabled and a user rule that leaves card
+   * payments out of the import, the preview still had the built-in firing
+   * first and cutting the evaluation, so it reported "no cambiaría ninguno"
+   * for a rule that on the next import drops every card payment from the
+   * ledger.
+   */
   const preview = useCallback(
-    (candidate: Rule): RulePreview =>
-      previewRuleImpact(
-        candidate,
-        [...defaultRules(), ...state.userRules],
-        state.movements,
-        { accountId: 'preview' },
-      ),
-    [state.userRules, state.movements],
+    (candidate: Rule): RulePreview => {
+      const disabledIds = new Set(state.settings.disabledBuiltinRules);
+      const builtins = defaultRules().map((rule) =>
+        disabledIds.has(rule.id) ? { ...rule, enabled: false } : rule,
+      );
+      return previewRuleImpact(candidate, [...builtins, ...state.userRules], state.movements, {
+        accountId: 'preview',
+      });
+    },
+    [state.settings.disabledBuiltinRules, state.userRules, state.movements],
   );
 
   if (state.loading) {
@@ -219,7 +265,7 @@ export function SettingsPage() {
                 const days = clampWindow(Number(windowDraft ?? settings.transferWindowDays));
                 setWindowDraft(undefined);
                 if (days !== settings.transferWindowDays) {
-                  void persist({ ...settings, transferWindowDays: days });
+                  persist((current) => ({ ...current, transferWindowDays: days }));
                 }
               }}
             />
@@ -253,12 +299,12 @@ export function SettingsPage() {
                     checked={!disabled.has(rule.id)}
                     disabled={saving}
                     onCheckedChange={(on: boolean) =>
-                      void persist({
-                        ...settings,
+                      persist((current) => ({
+                        ...current,
                         disabledBuiltinRules: on
-                          ? settings.disabledBuiltinRules.filter((id) => id !== rule.id)
-                          : [...settings.disabledBuiltinRules, rule.id],
-                      })
+                          ? current.disabledBuiltinRules.filter((id) => id !== rule.id)
+                          : [...current.disabledBuiltinRules, rule.id],
+                      }))
                     }
                   />
                 </div>
@@ -296,8 +342,8 @@ export function SettingsPage() {
                       checked={rule.enabled}
                       disabled={saving}
                       onCheckedChange={(on: boolean) =>
-                        void persistRules(
-                          userRules.map((r) => (r.id === rule.id ? { ...r, enabled: on } : r)),
+                        persistRules((current) =>
+                          current.map((r) => (r.id === rule.id ? { ...r, enabled: on } : r)),
                         )
                       }
                     />
@@ -308,9 +354,7 @@ export function SettingsPage() {
                       variant="ghost"
                       size="sm"
                       disabled={saving}
-                      onClick={() =>
-                        void persistRules(userRules.filter((r) => r.id !== rule.id))
-                      }
+                      onClick={() => persistRules((current) => current.filter((r) => r.id !== rule.id))}
                     >
                       Eliminar
                     </Button>
@@ -320,19 +364,30 @@ export function SettingsPage() {
             </ul>
           )}
 
-          <Button onClick={() => setEditing(newRule())}>Nueva regla</Button>
+          {editing ? (
+            <RuleEditor
+              // Remount per rule. Without it `useState(rule)` seeds only on the
+              // first mount, so clicking "Editar" on a second rule kept the
+              // first one's draft behind a header naming the second — and
+              // Guardar wrote the edit onto the rule that was not on screen.
+              key={editing.id}
+              rule={editing}
+              preview={preview}
+              scope={previewScope}
+              onCancel={() => setEditing(undefined)}
+              onSave={(saved) => {
+                setEditing(undefined);
+                persistRules((current) =>
+                  current.some((r) => r.id === saved.id)
+                    ? current.map((r) => (r.id === saved.id ? saved : r))
+                    : [...current, saved],
+                );
+              }}
+            />
+          ) : null}
 
-          {state.movements.length === 0 ? (
-            <p className="text-muted-foreground text-xs">
-              Todavía no hay movimientos importados contra los que probar una regla, así que la
-              vista previa dirá que no afecta a nada. Eso no significa que no vaya a afectar a una
-              cartola futura.
-            </p>
-          ) : (
-            <p className="text-muted-foreground text-xs">
-              La vista previa se calcula sobre {state.movements.length} movimientos de los últimos{' '}
-              {PREVIEW_MONTHS} meses, sin escribir nada.
-            </p>
+          {editing ? null : (
+            <Button onClick={() => setEditing(newRule(userRules))}>Nueva regla</Button>
           )}
         </CardContent>
       </Card>
@@ -416,26 +471,14 @@ export function SettingsPage() {
               id="verbose-logging"
               checked={settings.verboseLogging}
               disabled={saving}
-              onCheckedChange={(on: boolean) => void persist({ ...settings, verboseLogging: on })}
+              onCheckedChange={(on: boolean) =>
+                persist((current) => ({ ...current, verboseLogging: on }))
+              }
             />
           </div>
         </CardContent>
       </Card>
 
-      {editing ? (
-        <RuleEditor
-          rule={editing}
-          preview={preview}
-          onCancel={() => setEditing(undefined)}
-          onSave={(saved) => {
-            const next = state.userRules.some((r) => r.id === saved.id)
-              ? state.userRules.map((r) => (r.id === saved.id ? saved : r))
-              : [...state.userRules, saved];
-            setEditing(undefined);
-            void persistRules(next);
-          }}
-        />
-      ) : null}
     </div>
   );
 }
@@ -462,9 +505,9 @@ async function loadPreviewMovements(
   }
 }
 
-function newRule(): Rule {
+function newRule(existing: readonly Rule[]): Rule {
   return {
-    id: `user.${Date.now().toString(36)}`,
+    id: newRuleId(existing),
     name: '',
     enabled: true,
     priority: 500,

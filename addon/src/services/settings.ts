@@ -102,7 +102,17 @@ export function clampWindow(days: number): number {
  * user's own, ordered by priority.
  */
 export async function loadEffectiveRules(store: KeyValueStore): Promise<Rule[]> {
-  const [settings, userRules] = await Promise.all([loadSettings(store), loadUserRules(store)]);
+  // Read independently. Under one `Promise.all` a rejection on either key
+  // failed both, and the import's fallback is `defaultRules()` — every
+  // built-in on, including the three that decide whether a movement counts as
+  // spending. A user who had switched one off got it back without being told,
+  // behind a banner that only said the user's own rules were missing. Losing
+  // the user's rules costs categorisation; losing which built-ins they
+  // disabled costs their totals.
+  const [settings, userRules] = await Promise.all([
+    loadSettings(store),
+    loadUserRules(store).catch(() => [] as Rule[]),
+  ]);
   const disabled = new Set(settings.disabledBuiltinRules);
 
   const builtins = defaultRules().map((rule) =>
