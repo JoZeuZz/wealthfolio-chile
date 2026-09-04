@@ -60,6 +60,18 @@ export interface ParseAmountResult {
    * should surface this as an import warning rather than silently trusting it.
    */
   ambiguous: boolean;
+  /**
+   * The cell carried its own direction marker, so the profile's `amountSign`
+   * must not be applied on top of it.
+   *
+   * Without this the credit half of the feature did nothing: `80.000 CR` had
+   * its marker stripped, stayed positive, and was then negated by every
+   * `debit-positive` profile — every card statement — turning a payment into a
+   * purchase of the same size. Only the debit markers were ever reaching the
+   * sign, which is why the gap went unnoticed: on those profiles the marker and
+   * the default happened to agree.
+   */
+  explicitSign?: 'debit' | 'credit';
 }
 
 export function money(minor: number, scale: number, currency: string): Money {
@@ -213,13 +225,19 @@ export function parseAmount(raw: string, options: ParseAmountOptions): ParseAmou
     text = text.slice(1, -1).trim();
   }
 
+  let explicitSign: 'debit' | 'credit' | undefined;
   if (allowDebitCreditSuffix) {
     const suffix = text.match(/\b(CR|CREDITO|CRÉDITO|ABONO|D|DB|DEBITO|DÉBITO|CARGO)\s*$/i);
     if (suffix?.[1]) {
       const marker = suffix[1].toUpperCase();
-      if (marker === 'D' || marker === 'DB' || marker.startsWith('DEB') || marker.startsWith('DÉB') || marker === 'CARGO') {
-        negative = true;
-      }
+      const debit =
+        marker === 'D' ||
+        marker === 'DB' ||
+        marker.startsWith('DEB') ||
+        marker.startsWith('DÉB') ||
+        marker === 'CARGO';
+      explicitSign = debit ? 'debit' : 'credit';
+      if (debit) negative = true;
       text = text.slice(0, suffix.index).trim();
     }
   }
@@ -262,6 +280,7 @@ export function parseAmount(raw: string, options: ParseAmountOptions): ParseAmou
   return {
     money: money(negative ? -magnitude : magnitude, fractionPart.length, currency),
     ambiguous,
+    ...(explicitSign ? { explicitSign } : {}),
   };
 }
 

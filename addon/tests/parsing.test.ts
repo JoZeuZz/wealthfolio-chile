@@ -8,6 +8,9 @@ import {
   trimSheet,
 } from '../src/core/parsing/tabular';
 import { loadWorkbook } from '../src/core/parsing/workbook';
+import { buildDuplicateIndex } from '../src/core/dedupe/classify';
+import { Direction, TransactionKind } from '../src/core/model/kinds';
+import { prepareImport } from '../src/core/pipeline';
 import { fromLatin1, fromText, loadFixture } from './fixtures';
 
 describe('detectDelimiter', () => {
@@ -148,5 +151,95 @@ describe('loadWorkbook', () => {
 
   it('refuses a PDF with an actionable message', () => {
     expect(() => loadWorkbook(fromText('cartola.pdf', '%PDF-1.7 blah'))).toThrow(/CSV o XLSX/);
+  });
+});
+
+/**
+ * El signo de una fila: quién decide y en qué orden.
+ *
+ * Tres fuentes pueden decirlo, y estaban mal ordenadas:
+ *
+ * 1. Un marcador en la propia celda (`80.000 CR`). Se reconocía y se tiraba.
+ * 2. Una columna de dirección (`D/C`, `Cargo/Abono`). Su vocabulario estaba
+ *    codificado en una sola tabla que trataba `C` como cargo — cierto bajo una
+ *    cabecera `Cargo/Abono`, falso bajo una `D/C`, donde `C` es Crédito. Con una
+ *    sola tabla, una de las dos lecturas está garantizadamente equivocada.
+ * 3. El `amountSign` del perfil, que es el default y sólo eso.
+ */
+describe('quién decide el signo de una fila', () => {
+  function cardRows(rows: string[]) {
+    return prepareImport({
+      file: fromText(
+        'estado-cuenta.csv',
+        ['Fecha;Descripcion;Monto;Cuotas', ...rows].join('\n'),
+      ),
+      accountId: 'acc-card',
+      parserId: 'generico.tarjeta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    }).rows;
+  }
+
+  it('un sufijo de abono gana al amountSign del perfil', () => {
+    // `generico.tarjeta` es `debit-positive`: sin esto, un pago recibido de
+    // 80.000 se guardaba como una compra de 80.000.
+    const rows = cardRows([
+      '05/02/2026;COMPRA SUPERMERCADO;35.000;',
+      '13/02/2026;PAGO RECIBIDO GRACIAS;80.000 CR;',
+    ]);
+
+    expect(rows[1]?.transaction.amount.minor).toBe(80000);
+    expect(rows[1]?.transaction.direction).toBe(Direction.in);
+    expect(rows[1]?.transaction.kind).toBe(TransactionKind.credit_card_payment);
+  });
+
+  it('un sufijo de cargo también gana, en el mismo perfil', () => {
+    const rows = cardRows(['05/02/2026;COMPRA SUPERMERCADO;35.000 CARGO;']);
+    expect(rows[0]?.transaction.amount.minor).toBe(-35000);
+  });
+
+  it('sin sufijo el perfil sigue mandando', () => {
+    const rows = cardRows(['05/02/2026;COMPRA SUPERMERCADO;35.000;']);
+    expect(rows[0]?.transaction.amount.minor).toBe(-35000);
+  });
+
+  function flagged(header: string, rows: string[]) {
+    return prepareImport({
+      file: fromText(
+        'cartola.csv',
+        [`Fecha;Descripcion;Monto;${header};Saldo`, ...rows].join('\n'),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+  }
+
+  it('bajo una cabecera D/C, una C es Crédito', () => {
+    const prepared = flagged('D/C', ['01/02/2026;SUELDO;500.000;C;600.000']);
+    expect(prepared.rows[0]?.transaction.amount.minor).toBe(500000);
+    expect(prepared.rows[0]?.transaction.direction).toBe(Direction.in);
+  });
+
+  it('bajo una cabecera D/C, una D es Débito', () => {
+    const prepared = flagged('D/C', ['01/02/2026;COMPRA;500.000;D;100.000']);
+    expect(prepared.rows[0]?.transaction.amount.minor).toBe(-500000);
+  });
+
+  it('bajo una cabecera Cargo/Abono, una C es Cargo', () => {
+    const prepared = flagged('Cargo/Abono', ['01/02/2026;COMPRA;500.000;C;100.000']);
+    expect(prepared.rows[0]?.transaction.amount.minor).toBe(-500000);
+  });
+
+  it('bajo una cabecera Cargo/Abono, una A es Abono', () => {
+    const prepared = flagged('Cargo/Abono', ['01/02/2026;SUELDO;500.000;A;600.000']);
+    expect(prepared.rows[0]?.transaction.amount.minor).toBe(500000);
+  });
+
+  it('un valor que la cabecera no explica hace fallar la fila, no adivina', () => {
+    const prepared = flagged('D/C', ['01/02/2026;MOVIMIENTO;500.000;X;600.000']);
+    expect(prepared.statement.rowStats.failed).toBe(1);
+    expect(prepared.validation.ok).toBe(false);
   });
 });

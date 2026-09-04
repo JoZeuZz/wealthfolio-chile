@@ -157,3 +157,38 @@ describe('formatCLP', () => {
     expect(formatCLP(money(1050, 2, 'USD'))).toBe('USD 10,50');
   });
 });
+
+/**
+ * El marcador de signo tiene que llegar a quien decide el signo.
+ *
+ * `allowDebitCreditSuffix` reconocía `CR`/`ABONO` y luego no lo contaba: el
+ * sufijo se recortaba, el valor quedaba positivo y `ParseAmountResult` no tenía
+ * dónde decir que la fila venía marcada como abono. En un perfil
+ * `debit-positive` —todas las tarjetas— `readAmount` negaba después todo lo que
+ * recibía, así que un `PAGO RECIBIDO 80.000 CR` se guardaba como una compra de
+ * 80.000: el mes se sobrestimaba en el doble del pago y la tarjeta nunca
+ * aparecía pagada.
+ */
+describe('marcador explícito de cargo/abono', () => {
+  it('un sufijo de abono se reporta como tal', () => {
+    expect(
+      parseAmount('80.000 CR', { currency: 'CLP', allowDebitCreditSuffix: true }).explicitSign,
+    ).toBe('credit');
+  });
+
+  it('un sufijo de cargo se reporta como tal', () => {
+    expect(
+      parseAmount('12.500 CARGO', { currency: 'CLP', allowDebitCreditSuffix: true }).explicitSign,
+    ).toBe('debit');
+  });
+
+  it('sin sufijo no hay marcador y el perfil sigue decidiendo', () => {
+    expect(
+      parseAmount('12.500', { currency: 'CLP', allowDebitCreditSuffix: true }).explicitSign,
+    ).toBeUndefined();
+  });
+
+  it('el sufijo no se busca cuando el perfil no lo permite', () => {
+    expect(() => parseAmount('80.000 CR', { currency: 'CLP' })).toThrow(MoneyError);
+  });
+});

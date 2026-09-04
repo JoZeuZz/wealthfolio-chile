@@ -7,7 +7,7 @@ import type { RowStats, StatementIssue } from '../model/statement';
 import type { NormalizedTransaction, TransactionWarning } from '../model/transaction';
 import { redactDescription } from '../privacy';
 import { normalizeDescription } from '../text';
-import { cell, ColumnRole, type ColumnMap } from './columns';
+import { cell, ColumnRole, normalizeHeader, type ColumnMap } from './columns';
 import { resolveDateOrder, type DateOrderEvidence } from './date-order';
 import { COMMON_IGNORE_PATTERNS, type StatementProfile } from './profile';
 import { isBlankRow, type Sheet } from './tabular';
@@ -70,6 +70,13 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
     profile.dateOrder,
   );
 
+  // The heading above the direction column, read once. Its wording is what
+  // fixes the meaning of the abbreviations underneath it.
+  const directionFlagHeader =
+    map.directionFlag !== undefined && firstDataRow > 0
+      ? normalizeHeader((sheet.rows[firstDataRow - 1] as string[] | undefined)?.[map.directionFlag] ?? '')
+      : undefined;
+
   const transactions: NormalizedTransaction[] = [];
   const issues: StatementIssue[] = [...describeDateOrder(dateOrder, profile)];
   let dataRows = 0;
@@ -102,6 +109,7 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
         fileHash,
         accountRef,
         dateOrder: dateOrder.order,
+        ...(directionFlagHeader !== undefined ? { directionFlagHeader } : {}),
       });
       if (transaction === null) {
         skipped += 1;
@@ -136,6 +144,8 @@ interface MapRowInput {
   accountRef?: string;
   /** Settled for the whole file by {@link resolveDateOrder}. */
   dateOrder: StatementProfile['dateOrder'];
+  /** The direction column's heading, normalised. See {@link readDirectionFlag}. */
+  directionFlagHeader?: string;
 }
 
 /**
@@ -170,7 +180,16 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
   }
 
   const description = cell(row, map, ColumnRole.description);
-  const amountResult = readAmount({ row, map, profile, currency, warnings });
+  const amountResult = readAmount({
+    row,
+    map,
+    profile,
+    currency,
+    warnings,
+    ...(input.directionFlagHeader !== undefined
+      ? { directionFlagHeader: input.directionFlagHeader }
+      : {}),
+  });
   if (amountResult === null) return null;
   const amount = amountResult;
 
@@ -343,6 +362,13 @@ interface ReadAmountInput {
   profile: StatementProfile;
   currency: string;
   warnings: TransactionWarning[];
+  /**
+   * The direction column's own header, normalised.
+   *
+   * Needed because the values are abbreviations whose meaning is fixed by the
+   * heading above them, not by a global table. See {@link readDirectionFlag}.
+   */
+  directionFlagHeader?: string;
 }
 
 /**
@@ -362,6 +388,7 @@ function readAmount(input: ReadAmountInput): Money | null {
     const text = cell(row, map, ColumnRole.installmentAmount);
     if (text !== '') {
       const parsed = parseAmount(text, { currency, format, allowDebitCreditSuffix: true });
+      if (parsed.explicitSign) return signedByMarker(parsed.money, parsed.explicitSign);
       return profile.amountSign === 'debit-positive' ? negate(parsed.money) : parsed.money;
     }
   }
@@ -394,15 +421,61 @@ function readAmount(input: ReadAmountInput): Money | null {
     });
   }
 
-  const flag = cell(row, map, ColumnRole.directionFlag).toUpperCase();
+  // The cell said so itself. Nothing below may override that: a marker in the
+  // data is more specific than any default the profile carries.
+  if (parsed.explicitSign) return signedByMarker(parsed.money, parsed.explicitSign);
+
+  const flag = cell(row, map, ColumnRole.directionFlag).trim();
   if (flag !== '') {
-    const outflow = /^(C|CARGO|D|DEBITO|DÉBITO|DEBE)$/.test(flag);
-    return outflow ? negate(abs(parsed.money)) : abs(parsed.money);
+    return signedByMarker(parsed.money, readDirectionFlag(flag, input.directionFlagHeader));
   }
 
   if (profile.amountSign === 'debit-positive') return negate(parsed.money);
   if (profile.amountSign === 'credit-positive') return parsed.money;
   return parsed.money;
+}
+
+/** Apply a direction that something other than the profile decided. */
+function signedByMarker(amount: Money, marker: 'debit' | 'credit'): Money {
+  return marker === 'debit' ? negate(abs(amount)) : abs(amount);
+}
+
+/**
+ * What a value in the direction column means.
+ *
+ * The abbreviations are only unambiguous relative to their own heading, and
+ * both readings of a bare `C` are in circulation in Chilean exports:
+ *
+ * - under `D/C` or `Debe/Haber`, `C` is **Crédito** — money in.
+ * - under `Cargo/Abono`, `C` is **Cargo** — money out.
+ *
+ * A single hard-coded table has to be wrong about one of them, and it was:
+ * every `C` was read as a charge, so under a `D/C` heading a salary of 500.000
+ * was booked as a 500.000 expense — a million-peso swing across the month's
+ * income and spending, with a balance walk that never tests the first row to
+ * catch it.
+ *
+ * A value neither vocabulary explains throws, so the row is recorded as failed
+ * and the statement stops being importable. Guessing at the sign of a movement
+ * is the one thing this module must not do.
+ */
+function readDirectionFlag(value: string, header?: string): 'debit' | 'credit' {
+  const flag = normalizeDescription(value);
+  const heading = header ?? '';
+  // `Cargo/Abono` names its outflow explicitly; `D/C` and `Debe/Haber` do not.
+  const cargoAbono = heading.includes('CARGO') || heading.includes('ABONO');
+
+  if (cargoAbono) {
+    if (/^(C|CARGO|CARGOS)$/.test(flag)) return 'debit';
+    if (/^(A|AB|ABONO|ABONOS)$/.test(flag)) return 'credit';
+  } else {
+    if (/^(D|DB|DEBITO|DEBE|CARGO)$/.test(flag)) return 'debit';
+    if (/^(C|CR|CREDITO|H|HABER|ABONO)$/.test(flag)) return 'credit';
+  }
+
+  throw new Error(
+    `la columna de dirección dice "${value}", que no significa nada bajo la cabecera "${header ?? '(sin cabecera)'}"`,
+  );
 }
 
 /**
