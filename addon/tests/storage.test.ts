@@ -346,3 +346,78 @@ describe('storage dañado', () => {
     expect(await list.readAll()).toEqual(items(1, 5));
   });
 });
+
+/**
+ * Un shard corrupto no es un shard vacío.
+ *
+ * `inspect()` ya lo decía en su propio comentario —«un `[]` para un valor que
+ * no se pudo parsear es pérdida silenciosa de datos»— pero `readAll`,
+ * `readRecent`, `deriveTotal` y `append` pasaban todos por `readShard`, que
+ * hacía exactamente eso.
+ *
+ * La consecuencia no era sólo leer de menos: el siguiente `append` leía `[]`,
+ * añadía encima y **reescribía** el shard, destruyendo la corrupción junto con
+ * los 49 registros que la acompañaban. La avería era detectable —`inspect()` la
+ * encontraba— y la siguiente importación borraba la evidencia.
+ */
+describe('daño en un shard', () => {
+  async function threeRuns() {
+    const store = memoryStore();
+    const list = new ShardedList<{ n: number }>(store, 'wfcl.imports', 50);
+    await list.append([{ n: 1 }, { n: 2 }, { n: 3 }]);
+    return { store, list };
+  }
+
+  it('leer un shard ilegible falla en vez de devolver una lista vacía', async () => {
+    const { store, list } = await threeRuns();
+    store.data.set('wfcl.imports.s0', '[{"n":1},{"n"');
+
+    await expect(list.readAll()).rejects.toThrow();
+  });
+
+  it('el conteo tampoco finge', async () => {
+    const { store, list } = await threeRuns();
+    store.data.set('wfcl.imports.s0', 'no es json');
+
+    await expect(list.count()).rejects.toThrow();
+  });
+
+  it('y sobre todo, añadir no lo sobrescribe', async () => {
+    const { store, list } = await threeRuns();
+    store.data.set('wfcl.imports.s0', '[{"n":1},{"n"');
+
+    await expect(list.append([{ n: 4 }])).rejects.toThrow();
+    // La evidencia sigue ahí para que `inspect()` la pueda encontrar.
+    expect(store.data.get('wfcl.imports.s0')).toBe('[{"n":1},{"n"');
+  });
+
+  it('inspect sigue funcionando, porque diagnosticar es su trabajo', async () => {
+    const { store, list } = await threeRuns();
+    store.data.set('wfcl.imports.s0', '[{"n":1},{"n"');
+
+    const report = await list.inspect();
+    expect(report.corruptShards).toEqual([0]);
+  });
+});
+
+/**
+ * El tamaño de shard con el que se escribió tiene que viajar con los datos.
+ *
+ * `deriveTotal` multiplica por `itemsPerShard` sin haberlo guardado nunca, así
+ * que cambiar la constante hace que el conteo de una lista ya escrita salga
+ * mal — 120 elementos escritos con 50 por shard se leen como 220 con 100.
+ * `INDEX_VERSION` se escribía y no se leía en ninguna parte, así que la única
+ * guarda que podía atrapar esto estaba inerte.
+ */
+describe('el índice recuerda con qué tamaño de shard se escribió', () => {
+  it('una lista escrita con otro tamaño se lee con el suyo, no con el actual', async () => {
+    const store = memoryStore();
+    const written = new ShardedList<{ n: number }>(store, 'wfcl.runs', 50);
+    await written.append(Array.from({ length: 120 }, (_, n) => ({ n })));
+
+    const readBack = new ShardedList<{ n: number }>(store, 'wfcl.runs', 100);
+
+    expect(await readBack.count()).toBe(120);
+    expect(await readBack.readAll()).toHaveLength(120);
+  });
+});

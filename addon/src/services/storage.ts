@@ -155,7 +155,9 @@ export class ShardedList<T> {
 
     return {
       shards,
-      total: await this.deriveTotal(shards),
+      // Diagnosing is this method's job, so a shard it cannot read must not
+      // stop it: the count is reported as far as it can be established.
+      total: corruptShards.length > 0 ? await this.countReadableItems(shards) : await this.deriveTotal(shards),
       recoveredShards: Math.max(0, shards - stored.shards),
       corruptShards,
     };
@@ -186,8 +188,34 @@ export class ShardedList<T> {
     await writeJson(this.store, this.indexKey(), {
       v: INDEX_VERSION,
       shards,
+      // Recorded because `deriveTotal` multiplies by it. Without it, changing
+      // the constant silently rewrites the count of every list already on disk:
+      // 120 items written at 50 per shard read back as 220 at 100. Nothing
+      // changes the value today; this is the trap laid for whoever tunes it.
+      perShard: this.itemsPerShard,
       total: (shards - 1) * this.itemsPerShard + lastShardLength,
     } satisfies StoredIndex);
+  }
+
+  /** The shard size this list was written with, not the one it was constructed with. */
+  private async storedPerShard(): Promise<number> {
+    const stored = await this.readIndex();
+    return typeof stored.perShard === 'number' && stored.perShard > 0
+      ? stored.perShard
+      : this.itemsPerShard;
+  }
+
+  /** Items across every shard that can actually be read. */
+  private async countReadableItems(shards: number): Promise<number> {
+    let total = 0;
+    for (let shard = 0; shard < shards; shard += 1) {
+      try {
+        total += (await this.readShard(shard)).length;
+      } catch {
+        // Counted by `corruptShards` instead.
+      }
+    }
+    return total;
   }
 
   /**
@@ -214,11 +242,35 @@ export class ShardedList<T> {
   private async deriveTotal(shards: number): Promise<number> {
     if (shards === 0) return 0;
     const last = await this.readShard(shards - 1);
-    return (shards - 1) * this.itemsPerShard + last.length;
+    return (shards - 1) * (await this.storedPerShard()) + last.length;
   }
 
+  /**
+   * A shard's contents, or an error.
+   *
+   * Deliberately not `readJson(..., [])`. `inspect()` already says why in its
+   * own comment — "a corrupt shard is reported rather than read as an empty
+   * one: `[]` for a value that failed to parse is silent data loss" — but every
+   * other reader went through here and did exactly that. The damage was not
+   * only reading short: the next `append` read `[]`, appended to it and wrote
+   * the shard back, destroying the corruption together with the 49 records
+   * beside it. The fault was detectable and the next import erased the
+   * evidence.
+   *
+   * An *absent* shard is still an empty one. That is the ordinary interrupted
+   * append, and `probeShardCount` exists to handle it.
+   */
   private async readShard(shard: number): Promise<T[]> {
-    return readJson<T[]>(this.store, this.shardKey(shard), []);
+    const key = this.shardKey(shard);
+    const raw = await this.store.get(key);
+    if (raw === null) return [];
+    const parsed = safeParse(raw);
+    if (!Array.isArray(parsed)) {
+      throw new StorageError(
+        `el bloque ${shard} de ${this.prefix} no se puede leer; no se tocará para no perder lo que queda en él`,
+      );
+    }
+    return parsed as T[];
   }
 }
 
@@ -237,6 +289,14 @@ interface StoredIndex {
   /** Absent on indexes written before the field existed. */
   v?: number;
   shards: number;
+  /**
+   * Items per shard at the time of writing.
+   *
+   * Absent on indexes written before this field existed, in which case the
+   * reader's own value is the only answer available — which is what the
+   * constructor default was silently assuming for every list.
+   */
+  perShard?: number;
   /** Kept for older readers. Never trusted — see `deriveTotal`. */
   total: number;
 }
