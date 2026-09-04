@@ -124,12 +124,22 @@ export function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setMonth(addMonthsToKey(month, -1))}>
-            ←
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Ver el mes anterior"
+            onClick={() => setMonth(addMonthsToKey(month, -1))}
+          >
+            <span aria-hidden>←</span>
           </Button>
           <span className="min-w-40 text-center text-sm font-medium">{formatMonthKey(month)}</span>
-          <Button variant="outline" size="sm" onClick={() => setMonth(addMonthsToKey(month, 1))}>
-            →
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Ver el mes siguiente"
+            onClick={() => setMonth(addMonthsToKey(month, 1))}
+          >
+            <span aria-hidden>→</span>
           </Button>
           <Button
             variant="outline"
