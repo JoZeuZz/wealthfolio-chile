@@ -146,6 +146,27 @@ en `ctx.api.secrets` (cifrado en reposo, acotado al addon), nunca en
 
 ---
 
+## Calibrar contra una cartola real
+
+`pnpm calibrate` (ver [BANK_FORMATS.md](BANK_FORMATS.md)) es el único punto del
+proyecto que toca un archivo real a propósito, así que es el que más defensas
+lleva:
+
+- **se niega** si el archivo está dentro del repositorio y Git no lo ignora,
+  preguntándole a `git check-ignore` en vez de adivinar;
+- lee el archivo en memoria durante una llamada y no lo copia a ninguna parte
+  —ni al repositorio, ni a `.ai/`, ni a `/tmp`—;
+- su salida son conteos, códigos y encabezados de columna. Ni glosas, ni
+  montos, ni RUT, ni números de cuenta, ni el nombre del archivo. Los tests de
+  `addon/tests/calibration.test.ts` comprueban las ausencias, no sólo las
+  presencias.
+
+Un informe de calibración no sustituye al fixture sintético. Sigue prohibido
+derivar un fixture de una cartola real cambiándole los nombres: un fixture se
+escribe a mano.
+
+---
+
 ## Si algo se filtra igual
 
 1. `git rm --cached` no basta: el dato queda en el historial.

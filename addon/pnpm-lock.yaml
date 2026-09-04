@@ -96,6 +96,9 @@ importers:
       vite:
         specifier: ^7.3.2
         version: 7.3.6(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)
+      vite-node:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@20.19.43)(happy-dom@20.13.2)(jiti@2.7.0)(jsdom@30.0.1)(lightningcss@1.32.0)

@@ -196,3 +196,71 @@ quiere importar de una institución todavía no cubierta.
 El paso 5 no es opcional: es lo que permite que el arreglo quede protegido por
 un test sin que ningún dato real entre al repositorio. Ver
 [PRIVACY.md](PRIVACY.md).
+
+---
+
+## `pnpm calibrate` — el paso 3, con números
+
+Los pasos 3 y 4 de arriba dicen «revisar la vista previa» y «ajustar el
+perfil». Entre los dos hay una pregunta que a ojo no se responde: *en qué* se
+equivocó el perfil. Para eso existe la herramienta.
+
+```bash
+cd addon
+pnpm calibrate -- ~/Descargas/cartola.csv
+pnpm calibrate -- ~/Descargas/cartola.xlsx --parser banco-chile.cuenta-corriente
+```
+
+Imprime, y nada más que esto:
+
+| Bloque | Para qué sirve |
+| --- | --- |
+| Detección | Con qué perfil se leyó, con cuánta confianza y **qué otros perfiles reclamaron el archivo**. Dos perfiles empatados es un problema de perfiles que no aparece en la salida de ninguno de los dos. |
+| Cabecera | Las columnas mapeadas y, sobre todo, **las que no**. Una columna que el banco imprime y el perfil ignora es un `columnSynonyms` que falta. |
+| Filas | Leídas, omitidas, fallidas, con los números de línea de las fallidas. |
+| Montos | Cuántos montos quedaron en cada escala decimal. Una nube de escala 2 en una cartola en pesos dice que el separador de miles se leyó como decimal — el error más caro posible, invisible en un conteo de filas. |
+| Fechas | Orden del archivo, fechas distintas, filas cuya fecha o monto admitía más de una lectura. |
+| Saldos | Pasos comprobados, descuadres y **de qué clase**: `sign` (convención de signo al revés), `scale-100` (factor de cien). La clase, nunca el tamaño. |
+| Clasificación | Filas por tipo, sin clasificar, y las clasificadas sólo por el producto. |
+
+### Lo que no imprime, por diseño
+
+Un informe de calibración se pega en un issue y se lee por encima del hombro,
+así que no lleva la cartola:
+
+- ninguna glosa, comercio ni nombre de titular;
+- ningún monto — ni siquiera un total. Sólo la *forma* de los montos;
+- ningún RUT, número de cuenta ni de tarjeta;
+- ningún nombre de archivo: su extensión, su tamaño y los primeros doce
+  caracteres de su huella SHA-256.
+
+Los encabezados de columna sí salen, y a propósito: `Cargo`, `Abono`,
+`Saldo contable` son el vocabulario de formato que un perfil tiene que
+aprender, y no identifican a nadie. Aun así pasan por `redactSensitive`.
+
+Todo esto está fijado por tests en `addon/tests/calibration.test.ts`, que
+comprueban tanto lo que el informe dice como lo que no puede decir.
+
+### La guarda
+
+La herramienta **se niega** a leer un archivo que esté dentro del repositorio y
+que Git no ignore:
+
+```
+"addon/cartola.csv" está dentro del repositorio y Git no lo ignora, así que un
+`git add -A` lo dejaría preparado para commit.
+```
+
+`samples/private/` sí está ignorado y sí se acepta. La pregunta «¿está
+ignorado?» se la hace a `git check-ignore`, no a una reimplementación de
+`.gitignore`.
+
+El archivo se lee en memoria durante una llamada y no se copia a ninguna parte:
+ni al repositorio, ni a `.ai/`, ni a un directorio temporal.
+
+### Y después
+
+Un informe de calibración **no** convierte un perfil en `verified`. Eso sigue
+necesitando el paso 5: un fixture sintético equivalente, escrito a mano, y
+tests contra él. Anonimizar la cartola real cambiando unos nombres no es
+equivalente y no se hace.
