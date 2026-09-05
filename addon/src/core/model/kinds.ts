@@ -27,6 +27,16 @@ export const TransactionKind = {
   credit_card_payment: 'credit_card_payment',
   /** A purchase charged to a credit line rather than a cash balance. */
   credit_card_purchase: 'credit_card_purchase',
+  /**
+   * Cash drawn against a credit line: an avance en efectivo.
+   *
+   * The reglamento defines it as the issuer granting "un préstamo o mutuo de
+   * dinero" against the cupo, which is why it is not a purchase: two things
+   * happen at once, debt is created and cash comes out. The statement shows one
+   * line, and the addon keeps it as one — splitting it would mean inventing the
+   * other half of a movement no bank reported.
+   */
+  cash_advance: 'cash_advance',
   /** Reversal of an earlier expense (anulación, devolución). */
   refund: 'refund',
   /** Bank or card fee: comisión, mantención, cargo por administración. */
@@ -85,6 +95,12 @@ export const NON_SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
 /**
  * Kinds that count as real outflow in cash-flow and category reports.
  *
+ * `cash_advance` is here for the same reason a `GIRO CAJERO` on a current
+ * account has always been spending: the cash left the tool's field of view and
+ * was spent. Leaving it out would report a month where $200.000 was drawn as a
+ * month where nothing happened. It cannot double-count either — the payment
+ * that later settles the card is already excluded.
+ *
  * `interest` is here for the charged direction only — the direction gate in
  * `isSpending` handles that, and `isIncome` keeps interest *earned* as income.
  * It used to be in none of the three sets, so an outgoing interest charge was
@@ -96,6 +112,7 @@ export const NON_SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
 export const SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
   TransactionKind.expense,
   TransactionKind.credit_card_purchase,
+  TransactionKind.cash_advance,
   TransactionKind.fee,
   TransactionKind.tax,
   TransactionKind.interest,

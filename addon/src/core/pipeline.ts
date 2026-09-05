@@ -1,5 +1,6 @@
 import { computeFileHash, computeWeakFingerprint, withFingerprints } from './dedupe/fingerprint';
 import { dedupeBatch, type DedupeBatchResult, type DuplicateIndex } from './dedupe/classify';
+import { withFinancialCost } from './chile/financial-costs';
 import { buildInstallmentPlans } from './installments/plans';
 import { abs, add, zero, type Money } from './money';
 import { Confidence, Direction, isIncome, isSpending, TransactionKind } from './model/kinds';
@@ -14,8 +15,8 @@ import { applyRulesToBatch, type Rule } from './rules/engine';
 /**
  * The import pipeline, end to end.
  *
- * read file -> detect parser -> parse -> fingerprint -> rules -> dedupe ->
- * installments -> preview
+ * read file -> detect parser -> parse -> fingerprint -> rules ->
+ * financial costs -> dedupe -> installments -> preview
  *
  * Every stage is pure: given the same bytes, the same rules and the same
  * existing-movement index, the result is byte-identical. That is what makes the
@@ -156,7 +157,10 @@ export function prepareImport(input: PrepareInput): PreparedImport {
     product: statement.account.product,
   });
 
-  const enriched = ruleOutcomes.map((outcome) => outcome.transaction);
+  // After the rules, not before: a user rule that confirms a classification
+  // has to be able to stand, and the cost reading only corrects a row nobody
+  // else was sure about. See `withFinancialCost`.
+  const enriched = ruleOutcomes.map((outcome) => withFinancialCost(outcome.transaction));
   const dedupe = dedupeBatch(enriched, input.duplicateIndex, scope);
 
   const rows: PreviewRow[] = dedupe.results.map((result, index) => {

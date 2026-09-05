@@ -75,6 +75,26 @@ export const CARD_REVERSAL_MARKERS: readonly string[] = [
   'RETRACTO',
 ];
 
+/**
+ * Wording for cash drawn against the credit line.
+ *
+ * Read as whole tokens on the normalised description, never as substrings: a
+ * merchant can be called `AVANCE CAPACITACION`, and `SUPERAVANCE` is one word
+ * in some statements and two in others.
+ *
+ * A glosa that also says `COMISION` is not the advance — it is the fee charged
+ * for it, and `core/chile/financial-costs` owns that reading. The guard belongs
+ * here, before the advance is named, because a fee misread as a loan would
+ * report a $4.500 charge as $4.500 of cash the user never received.
+ */
+const CASH_ADVANCE_PHRASES: readonly RegExp[] = [
+  /\bAVANCES?\s+(?:EN\s+|DE\s+)?EFECTIVO\b/,
+  /\bSUPER\s*AVANCES?\b/,
+];
+
+/** The bare word, which is enough on a card and not enough to be sure. */
+const CASH_ADVANCE_TOKEN = /\bAVANCES?\b/;
+
 /** The subset of a movement this module reads. */
 export interface DescribedMovement {
   description: string;
@@ -169,6 +189,8 @@ export function defaultKindForRow(input: {
   }
 
   if (input.direction === Direction.out) {
+    const advance = readCashAdvance(input.description);
+    if (advance) return advance;
     return byProduct(TransactionKind.credit_card_purchase);
   }
 
@@ -196,6 +218,25 @@ export interface DefaultKind {
 /** The glosa named this movement. */
 function named(kind: TransactionKind): DefaultKind {
   return { kind, confidence: Confidence.confirmed, ambiguousCardCredit: false };
+}
+
+/**
+ * Whether an outgoing card row is an avance en efectivo.
+ *
+ * Only ever consulted for a card or a credit line. On a current account
+ * `AVANCE EN EFECTIVO` would be the *deposit* of an advance taken elsewhere, or
+ * a merchant name, and neither is a loan against this account's cupo.
+ */
+function readCashAdvance(description: string): DefaultKind | undefined {
+  const text = normalizeDescription(description);
+  if (text === '' || /\bCOMISION(?:ES)?\b/.test(text)) return undefined;
+  if (CASH_ADVANCE_PHRASES.some((pattern) => pattern.test(text))) {
+    return named(TransactionKind.cash_advance);
+  }
+  // `AVANCE` alone is almost certainly an advance on a card statement, and
+  // "almost" is the whole difference: it is classified, and it is reviewable.
+  if (CASH_ADVANCE_TOKEN.test(text)) return byProduct(TransactionKind.cash_advance);
+  return undefined;
 }
 
 /** Nothing named it; this is what the product defaults to. */

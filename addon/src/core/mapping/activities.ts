@@ -10,6 +10,7 @@ import {
   toDecimalString,
   type Money,
 } from '../money';
+import type { FinancialCostKind } from '../model/financial-cost';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { EnrichedTransaction, NormalizedTransaction } from '../model/transaction';
 import { normalizeDescription } from '../text';
@@ -51,11 +52,17 @@ export const METADATA_NAMESPACE = 'wealthfolioChile';
  *   user changed it in Wealthfolio and our cached identity describes something
  *   that no longer exists".
  *
+ * - `4` — records `fc`, the financial-cost dimension. Absent means the glosa
+ *   named no cost, which is also what every blob written before schema 4 says
+ *   by omission: an older row is not "cost unknown", it is a row imported
+ *   before the addon could read costs at all, and re-reading it produces the
+ *   same `undefined` either way.
+ *
  * Readers must keep accepting `1` and `2`: activities written by 0.1.x are
  * still in the user's ledger and still have to round-trip. Without `proj` the
  * question "was this edited?" falls back to the host's own `isUserModified`.
  */
-export const METADATA_VERSION = 3;
+export const METADATA_VERSION = 4;
 
 /**
  * Metadata written on every activity we create.
@@ -109,6 +116,14 @@ export interface ChileMetadata {
   tags?: string[];
   /** Installment counter, when the row is part of a plan. */
   cuota?: { n: number; of: number };
+  /**
+   * Which financial cost the glosa named, when it named one.
+   *
+   * Cache, not provenance: a user who reclassifies the activity in Wealthfolio
+   * makes this stale like everything else derived from the row, and `proj` is
+   * what says so.
+   */
+  fc?: FinancialCostKind;
   /** Fingerprint of the matched transfer counterpart. */
   xfer?: string;
   /**
@@ -236,6 +251,7 @@ export function toActivityCreate(
     ...(transaction.installment
       ? { cuota: { n: transaction.installment.current, of: transaction.installment.total } }
       : {}),
+    ...(transaction.financialCost ? { fc: transaction.financialCost.kind } : {}),
     ...(transaction.transferCandidate?.counterpartFingerprint
       ? { xfer: transaction.transferCandidate.counterpartFingerprint }
       : {}),
@@ -396,8 +412,14 @@ function naturalActivityType(transaction: {
     case TransactionKind.income:
       return { activityType: 'DEPOSIT' };
 
+    // An avance is a loan against the cupo, which Wealthfolio has no type for.
+    // `WITHDRAWAL` is the least wrong of the fourteen — the cash did leave —
+    // and it is the same type a card purchase gets, so the substitution rules
+    // for a CREDIT_CARD account need no special case. What makes it an advance
+    // rather than a purchase lives in `metadata.kind`.
     case TransactionKind.expense:
     case TransactionKind.credit_card_purchase:
+    case TransactionKind.cash_advance:
       return { activityType: 'WITHDRAWAL' };
 
     case TransactionKind.internal_transfer:
@@ -756,6 +778,17 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
             total: metadata.cuota.of,
             confidence: Confidence.confirmed,
             matchedText: `${metadata.cuota.n}/${metadata.cuota.of}`,
+          },
+        }
+      : {}),
+    // The evidence text is not stored: it was a slice of the glosa, and the
+    // glosa is in `comment`. What has to survive is which cost it was.
+    ...(metadata.fc
+      ? {
+          financialCost: {
+            kind: metadata.fc,
+            confidence: Confidence.confirmed,
+            matchedText: '',
           },
         }
       : {}),

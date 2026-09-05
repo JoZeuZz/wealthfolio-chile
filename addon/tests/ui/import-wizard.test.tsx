@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { buildDuplicateIndex } from '../../src/core/dedupe/classify';
 import { readChileMetadata, toActivityCreate } from '../../src/core/mapping/activities';
 import { prepareImport } from '../../src/core/pipeline';
-import { ImportWizardPage } from '../../src/ui/pages/ImportWizardPage';
+import { TRANSACTION_KINDS, TransactionKind } from '../../src/core/model/kinds';
+import { ImportWizardPage, kindLabel } from '../../src/ui/pages/ImportWizardPage';
 import { accountStub, activityStub } from '../host';
 import { csvFile, renderPage } from './harness';
 
@@ -461,5 +462,23 @@ describe('saldos de la cartola en la vista previa', () => {
 
     await screen.findByText('Saldos');
     expect(screen.getByText(/inicial declarado · final sin dato/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Un tipo sin rótulo no rompe nada: la interfaz muestra el identificador
+ * interno en inglés, en medio de una tabla en español, y nadie lo nota hasta
+ * que un usuario pregunta qué es `cash_advance`. Enumerar el vocabulario
+ * completo hace que agregar un tipo sin nombrarlo sea un test rojo.
+ */
+describe('cada tipo de movimiento tiene nombre en la interfaz', () => {
+  it('no queda ningún identificador crudo', () => {
+    for (const kind of TRANSACTION_KINDS) {
+      expect(kindLabel(kind), kind).not.toBe(kind);
+    }
+  });
+
+  it('el avance en efectivo se llama por su nombre', () => {
+    expect(kindLabel(TransactionKind.cash_advance)).toBe('Avance en efectivo');
   });
 });

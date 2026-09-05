@@ -1,5 +1,6 @@
 import type { IsoDate } from '../dates';
 import type { Money } from '../money';
+import type { FinancialCostKind } from './financial-cost';
 import type { Confidence, Direction, TransactionKind } from './kinds';
 
 /**
@@ -77,6 +78,16 @@ export interface NormalizedTransaction {
   /** Installment metadata when the description encodes a cuota. */
   installment?: InstallmentInfo;
 
+  /**
+   * Which financial cost this movement is, when the glosa names one.
+   *
+   * A refinement of `kind`, never a replacement: `fee`, `interest` and `tax`
+   * keep the totals right, and this says *what the user is paying for* — the
+   * difference between the price of having the card and the price of having
+   * owed money on it. See `core/model/financial-cost`.
+   */
+  financialCost?: FinancialCostInfo;
+
   /** Set when this row looks like one leg of a transfer between own accounts. */
   transferCandidate?: TransferCandidate;
 
@@ -101,6 +112,15 @@ export interface InstallmentInfo {
   /** Confidence in the reading — `1/6` inside a date-like string is ambiguous. */
   confidence: Confidence;
   /** The exact substring the numbers were read from, for the review UI. */
+  matchedText: string;
+}
+
+/** The financial cost a description named, and how firmly. */
+export interface FinancialCostInfo {
+  kind: FinancialCostKind;
+  /** `confirmed` when the glosa named the specific cost, not just the family. */
+  confidence: Confidence;
+  /** The exact substring that named it, for the review UI. */
   matchedText: string;
 }
 

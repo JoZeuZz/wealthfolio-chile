@@ -955,6 +955,8 @@ const KIND_LABELS: Record<string, string> = {
   internal_transfer: 'Transferencia propia',
   credit_card_payment: 'Pago tarjeta',
   credit_card_purchase: 'Compra tarjeta',
+  cash_advance: 'Avance en efectivo',
+
   refund: 'Devolución',
   fee: 'Comisión',
   interest: 'Interés',
