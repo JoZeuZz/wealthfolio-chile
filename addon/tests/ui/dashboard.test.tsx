@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { formatMonthKey } from '../../src/core/dates';
 import { readChileMetadata, toActivityCreate } from '../../src/core/mapping/activities';
 import { money } from '../../src/core/money';
-import { TransactionKind } from '../../src/core/model/kinds';
+import { FinancialCostKind } from '../../src/core/model/financial-cost';
+import { Confidence, TransactionKind } from '../../src/core/model/kinds';
 import { DashboardPage } from '../../src/ui/pages/DashboardPage';
 import { makeTransaction } from '../fixtures';
 import { accountStub, activityStub } from '../host';
@@ -43,6 +44,7 @@ function activity(input: {
   currency?: string;
   scale?: number;
   merchant?: string;
+  financialCost?: FinancialCostKind;
 }) {
   const base = makeTransaction({
     amount: input.amount,
@@ -50,6 +52,15 @@ function activity(input: {
     description: input.description,
     kind: input.kind,
     ...(input.merchant !== undefined ? { merchant: input.merchant } : {}),
+    ...(input.financialCost !== undefined
+      ? {
+          financialCost: {
+            kind: input.financialCost,
+            confidence: Confidence.confirmed,
+            matchedText: input.description,
+          },
+        }
+      : {}),
   });
   const transaction = {
     ...base,
@@ -635,5 +646,107 @@ describe('cada tarjeta dice de qué moneda habla', () => {
     expect(block.textContent).toContain('Movimientos en USD');
     expect(within(block).getByText('Comprometido en cuotas')).toBeInTheDocument();
     expect(within(block).queryByText('Movimientos')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Qué cuesta la tarjeta, y por qué.
+ *
+ * El desglose contesta la pregunta que el panel no contestaba: de todo lo que
+ * salió este mes, cuánto fue consumo y cuánto fue el precio del crédito. Y
+ * dentro de eso, cuánto costó *deber* — interés, mora, cobranza — separado de
+ * lo que se paga por tener el instrumento aunque el saldo esté en cero.
+ */
+describe('la tarjeta de costos financieros', () => {
+  const withCosts = () => [
+    activity({
+      accountId: 'acc-clp',
+      amount: -45000,
+      date: DAY(0),
+      description: 'SUPERMERCADO GENERICO',
+      kind: TransactionKind.credit_card_purchase,
+      type: 'WITHDRAWAL',
+    }),
+    activity({
+      accountId: 'acc-clp',
+      amount: -12400,
+      date: DAY(1),
+      description: 'INTERES POR MORA',
+      kind: TransactionKind.interest,
+      type: 'FEE',
+      financialCost: FinancialCostKind.late_interest,
+    }),
+    activity({
+      accountId: 'acc-clp',
+      amount: -5900,
+      date: DAY(2),
+      description: 'COMISION DE MANTENCION',
+      kind: TransactionKind.fee,
+      type: 'FEE',
+      financialCost: FinancialCostKind.maintenance,
+    }),
+  ];
+
+  it('nombra cada costo en vez de mostrar "comisión" a secas', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: withCosts() });
+
+    expect(await screen.findByText('Costos financieros')).toBeInTheDocument();
+    expect(screen.getByText('Interés por mora')).toBeInTheDocument();
+    expect(screen.getByText('Comisión de mantención')).toBeInTheDocument();
+  });
+
+  it('separa lo que costó deber de lo que cuesta tener la tarjeta', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: withCosts() });
+
+    let card = (await screen.findByText('Costos financieros')) as HTMLElement;
+    while (card.parentElement && !card.textContent?.includes('Por deber')) {
+      card = card.parentElement;
+    }
+    expect(card.textContent).toContain('Por deber');
+    expect(card.textContent).toContain('Por tener el instrumento');
+  });
+
+  /**
+   * El avance no es un costo, es la deuda. Aparece al lado porque suele ser la
+   * línea que explica por qué hubo interés, y nunca dentro del total.
+   */
+  it('informa el avance en efectivo sin contarlo como costo', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        ...withCosts(),
+        activity({
+          accountId: 'acc-clp',
+          amount: -200000,
+          date: DAY(3),
+          description: 'AVANCE EN EFECTIVO',
+          kind: TransactionKind.cash_advance,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    expect(await screen.findByText(/Avance en efectivo/)).toBeInTheDocument();
+    // 12.400 + 5.900, no 218.300.
+    expect(screen.getByText('$18.300')).toBeInTheDocument();
+  });
+
+  it('un mes sin costos financieros no muestra la tarjeta', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -45000,
+          date: DAY(0),
+          description: 'SUPERMERCADO GENERICO',
+          kind: TransactionKind.credit_card_purchase,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    await screen.findByText('Flujo de caja');
+    expect(screen.queryByText('Costos financieros')).not.toBeInTheDocument();
   });
 });

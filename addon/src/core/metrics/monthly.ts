@@ -3,6 +3,10 @@ import { abs, add, compare, subtract, toNumber, zero, type Money } from '../mone
 import { Direction, isIncome, isSpending, TransactionKind } from '../model/kinds';
 import type { NormalizedTransaction } from '../model/transaction';
 import { categoryGroup, CategoryGroup } from '../categories/defaults';
+import {
+  isCostOfBorrowing,
+  type FinancialCostKind,
+} from '../model/financial-cost';
 
 /**
  * Monthly aggregates.
@@ -450,3 +454,97 @@ export function unattributedSpending(
  * point rather than an afterthought.
  */
 export type { RecurringCharge } from '../recurring/detect';
+
+/** One financial-cost line of a month, already summed. */
+export interface FinancialCostTotal {
+  kind: FinancialCostKind;
+  amount: Money;
+  transactionCount: number;
+}
+
+/**
+ * What a month of credit cost, split the way the question is actually asked.
+ *
+ * Every peso here is already inside `grossSpending`: this is a view *of* the
+ * spending, not spending beside it. A total that exceeded the month's gross
+ * spending would mean something was counted twice, and the tests say so.
+ *
+ * `cashAdvances` sits alongside rather than inside. An avance is not a cost —
+ * it is the debt itself — and adding it would report drawing $200.000 as
+ * $200.000 of cost. It is reported here anyway because it is usually the line
+ * that explains why there was interest at all.
+ */
+export interface FinancialCostBreakdown {
+  currency: string;
+  /** Every financial cost charged this month. */
+  total: Money;
+  /** The part that exists only because there was debt: interest, mora, cobranza. */
+  borrowing: Money;
+  /** The part charged for holding and using the instrument. */
+  instrument: Money;
+  /** Per cost, largest first. */
+  items: FinancialCostTotal[];
+  /** Cash drawn against the cupo. Not a cost. */
+  cashAdvances: Money;
+  cashAdvanceCount: number;
+}
+
+export function financialCostBreakdown(
+  transactions: readonly NormalizedTransaction[],
+  options: MetricsOptions = {},
+): FinancialCostBreakdown {
+  const currency = options.currency ?? currencyOf(transactions, 'CLP');
+
+  let total = zero(currency);
+  let borrowing = zero(currency);
+  let instrument = zero(currency);
+  let cashAdvances = zero(currency);
+  let cashAdvanceCount = 0;
+  const byKind = new Map<FinancialCostKind, { amount: Money; transactionCount: number }>();
+
+  for (const transaction of transactions) {
+    const magnitude = abs(transaction.amount);
+
+    if (
+      transaction.kind === TransactionKind.cash_advance &&
+      transaction.direction === Direction.out
+    ) {
+      cashAdvances = add(cashAdvances, magnitude);
+      cashAdvanceCount += 1;
+    }
+
+    const cost = transaction.financialCost;
+    // Direction, not kind: a refunded comisión carries the same dimension and
+    // gives money back. Counting it would say the charge happened twice.
+    if (!cost || transaction.direction !== Direction.out) continue;
+
+    total = add(total, magnitude);
+    if (isCostOfBorrowing(cost.kind)) {
+      borrowing = add(borrowing, magnitude);
+    } else {
+      instrument = add(instrument, magnitude);
+    }
+
+    const entry = byKind.get(cost.kind);
+    if (entry) {
+      entry.amount = add(entry.amount, magnitude);
+      entry.transactionCount += 1;
+    } else {
+      byKind.set(cost.kind, { amount: magnitude, transactionCount: 1 });
+    }
+  }
+
+  const items = [...byKind.entries()]
+    .map(([kind, entry]) => ({ kind, ...entry }))
+    .sort((a, b) => compare(b.amount, a.amount));
+
+  return {
+    currency,
+    total,
+    borrowing,
+    instrument,
+    items,
+    cashAdvances,
+    cashAdvanceCount,
+  };
+}

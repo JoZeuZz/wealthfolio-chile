@@ -24,12 +24,14 @@ import { buildInsights, type Insight } from '../../core/insights/rules';
 import { compareMonths, type MonthlyComparison } from '../../core/metrics/comparison';
 import { buildInstallmentPlans, buildOutlook } from '../../core/installments/plans';
 import {
+  financialCostBreakdown,
   summarizeByCurrency,
   summarizeMonth,
   totalsByCategory,
   totalsByMerchant,
   unattributedSpending,
 } from '../../core/metrics/monthly';
+import { financialCostLabel } from '../../core/model/financial-cost';
 import { findRecurringCharges } from '../../core/recurring/detect';
 import { mandateLabel } from '../../core/chile/mandates';
 import { formatCLP } from '../../core/money';
@@ -529,6 +531,75 @@ export function DashboardPage() {
             </Card>
           </section>
 
+          {view.financialCosts.items.length > 0 || view.financialCosts.cashAdvanceCount > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Costos financieros{scope}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3 text-sm">
+                {/* Not a total beside the spending: a view of it. Every peso
+                    here is already inside the month's gross spending, which is
+                    why the card says what it is a part of before it shows a
+                    figure. */}
+                <p className="text-muted-foreground text-xs">
+                  Parte del gasto del mes, no algo aparte: es lo que costó el crédito, separado de
+                  lo que compraste con él.
+                </p>
+
+                {view.financialCosts.items.length > 0 ? (
+                  <>
+                    <div className="flex items-baseline justify-between gap-2 font-medium">
+                      <span>Total</span>
+                      <Amount value={view.financialCosts.total} />
+                    </div>
+                    <Separator />
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span>Por deber</span>
+                      <Amount value={view.financialCosts.borrowing} />
+                    </div>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span>Por tener el instrumento</span>
+                      <Amount value={view.financialCosts.instrument} />
+                    </div>
+                    <Separator />
+                    {view.financialCosts.items.map((item) => (
+                      <div
+                        key={item.kind}
+                        className="flex items-baseline justify-between gap-2"
+                      >
+                        <span className="text-muted-foreground">
+                          {financialCostLabel(item.kind)}
+                          {item.transactionCount > 1 ? ` · ${item.transactionCount} cargos` : ''}
+                        </span>
+                        <Amount value={item.amount} />
+                      </div>
+                    ))}
+                  </>
+                ) : null}
+
+                {/* Beside the costs, never inside them. An avance is the debt
+                    itself, and adding it would report drawing $200.000 as
+                    $200.000 of cost — but it is usually the line that explains
+                    why there was interest at all. */}
+                {view.financialCosts.cashAdvanceCount > 0 ? (
+                  <>
+                    <Separator />
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span>
+                        Avance en efectivo
+                        <span className="text-muted-foreground block text-xs">
+                          {view.financialCosts.cashAdvanceCount} operación(es) · dinero prestado
+                          contra el cupo, no un costo
+                        </span>
+                      </span>
+                      <Amount value={view.financialCosts.cashAdvances} />
+                    </div>
+                  </>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+
           {view.recurring.length > 0 ? (
             <Card>
               <CardHeader>
@@ -699,6 +770,7 @@ interface DashboardView {
   categories: ReturnType<typeof totalsByCategory>;
   merchants: ReturnType<typeof totalsByMerchant>;
   unattributed: ReturnType<typeof unattributedSpending>;
+  financialCosts: ReturnType<typeof financialCostBreakdown>;
   recurring: ReturnType<typeof findRecurringCharges>;
   outlook: ReturnType<typeof buildOutlook>;
   insights: Insight[];
@@ -730,6 +802,7 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
       const previousCategories = totalsByCategory(inPrevious, { currency });
       const merchants = totalsByMerchant(transactions, 8, { currency });
       const unattributed = unattributedSpending(transactions, { currency });
+      const financialCosts = financialCostBreakdown(transactions, { currency });
       // A monthly pattern that has not charged in this or the previous month is
       // historical evidence, not a current recurring expense.
       const recurring = findRecurringCharges(history).filter(
@@ -757,6 +830,7 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
           categories,
           merchants,
           unattributed,
+          financialCosts,
           recurring,
           outlook,
           insights,
