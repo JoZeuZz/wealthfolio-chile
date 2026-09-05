@@ -88,7 +88,10 @@ describe('leer el costo que la glosa nombra', () => {
   it('reconoce la comisión de mantención y la de administración', () => {
     expect(read('COMISION DE MANTENCION')?.kind).toBe(FinancialCostKind.maintenance);
     expect(read('COMISION MANTENCION TARJETA')?.kind).toBe(FinancialCostKind.maintenance);
-    expect(read('COMISION DE ADMINISTRACION')?.kind).toBe(FinancialCostKind.maintenance);
+    // `ADMINISTRACION` a secas no alcanza: es también la comisión de un fondo
+    // mutuo o de un edificio. El reglamento nombra el producto; el patrón
+    // también.
+    expect(read('COMISION DE ADMINISTRACION TARJETA')?.kind).toBe(FinancialCostKind.maintenance);
   });
 
   it('reconoce la comisión por compra internacional', () => {

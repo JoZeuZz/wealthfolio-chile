@@ -1,6 +1,6 @@
 import { monthKey, type MonthKey } from '../dates';
 import { abs, add, compare, subtract, toNumber, zero, type Money } from '../money';
-import { Direction, isIncome, isSpending, TransactionKind } from '../model/kinds';
+import { Confidence, Direction, isIncome, isSpending, TransactionKind } from '../model/kinds';
 import type { NormalizedTransaction } from '../model/transaction';
 import { categoryGroup, CategoryGroup } from '../categories/defaults';
 import {
@@ -514,9 +514,20 @@ export function financialCostBreakdown(
     }
 
     const cost = transaction.financialCost;
-    // Direction, not kind: a refunded comisión carries the same dimension and
-    // gives money back. Counting it would say the charge happened twice.
-    if (!cost || transaction.direction !== Direction.out) continue;
+    if (!cost) continue;
+
+    // `isSpending` covers direction and kind at once, and the kind half is not
+    // optional: `metadata.fc` survives a reclassification in Wealthfolio — it
+    // is the record of what the glosa said — but a row the host now calls a
+    // transfer is not in gross spending, and a breakdown that included it would
+    // claim to be a part of a total it is not inside.
+    if (!isSpending(transaction.kind, transaction.direction)) continue;
+
+    // A bare `COMISION` says there is a charge and not which one. The
+    // classification step already refuses to act on that reading; counting it
+    // here at full weight reported a $1.500.000 comisión de corretaje as the
+    // month's cost of credit.
+    if (cost.confidence !== Confidence.confirmed) continue;
 
     total = add(total, magnitude);
     if (isCostOfBorrowing(cost.kind)) {

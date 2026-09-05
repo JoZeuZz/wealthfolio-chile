@@ -92,9 +92,6 @@ const CASH_ADVANCE_PHRASES: readonly RegExp[] = [
   /\bSUPER\s*AVANCES?\b/,
 ];
 
-/** The bare word, which is enough on a card and not enough to be sure. */
-const CASH_ADVANCE_TOKEN = /\bAVANCES?\b/;
-
 /** The subset of a movement this module reads. */
 export interface DescribedMovement {
   description: string;
@@ -178,6 +175,19 @@ export function defaultKindForRow(input: {
     input.product === StatementProduct.credit_line;
 
   if (!isCard) {
+    // The other half of an avance: the cash lands in a current account, and it
+    // is borrowed money, not income. Read as income it invented $200.000 of
+    // earnings and then counted the spending of that same cash again. There is
+    // no kind for "debt arriving", and inventing the card leg would be a ledger
+    // this addon does not keep — so it is left unresolved, which is what puts
+    // it in front of a person.
+    if (input.direction === Direction.in && mentionsCashAdvance(input.description)) {
+      return {
+        kind: TransactionKind.unknown,
+        confidence: Confidence.unknown,
+        ambiguousCardCredit: false,
+      };
+    }
     if (input.direction === Direction.out && mentionsCashSideCardPayment(input)) {
       // Without this the purchases charged to the card and the payment that
       // settles them both count as spending: the same money, twice.
@@ -228,15 +238,23 @@ function named(kind: TransactionKind): DefaultKind {
  * a merchant name, and neither is a loan against this account's cupo.
  */
 function readCashAdvance(description: string): DefaultKind | undefined {
+  return mentionsCashAdvance(description) ? named(TransactionKind.cash_advance) : undefined;
+}
+
+/**
+ * Whether a glosa names an avance en efectivo, on either side of it.
+ *
+ * Only the spelled-out forms. `AVANCE` on its own used to be read as an advance
+ * "pending review": no cartola documents that bare form, real Chilean companies
+ * are called `AVANCE ...`, and the review it was supposed to get did not exist —
+ * the preview flags unknown rows, not confidently-typed ones.
+ *
+ * A glosa that also says `COMISION` is the fee for the advance, not the advance.
+ */
+function mentionsCashAdvance(description: string): boolean {
   const text = normalizeDescription(description);
-  if (text === '' || /\bCOMISION(?:ES)?\b/.test(text)) return undefined;
-  if (CASH_ADVANCE_PHRASES.some((pattern) => pattern.test(text))) {
-    return named(TransactionKind.cash_advance);
-  }
-  // `AVANCE` alone is almost certainly an advance on a card statement, and
-  // "almost" is the whole difference: it is classified, and it is reviewable.
-  if (CASH_ADVANCE_TOKEN.test(text)) return byProduct(TransactionKind.cash_advance);
-  return undefined;
+  if (text === '' || /\bCOMISION(?:ES)?\b/.test(text)) return false;
+  return CASH_ADVANCE_PHRASES.some((pattern) => pattern.test(text));
 }
 
 /** Nothing named it; this is what the product defaults to. */

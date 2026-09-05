@@ -10,7 +10,7 @@ import {
   toDecimalString,
   type Money,
 } from '../money';
-import type { FinancialCostKind } from '../model/financial-cost';
+import { FINANCIAL_COST_KINDS, type FinancialCostKind } from '../model/financial-cost';
 import { Confidence, Direction, TransactionKind } from '../model/kinds';
 import type { EnrichedTransaction, NormalizedTransaction } from '../model/transaction';
 import { normalizeDescription } from '../text';
@@ -117,7 +117,12 @@ export interface ChileMetadata {
   /** Installment counter, when the row is part of a plan. */
   cuota?: { n: number; of: number };
   /**
-   * Which financial cost the glosa named, when it named one.
+   * Which financial cost the glosa named, when it named one — and named it
+   * specifically enough to be sure.
+   *
+   * Written only for a `confirmed` reading, so its presence is the confidence:
+   * there is no second field to store, and a read-back cannot turn a suggestion
+   * into a certainty.
    *
    * Cache, not provenance: a user who reclassifies the activity in Wealthfolio
    * makes this stale like everything else derived from the row, and `proj` is
@@ -251,7 +256,13 @@ export function toActivityCreate(
     ...(transaction.installment
       ? { cuota: { n: transaction.installment.current, of: transaction.installment.total } }
       : {}),
-    ...(transaction.financialCost ? { fc: transaction.financialCost.kind } : {}),
+    // Only a reading that named the cost. A bare `COMISION` is `other` at
+    // `suggested`, and persisting it would come back indistinguishable from a
+    // confirmed one — the reader has no confidence field to consult, and
+    // nothing in this pipeline may promote a suggestion to a certainty.
+    ...(transaction.financialCost?.confidence === Confidence.confirmed
+      ? { fc: transaction.financialCost.kind }
+      : {}),
     ...(transaction.transferCandidate?.counterpartFingerprint
       ? { xfer: transaction.transferCandidate.counterpartFingerprint }
       : {}),
@@ -717,6 +728,19 @@ export function readChileMetadata(
   if (!raw || typeof raw !== 'object') return undefined;
   const candidate = raw as Partial<ChileMetadata>;
   if (typeof candidate.fp !== 'string' || candidate.fp === '') return undefined;
+
+  // A value outside the taxonomy would reach the dashboard as a row with an
+  // amount and no name. The blob is JSON that made a round trip through the
+  // host and could have been hand-edited, so the enum is checked rather than
+  // trusted — the same reason `dir` is checked before it is believed.
+  if (
+    candidate.fc !== undefined &&
+    !FINANCIAL_COST_KINDS.includes(candidate.fc as FinancialCostKind)
+  ) {
+    const rest = { ...candidate };
+    delete rest.fc;
+    return rest as ChileMetadata;
+  }
   return candidate as ChileMetadata;
 }
 

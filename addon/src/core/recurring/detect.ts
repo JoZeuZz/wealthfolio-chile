@@ -172,7 +172,12 @@ function isEligible(transaction: NormalizedTransaction): boolean {
   if (
     transaction.kind === TransactionKind.internal_transfer ||
     transaction.kind === TransactionKind.credit_card_payment ||
-    transaction.kind === TransactionKind.refund
+    transaction.kind === TransactionKind.refund ||
+    // Exactly the case this list exists for. Adding `cash_advance` to
+    // `SPENDING_KINDS` made three monthly avances of the same amount look like
+    // a $200.000 subscription — same glosa, same figure, thirty days apart —
+    // and the outlook then projected it forward.
+    transaction.kind === TransactionKind.cash_advance
   ) {
     return false;
   }

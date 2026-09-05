@@ -98,8 +98,15 @@ export const NON_SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
  * `cash_advance` is here for the same reason a `GIRO CAJERO` on a current
  * account has always been spending: the cash left the tool's field of view and
  * was spent. Leaving it out would report a month where $200.000 was drawn as a
- * month where nothing happened. It cannot double-count either — the payment
- * that later settles the card is already excluded.
+ * month where nothing happened.
+ *
+ * The exclusion of the later card payment is what stops the *card* leg being
+ * counted twice, and that much is settled. What it does not cover is an advance
+ * paid into an account the user also imports: the cash reappears as an inflow
+ * there, and spending it is a second, real movement. `defaultKindForRow` leaves
+ * that inflow unresolved rather than calling it income, which puts it in front
+ * of a person instead of inventing $200.000 of earnings — the pairing itself is
+ * for the reconciliation screen to propose, not for a classifier to assume.
  *
  * `interest` is here for the charged direction only — the direction gate in
  * `isSpending` handles that, and `isIncome` keeps interest *earned* as income.

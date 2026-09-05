@@ -50,14 +50,13 @@ describe('el avance en efectivo tiene su propia clasificación', () => {
   });
 
   /**
-   * `AVANCE` a secas puede ser el nombre de un comercio. En una tarjeta es
-   * casi seguro un avance, y por eso se clasifica igual, pero como algo que el
-   * usuario todavía puede desmentir.
+   * `AVANCE` a secas se leía como avance «pero pidiendo revisión», y esa
+   * revisión no existía: el preview marca las filas sin clasificar, no una
+   * clasificada con confianza baja. Ninguna cartola documenta esa forma suelta
+   * y hay empresas chilenas que se llaman así, de modo que se dejó de leer.
    */
-  it('un avance sin apellido se clasifica, pero pidiendo revisión', () => {
-    const reading = card('AVANCE');
-    expect(reading.kind).toBe(TransactionKind.cash_advance);
-    expect(reading.confidence).toBe(Confidence.suggested);
+  it('una glosa que sólo dice AVANCE no alcanza', () => {
+    expect(card('AVANCE CAPACITACION LTDA').kind).toBe(TransactionKind.credit_card_purchase);
   });
 
   it('la comisión del avance es la comisión, no el avance', () => {

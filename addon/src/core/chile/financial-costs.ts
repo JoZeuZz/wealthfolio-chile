@@ -1,4 +1,4 @@
-import { Confidence, Direction } from '../model/kinds';
+import { Confidence, Direction, NON_SPENDING_KINDS } from '../model/kinds';
 import { FinancialCostKind, transactionKindForCost } from '../model/financial-cost';
 import type { FinancialCostInfo, NormalizedTransaction } from '../model/transaction';
 
@@ -45,74 +45,127 @@ interface Pattern {
 }
 
 /**
+ * Word separator, matching what `normalizeDescription` actually leaves behind.
+ *
+ * The normaliser keeps `.`, `-`, `/` and `*` on purpose — they carry cuota
+ * counters and card tails — so a pattern that only accepts whitespace does not
+ * see `COMISION-MANTENCION` or `IMPUESTO.AL.CREDITO`, which is how a statement
+ * derived from a fixed-width export comes out. Those rows fell through to the
+ * bare `COMISION` arm, or to nothing at all.
+ */
+const S = String.raw`[\s./-]+`;
+
+/** Build a pattern from words, joined by whatever separator the glosa used. */
+function phrase(...words: string[]): RegExp {
+  return new RegExp(String.raw`\b${words.join(S)}\b`);
+}
+
+/**
  * Order is specific before generic, and it is load-bearing twice:
  *
  * - `COMISION AVANCE EXTRANJERO` is a cash-advance fee that also contains the
  *   idea of "abroad"; the advance reading has to win.
  * - `COMISION` alone is last, so it only fires when no apellido was found.
+ *
+ * Several arms require a noun naming the product. `ADMINISTRACION` on its own
+ * is the fee of a fondo mutuo, an APV or a building as often as a card's; the
+ * comisión de administración of the reglamento is the one that says which.
  */
 const PATTERNS: readonly Pattern[] = [
   // ── Intereses ──────────────────────────────────────────────────────────
   {
     kind: FinancialCostKind.late_interest,
-    pattern: /\bINTERES(?:ES)?\s+(?:POR\s+)?MORA\b/,
+    pattern: phrase('INTERES(?:ES)?', '(?:POR' + S + ')?MORA'),
     confidence: Confidence.confirmed,
   },
   {
     kind: FinancialCostKind.late_interest,
-    pattern: /\bINTERES(?:ES)?\s+MORATORIOS?\b/,
+    pattern: phrase('INTERES(?:ES)?', 'MORATORIOS?'),
     confidence: Confidence.confirmed,
   },
   {
     kind: FinancialCostKind.installment_interest,
-    pattern: /\bINTERES(?:ES)?\s+(?:POR\s+)?(?:COMPRAS?\s+EN\s+)?CUOTAS?\b/,
+    pattern: phrase(
+      'INTERES(?:ES)?',
+      '(?:POR' + S + ')?(?:COMPRAS?' + S + 'EN' + S + ')?CUOTAS?',
+    ),
     confidence: Confidence.confirmed,
   },
   {
     kind: FinancialCostKind.revolving_interest,
-    pattern: /\bINTERES(?:ES)?\s+(?:ROTATIVOS?|ADICIONALES?|ADICIONAL|REFUNDIDOS?)\b/,
+    pattern: phrase('INTERES(?:ES)?', '(?:ROTATIVOS?|ADICIONALES?|ADICIONAL|REFUNDIDOS?)'),
     confidence: Confidence.confirmed,
   },
 
   // ── Comisiones ─────────────────────────────────────────────────────────
   {
     kind: FinancialCostKind.cash_advance_fee,
-    pattern: /\bCOMISION(?:ES)?\s+(?:DE\s+|POR\s+)?AVANCE\b/,
+    pattern: phrase('COMISION(?:ES)?', '(?:(?:DE|POR)' + S + ')?AVANCE'),
     confidence: Confidence.confirmed,
   },
   {
     kind: FinancialCostKind.international_purchase,
-    pattern:
-      /\bCOMISION(?:ES)?\s+(?:DE\s+|POR\s+)?(?:COMPRAS?\s+)?(?:INTERNACIONAL(?:ES)?|EN\s+EL\s+EXTRANJERO|MONEDA\s+EXTRANJERA)\b/,
+    pattern: phrase(
+      'COMISION(?:ES)?',
+      '(?:(?:DE|POR)' + S + ')?(?:COMPRAS?' + S + ')?(?:INTERNACIONAL(?:ES)?|EN' +
+        S +
+        'EL' +
+        S +
+        'EXTRANJERO|MONEDA' +
+        S +
+        'EXTRANJERA)',
+    ),
     confidence: Confidence.confirmed,
   },
   {
     kind: FinancialCostKind.maintenance,
-    pattern:
-      /\bCOMISION(?:ES)?\s+(?:DE\s+|POR\s+)?(?:MANTENCION|MANTENIMIENTO|ADMINISTRACION)\b/,
+    pattern: phrase('COMISION(?:ES)?', '(?:(?:DE|POR)' + S + ')?(?:MANTENCION|MANTENIMIENTO)'),
+    confidence: Confidence.confirmed,
+  },
+  {
+    // `ADMINISTRACION` needs the product named. Without it, the arm caught the
+    // management fee of a fondo mutuo and reported it as the card's mantención.
+    kind: FinancialCostKind.maintenance,
+    pattern: phrase(
+      'COMISION(?:ES)?',
+      '(?:(?:DE|POR)' + S + ')?ADMINISTRACION',
+      '(?:DE' + S + ')?(?:TARJETA|CUENTA|LINEA' + S + 'DE' + S + 'CREDITO)',
+    ),
     confidence: Confidence.confirmed,
   },
   {
     // The other way round: some statements name the product, not the comisión.
+    // `LINEA` has to be `LINEA DE CREDITO` — a `MANTENCION LINEA TELEFONICA` is
+    // a phone bill.
     kind: FinancialCostKind.maintenance,
-    pattern: /\b(?:MANTENCION|MANTENIMIENTO)\s+(?:DE\s+)?(?:TARJETA|CUENTA|LINEA)\b/,
+    pattern: phrase(
+      '(?:MANTENCION|MANTENIMIENTO)',
+      '(?:DE' + S + ')?(?:TARJETA|CUENTA|LINEA' + S + 'DE' + S + 'CREDITO)',
+    ),
     confidence: Confidence.confirmed,
   },
   {
     kind: FinancialCostKind.collection,
-    pattern: /\bGASTOS?\s+(?:DE\s+)?COBRANZA\b/,
+    pattern: phrase('GASTOS?', '(?:DE' + S + ')?COBRANZA'),
     confidence: Confidence.confirmed,
   },
 
   // ── Impuesto ───────────────────────────────────────────────────────────
   {
     kind: FinancialCostKind.credit_tax,
-    pattern: /\bIMPUESTO\s+(?:AL?\s+)?CREDITO\b/,
+    pattern: phrase('IMPUESTO', '(?:AL?' + S + ')?CREDITO'),
+    confidence: Confidence.confirmed,
+  },
+  {
+    // Never `TIMBRES` alone: rubber-stamp printers are a real Chilean trade,
+    // and `TIMBRES Y GOMAS` is a shop, not the DL 3.475.
+    kind: FinancialCostKind.credit_tax,
+    pattern: phrase('TIMBRES', 'Y', 'ESTAMPILLAS'),
     confidence: Confidence.confirmed,
   },
   {
     kind: FinancialCostKind.credit_tax,
-    pattern: /\bTIMBRES\b/,
+    pattern: phrase('(?:IMPUESTO|LEY)', '(?:DE' + S + ')?TIMBRES'),
     confidence: Confidence.confirmed,
   },
 
@@ -165,10 +218,16 @@ export function withFinancialCost<T extends NormalizedTransaction>(transaction: 
     matchedText: reading.matchedText,
   };
 
+  // `mark_transfer` leaves `internal_transfer` at `suggested`, not `confirmed`,
+  // so confidence alone did not protect it: a cost reading rewrote the row to
+  // `fee` and pulled the amount into gross spending, which is the exact
+  // double-count the transfer mark exists to prevent.
   const mayCorrect =
     reading.confidence === Confidence.confirmed &&
     transaction.direction === Direction.out &&
-    transaction.kindConfidence !== Confidence.confirmed;
+    transaction.kindConfidence !== Confidence.confirmed &&
+    !NON_SPENDING_KINDS.has(transaction.kind) &&
+    transaction.transferCandidate === undefined;
 
   if (!mayCorrect) return { ...transaction, financialCost };
 
