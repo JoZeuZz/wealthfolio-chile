@@ -1,5 +1,5 @@
 /** @vitest-environment happy-dom */
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { formatMonthKey } from '../../src/core/dates';
 import { readChileMetadata, toActivityCreate } from '../../src/core/mapping/activities';
@@ -535,5 +535,105 @@ describe('la tarjeta de recurrencias y lo que puede afirmar', () => {
     // La tarjeta de arriba ya lista comercio, monto y evidencia de cada cargo.
     expect(card?.textContent).toContain('se repiten cada mes');
     expect(card?.textContent).not.toContain('Aguas Andinas');
+  });
+});
+
+/**
+ * De qué moneda habla cada tarjeta.
+ *
+ * El panel calcula una vista por moneda y dibuja el detalle —categorías,
+ * comercios, cuotas, recurrencias, observaciones— sólo de la primera. Eso es
+ * correcto: sumarlas exigiría un tipo de cambio que el SDK no publica. Lo que
+ * no era correcto es que las tarjetas no lo dijeran. El aviso vivía una sola
+ * vez, dos mil píxeles más arriba, y quien llegaba scrolleando leía «Gastos por
+ * categoría» sobre cifras que eran de una moneda y no de la otra.
+ *
+ * Con una sola moneda el rótulo sobra y no aparece: nombrar «CLP» en un panel
+ * donde todo es CLP es ruido, no información.
+ */
+describe('cada tarjeta dice de qué moneda habla', () => {
+  const twoCurrencies = () => [
+    activity({
+      accountId: 'acc-clp',
+      amount: -50000,
+      date: DAY(0),
+      description: 'SUPERMERCADO LIDER',
+      kind: TransactionKind.expense,
+      type: 'WITHDRAWAL',
+      merchant: 'Lider',
+    }),
+    activity({
+      accountId: 'acc-usd',
+      amount: -1000,
+      date: DAY(1),
+      description: 'COMPRA USD',
+      kind: TransactionKind.expense,
+      type: 'WITHDRAWAL',
+      currency: 'USD',
+      scale: 2,
+    }),
+  ];
+
+  it('rotula el detalle con la moneda cuando hay más de una', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP, USD], activities: twoCurrencies() });
+
+    expect(await screen.findByText('Gastos por categoría (CLP)')).toBeInTheDocument();
+    expect(screen.getByText('Comercios principales (CLP)')).toBeInTheDocument();
+    expect(screen.getByText('Cuotas comprometidas (CLP)')).toBeInTheDocument();
+    expect(screen.getByText('Movimientos que no son gasto (CLP)')).toBeInTheDocument();
+  });
+
+  it('con una sola moneda no agrega el rótulo', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -50000,
+          date: DAY(0),
+          description: 'SUPERMERCADO LIDER',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+          merchant: 'Lider',
+        }),
+      ],
+    });
+
+    expect(await screen.findByText('Gastos por categoría')).toBeInTheDocument();
+    expect(screen.queryByText('Gastos por categoría (CLP)')).not.toBeInTheDocument();
+  });
+
+  /**
+   * La segunda moneda respondía otras preguntas que la primera: sin variación
+   * bajo «Ingresos», y un conteo de movimientos donde la primera lleva el
+   * compromiso en cuotas. Dos bloques con el mismo aspecto y distinto
+   * contenido invitan a compararlos, y no eran comparables.
+   */
+  it('el bloque de la segunda moneda responde las mismas preguntas que el primero', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP, USD],
+      activities: [
+        ...twoCurrencies(),
+        activity({
+          accountId: 'acc-usd',
+          amount: -2000,
+          date: PREVIOUS_DAY(0),
+          description: 'COMPRA USD ANTERIOR',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+          currency: 'USD',
+          scale: 2,
+        }),
+      ],
+    });
+
+    // The card, not its title: walk up until the element holds the figures too.
+    let block = (await screen.findByText('Movimientos en USD')) as HTMLElement;
+    while (block.parentElement && !block.textContent?.includes('Flujo de caja')) {
+      block = block.parentElement;
+    }
+    expect(block.textContent).toContain('Movimientos en USD');
+    expect(within(block).getByText('Comprometido en cuotas')).toBeInTheDocument();
+    expect(within(block).queryByText('Movimientos')).not.toBeInTheDocument();
   });
 });

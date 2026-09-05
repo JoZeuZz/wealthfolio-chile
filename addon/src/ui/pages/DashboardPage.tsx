@@ -125,6 +125,19 @@ export function DashboardPage() {
   const view = views[0]?.view;
   const otherCurrencies = views.slice(1);
 
+  /**
+   * Suffix naming the currency a detail card is about.
+   *
+   * The cards below the summary — categories, merchants, cuotas, non-spending,
+   * recurrences, observations — are computed from the leading currency alone,
+   * because adding CLP to USD needs a rate the SDK does not publish. The
+   * warning that says so appears once, at the top; somebody who arrives by
+   * scrolling reads "Gastos por categoría" over figures that are one currency's
+   * and not the other's. Empty with a single currency: naming "CLP" on a panel
+   * where everything is CLP is noise, not information.
+   */
+  const scope = otherCurrencies.length > 0 && views[0] ? ` (${views[0].currency})` : '';
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
@@ -319,7 +332,18 @@ export function DashboardPage() {
               </CardHeader>
               <CardContent>
                 <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <Stat label="Ingresos" value={other.summary.income} tone="positive" />
+                  <Stat
+                    label="Ingresos"
+                    value={other.summary.income}
+                    tone="positive"
+                    hint={
+                      <DeltaLine
+                        delta={other.comparison.income}
+                        previousMonth={other.comparison.previousMonth}
+                        polarity="more-is-better"
+                      />
+                    }
+                  />
                   <Stat
                     label="Gasto neto"
                     value={other.summary.netSpending}
@@ -344,9 +368,19 @@ export function DashboardPage() {
                       />
                     }
                   />
+                  {/* A count where the leading block carries the cuota
+                      commitment. Two blocks drawn alike invite comparison, and
+                      these two were not comparable: the fourth figure answered
+                      a different question on each side. */}
                   <Stat
-                    label="Movimientos"
-                    value={String(other.summary.transactionCount)}
+                    label="Comprometido en cuotas"
+                    value={other.outlook.committedTotal}
+                    hint={
+                      <span className="text-muted-foreground block text-xs font-normal">
+                        {other.outlook.openPlans.length} compra(s) activa(s) · cuotas que faltan
+                        por pagar, no el total de la compra
+                      </span>
+                    }
                   />
                 </dl>
               </CardContent>
@@ -356,7 +390,7 @@ export function DashboardPage() {
           <section className="grid gap-4 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Gastos por categoría</CardTitle>
+                <CardTitle>Gastos por categoría{scope}</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
                 {view.categories.length === 0 ? (
@@ -395,7 +429,7 @@ export function DashboardPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Comercios principales</CardTitle>
+                <CardTitle>Comercios principales{scope}</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">
                 {view.merchants.length === 0 ? (
@@ -432,7 +466,7 @@ export function DashboardPage() {
           <section className="grid gap-4 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Cuotas comprometidas</CardTitle>
+                <CardTitle>Cuotas comprometidas{scope}</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
                 {view.outlook.schedule.length === 0 ? (
@@ -476,7 +510,7 @@ export function DashboardPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Movimientos que no son gasto</CardTitle>
+                <CardTitle>Movimientos que no son gasto{scope}</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3 text-sm">
                 <div className="flex items-baseline justify-between gap-2">
@@ -498,7 +532,7 @@ export function DashboardPage() {
           {view.recurring.length > 0 ? (
             <Card>
               <CardHeader>
-                <CardTitle>Gastos que se repiten</CardTitle>
+                <CardTitle>Gastos que se repiten{scope}</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3 text-sm">
                 {/* The addon never sees a contract. Everything here is read off
@@ -541,7 +575,7 @@ export function DashboardPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Observaciones</CardTitle>
+              <CardTitle>Observaciones{scope}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               {view.insights.length === 0 ? (
