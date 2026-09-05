@@ -501,37 +501,35 @@ export function DashboardPage() {
                 <CardTitle>Gastos que se repiten</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3 text-sm">
-                {view.recurring.slice(0, 8).map((charge) => (
-                  <div
-                    key={`${charge.currency} ${charge.merchantKey}`}
-                    className="flex items-baseline justify-between gap-2"
-                  >
-                    <span>
-                      {charge.merchant}
-                      {charge.mandate ? (
-                        <Badge variant="outline" className="ml-2">
-                          {charge.mandate.toUpperCase()}
-                        </Badge>
-                      ) : null}
-                      {charge.confidence === 'possible' ? (
-                        <Badge variant="outline" className="ml-2">
-                          posible
-                        </Badge>
-                      ) : null}
-                      {/* The evidence, not just the verdict: a reader can check
-                          the claim against their own statement. */}
-                      <span className="text-muted-foreground block text-xs">
-                        {charge.occurrences} cargos · cada{' '}
-                        {charge.minIntervalDays === charge.maxIntervalDays
-                          ? `${charge.medianIntervalDays}`
-                          : `${charge.minIntervalDays}–${charge.maxIntervalDays}`}{' '}
-                        días · monto ±{Math.round(charge.amountSpread * 100)} %
-                        {charge.mandate ? ` · ${mandateLabel(charge.mandate)}` : ''}
-                      </span>
-                    </span>
-                    <Amount value={charge.typicalAmount} />
-                  </div>
-                ))}
+                {/* The addon never sees a contract. Everything here is read off
+                    the statement, so the card says so before it says anything
+                    else — a charge the core only calls `likely` was drawn with
+                    no qualifier at all, which made the strongest claim the only
+                    unhedged one, and both evidence levels shared one flat list
+                    so a habit looked like a commitment. */}
+                <p className="text-muted-foreground text-xs">
+                  Repeticiones deducidas de tus cartolas. Wealthfolio Chile no ve tus contratos:
+                  cada fila muestra la evidencia con la que se afirma.
+                </p>
+
+                <RecurringGroup charges={view.recurring.filter((c) => c.confidence === 'likely')} />
+
+                {view.recurring.some((c) => c.confidence === 'possible') ? (
+                  <>
+                    <Separator />
+                    <p className="text-muted-foreground text-xs font-medium">
+                      Podrían repetirse — evidencia más débil
+                    </p>
+                    <p className="text-muted-foreground text-xs">
+                      Se repiten con una cadencia parecida pero el monto varía, o el mismo día hubo
+                      más de un cargo del mismo comercio.
+                    </p>
+                    <RecurringGroup
+                      charges={view.recurring.filter((c) => c.confidence === 'possible')}
+                    />
+                  </>
+                ) : null}
+
                 <p className="text-muted-foreground text-xs">
                   Las compras en cuotas no aparecen aquí: son un compromiso que termina solo, no un
                   gasto que se repite. Tampoco los traspasos entre tus cuentas ni los pagos de
@@ -592,6 +590,51 @@ export function DashboardPage() {
         </>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * One evidence tier of the recurring-charge card.
+ *
+ * The rows carry the evidence rather than a verdict badge: the tier they sit
+ * under already says how strong the claim is, so a per-row "posible" marker
+ * only repeated the heading — and its absence on the stronger rows was what
+ * made those read as established fact.
+ */
+function RecurringGroup({
+  charges,
+}: {
+  charges: ReturnType<typeof findRecurringCharges>;
+}) {
+  return (
+    <>
+      {charges.slice(0, 8).map((charge) => (
+        <div
+          key={`${charge.currency} ${charge.merchantKey}`}
+          className="flex items-baseline justify-between gap-2"
+        >
+          <span>
+            {charge.merchant}
+            {charge.mandate ? (
+              <Badge variant="outline" className="ml-2">
+                {charge.mandate.toUpperCase()}
+              </Badge>
+            ) : null}
+            {/* The evidence, not just the verdict: a reader can check the claim
+                against their own statement. */}
+            <span className="text-muted-foreground block text-xs">
+              {charge.occurrences} cargos · cada{' '}
+              {charge.minIntervalDays === charge.maxIntervalDays
+                ? `${charge.medianIntervalDays}`
+                : `${charge.minIntervalDays}–${charge.maxIntervalDays}`}{' '}
+              días · monto ±{Math.round(charge.amountSpread * 100)} %
+              {charge.mandate ? ` · ${mandateLabel(charge.mandate)}` : ''}
+            </span>
+          </span>
+          <Amount value={charge.typicalAmount} />
+        </div>
+      ))}
+    </>
   );
 }
 

@@ -1,4 +1,3 @@
-import { mandateLabel, type AutomaticMandate } from '../chile/mandates';
 import { addMonthsToKey, formatMonthKey, type MonthKey } from '../dates';
 import { add, formatCLP, isZero, subtract, toNumber, type Money } from '../money';
 import { categoryLabel } from '../categories/defaults';
@@ -216,7 +215,6 @@ function recurringInsights(input: InsightInput): Insight[] {
   if (recurring.length === 0) return [];
 
   const likely = recurring.filter((charge) => charge.confidence === 'likely');
-  const possible = recurring.length - likely.length;
   const monthly = likely.reduce<Money | undefined>(
     (acc, charge) => (acc ? add(acc, charge.typicalAmount) : charge.typicalAmount),
     undefined,
@@ -229,25 +227,16 @@ function recurringInsights(input: InsightInput): Insight[] {
       id: 'recurring-count',
       severity: 'neutral',
       message: `Tienes ${likely.length} gasto(s) que se repiten cada mes${monthly ? `, unos ${formatCLP(monthly)}` : ''}.`,
-      detail: likely
-        .slice(0, 5)
-        .map(
-          (charge) =>
-            `${charge.merchant}: ${formatCLP(charge.typicalAmount)}, ${charge.occurrences} cargos cada ${charge.minIntervalDays}–${charge.maxIntervalDays} días`,
-        )
-        .join(' · '),
+      // No enumeration: the panel lists merchant, amount and evidence for each
+      // charge in the card directly above this one, and printing the same five
+      // rows again in prose said nothing new twice.
     });
   }
 
-  if (possible > 0) {
-    insights.push({
-      id: 'recurring-possible',
-      severity: 'neutral',
-      message: `Otros ${possible} cargo(s) podrían ser recurrentes, con evidencia más débil.`,
-      detail:
-        'Se repiten con una cadencia parecida pero el monto varía, o el mismo día hubo más de un cargo del mismo comercio.',
-    });
-  }
+  // The weaker tier is no longer announced here. The panel groups those charges
+  // under their own heading, with the rows underneath, so a sentence counting
+  // them was the same claim in a second place — and the two could disagree if
+  // the card ever truncated its list.
 
   const mandated = recurring.filter((charge) => charge.mandate !== undefined);
   if (mandated.length > 0) {
@@ -255,10 +244,8 @@ function recurringInsights(input: InsightInput): Insight[] {
       id: 'recurring-mandates',
       severity: 'neutral',
       message: `${mandated.length} de ellos son pagos automáticos declarados por tu banco (PAC/PAT).`,
-      detail: mandated
-        .slice(0, 5)
-        .map((charge) => `${charge.merchant} · ${mandateLabel(charge.mandate as AutomaticMandate)}`)
-        .join(' · '),
+      // The card above marks each one with its mandate; repeating the list here
+      // was the same sentence in another shape.
     });
   }
 

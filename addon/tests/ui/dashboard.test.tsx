@@ -466,3 +466,74 @@ describe('el panel y lo que dice de sí mismo', () => {
     ).toBeTruthy();
   });
 });
+
+/**
+ * Cuánto afirma la tarjeta de recurrencias.
+ *
+ * El núcleo sólo sabe `likely` o `possible`. Un cargo `likely` se dibujaba sin
+ * ninguna marca, así que la afirmación más fuerte era la única sin matizar, y
+ * los dos niveles de evidencia iban en la misma lista plana: un gasto que
+ * simplemente se repite parecía un compromiso contratado.
+ */
+describe('la tarjeta de recurrencias y lo que puede afirmar', () => {
+  const strong = [3, 2, 1, 0].map((months) =>
+    activity({
+      accountId: 'acc-clp',
+      amount: -32000,
+      date: MONTHS_AGO(months),
+      description: 'PAC AGUAS ANDINAS',
+      merchant: 'Aguas Andinas',
+      kind: TransactionKind.expense,
+      type: 'WITHDRAWAL',
+    }),
+  );
+  // Mismo comercio, misma cadencia, monto que varía: repetición sin compromiso.
+  const weak = [3, 2, 1, 0].map((months, index) =>
+    activity({
+      accountId: 'acc-clp',
+      amount: -40000 - index * 9000,
+      date: MONTHS_AGO(months, 2),
+      description: 'RESTAURANT LASTARRIA',
+      merchant: 'Restaurant Lastarria',
+      kind: TransactionKind.expense,
+      type: 'WITHDRAWAL',
+    }),
+  );
+
+  it('dice que es una lectura de la cartola, no un contrato que haya visto', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: strong });
+
+    await screen.findByText('Gastos que se repiten');
+    expect(screen.getByText(/deducid[oa]s? de tus cartolas/i)).toBeInTheDocument();
+  });
+
+  it('separa la evidencia débil de la fuerte en vez de mezclarlas', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: [...strong, ...weak] });
+
+    await screen.findByText('Gastos que se repiten');
+    expect(screen.getByText(/evidencia más débil/i)).toBeInTheDocument();
+
+    const weakHeading = screen.getByText(/evidencia más débil/i);
+    const card = screen.getByText('Gastos que se repiten').parentElement?.parentElement;
+    const strongCharge = [...(card?.querySelectorAll('span') ?? [])].find(
+      (el) => el.firstChild?.textContent === 'Aguas Andinas',
+    );
+    // Dentro de la tarjeta, el cargo con mandato va antes del encabezado débil.
+    expect(strongCharge).toBeDefined();
+    expect(
+      strongCharge!.compareDocumentPosition(weakHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(card?.textContent).toContain('Restaurant Lastarria');
+  });
+
+  it('el resumen no vuelve a enumerar los comercios que la tarjeta ya lista', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: strong });
+
+    const title = await screen.findByText('Observaciones');
+    const card = title.parentElement?.parentElement;
+    expect(card?.className).toContain('bg-card');
+    // La tarjeta de arriba ya lista comercio, monto y evidencia de cada cargo.
+    expect(card?.textContent).toContain('se repiten cada mes');
+    expect(card?.textContent).not.toContain('Aguas Andinas');
+  });
+});
