@@ -6,8 +6,8 @@ import { runCalibration, type CalibrationIo } from '../src/tooling/cli';
 /**
  * Read one real cartola and print what a profile would need to learn from it.
  *
- *   pnpm calibrate -- ~/Descargas/cartola.csv
- *   pnpm calibrate -- ~/Descargas/cartola.xlsx --parser banco-chile.cuenta-corriente
+ *   pnpm --silent calibrate -- ~/Descargas/cartola.csv
+ *   pnpm --silent calibrate -- ~/Descargas/cartola.xlsx --parser banco-chile.cuenta-corriente
  *
  * Everything this command decides lives in `src/tooling/cli`, which takes its
  * file system as an argument. This file is the wiring, and the wiring is the

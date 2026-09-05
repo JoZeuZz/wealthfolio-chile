@@ -83,6 +83,7 @@ describe('fallar seguro', () => {
     const context = io();
     expect(runCalibration([], context)).toBe(1);
     expect(textOf(context.capture)).toContain('Uso:');
+    expect(textOf(context.capture)).toContain('pnpm --silent calibrate');
   });
 
   it('un archivo que no existe no repite su nombre', () => {
@@ -129,6 +130,25 @@ describe('fallar seguro', () => {
     expect(textOf(context.capture)).not.toMatch(/\bat\s+\w+\s+\(/);
   });
 
+  it('un código de error arbitrario tampoco se refleja', () => {
+    const context = io({
+      readFile: () => {
+        throw { code: 'RUT-JUAN-PEREZ-12345678' };
+      },
+    });
+    runCalibration(['/tmp/cartola.csv'], context);
+
+    expect(textOf(context.capture)).not.toMatch(/JUAN|PEREZ|12345678/);
+  });
+
+  it('un error del parser no refleja nombre de archivo ni texto de librería', () => {
+    const context = io();
+    runCalibration(['/tmp/Jose-Rodriguez-Cuenta.pdf'], context);
+
+    expect(textOf(context.capture)).not.toMatch(/Jose|Rodriguez|Cuenta\.pdf/i);
+    expect(textOf(context.capture)).toContain('No se pudo interpretar');
+  });
+
   it('un contenido que ningún perfil reconoce nombra los perfiles disponibles', () => {
     const context = io({
       readFile: () => new TextEncoder().encode('esto no es una cartola\nni de lejos\n'),
@@ -145,7 +165,7 @@ describe('fallar seguro', () => {
     const code = runCalibration(['/tmp/c.csv', '--parser', 'banco-inventado'], context);
 
     expect(code).toBe(1);
-    expect(textOf(context.capture)).toContain('banco-inventado');
+    expect(textOf(context.capture)).not.toContain('banco-inventado');
     expect(textOf(context.capture)).toContain('generico.cuenta');
   });
 
@@ -163,7 +183,8 @@ describe('fallar seguro', () => {
   it('una bandera desconocida no se ignora en silencio', () => {
     const context = io();
     expect(runCalibration(['/tmp/c.csv', '--volcar-todo'], context)).toBe(1);
-    expect(textOf(context.capture)).toContain('--volcar-todo');
+    expect(textOf(context.capture)).toContain('opción desconocida');
+    expect(textOf(context.capture)).not.toContain('--volcar-todo');
   });
 
   it('el id del perfil no se confunde con el archivo', () => {
@@ -229,11 +250,11 @@ describe('dónde puede vivir una cartola', () => {
     expect(code).toBe(1);
   });
 
-  it('el rechazo nombra la ruta relativa, nunca la del usuario', () => {
+  it('el rechazo no repite ni siquiera la ruta relativa', () => {
     const context = io();
     runCalibration([`${REPO}/addon/cartola.csv`], context);
 
-    expect(textOf(context.capture)).toContain('addon/cartola.csv');
+    expect(textOf(context.capture)).not.toContain('addon/cartola.csv');
     expect(textOf(context.capture)).not.toContain('/home/usuario');
   });
 });

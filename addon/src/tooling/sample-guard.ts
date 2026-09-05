@@ -55,7 +55,7 @@ export function guardPrivateSample(
     return {
       allowed: false,
       reason:
-        `"${inside}" está dentro del repositorio y fuera de ${PRIVATE_SAMPLES_DIR}/.\n` +
+        `El archivo está dentro del repositorio y fuera de ${PRIVATE_SAMPLES_DIR}/.\n` +
         'Una cartola real vive fuera del repositorio, o en samples/private/, que existe\n' +
         'para eso y está ignorado. Que otra carpeta esté ignorada no la convierte en un\n' +
         'lugar para datos bancarios.\n' +
@@ -67,7 +67,7 @@ export function guardPrivateSample(
     return {
       allowed: false,
       reason:
-        `"${inside}" está en ${PRIVATE_SAMPLES_DIR}/ pero Git no lo ignora, así que un\n` +
+        `El archivo está en ${PRIVATE_SAMPLES_DIR}/ pero Git no lo ignora, así que un\n` +
         '`git add -A` lo dejaría preparado para commit. Revisa .gitignore antes de seguir.\n' +
         'Ver docs/PRIVACY.md.',
     };

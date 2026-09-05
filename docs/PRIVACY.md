@@ -174,24 +174,17 @@ lleva:
   —ni al repositorio, ni a `.ai/`, ni a `/tmp`—. La E/S del comando se inyecta
   y **no contiene ninguna operación de escritura**: no es una promesa, es que
   no hay con qué;
-- su salida son conteos, códigos y encabezados de columna. Ni glosas, ni
+- su salida son conteos, códigos, roles normalizados y posiciones de columna. Ni glosas, ni
   montos, ni RUT, ni números de cuenta, ni el nombre del archivo. Los tests de
   `addon/tests/calibration.test.ts` y `addon/tests/calibration-cli.test.ts`
   comprueban las ausencias, no sólo las presencias.
 
-### Por qué el informe imprime una huella
+### El informe no imprime una huella
 
-El informe empieza con doce caracteres del SHA-256 del archivo. Se conserva a
-propósito y la razón es concreta: calibrar un perfil es un ciclo —leer el
-informe, corregir el perfil, volver a leer— y la única forma de saber que dos
-informes salieron de la **misma** exportación es esa huella. Sin ella, dos
-descargas del mismo banco en meses distintos se leen igual.
-
-Lo que no es: no se deriva de ningún dato personal, no se puede invertir, y no
-identifica a nadie que no tenga ya el archivo en la mano. Lo que sí es: un
-identificador estable de *ese* archivo, así que alguien que ya lo tenga puede
-confirmar que es el mismo. Ese es el riesgo aceptado, y se acepta porque el
-informe está pensado justamente para poder pegarse en un issue sin el archivo.
+Calibrar un formato no necesita identificar de forma estable la exportación.
+El SHA-256 sigue existiendo dentro del flujo de importación, donde cumple una
+función de idempotencia e historial, pero no sale en el informe pegable de
+calibración. Son contextos y propósitos distintos.
 
 Un informe de calibración no sustituye al fixture sintético. Sigue prohibido
 derivar un fixture de una cartola real cambiándole los nombres: un fixture se

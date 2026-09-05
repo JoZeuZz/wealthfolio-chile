@@ -30,8 +30,12 @@ const CARTOLA = [
   '05/02/2026;GIRO CAJERO AUTOMATICO;40.000;;2.115.000;NUNOA',
 ].join('\n');
 
-function report(text: string, parserId = 'generico.cuenta') {
-  const file = fromText('CartolaCuentaRut_12345678-9_202602.csv', text);
+function report(
+  text: string,
+  parserId = 'generico.cuenta',
+  fileName = 'CartolaCuentaRut_12345678-9_202602.csv',
+) {
+  const file = fromText(fileName, text);
   const workbook = loadWorkbook(file);
   return calibrate({
     bytes: file.bytes,
@@ -50,15 +54,15 @@ describe('lo que el informe sí dice', () => {
     expect(facts.score).toBeGreaterThan(0);
   });
 
-  it('las columnas mapeadas y, sobre todo, las que no', () => {
+  it('las columnas mapeadas y las posiciones que el perfil no reconoce', () => {
     const header = report(CARTOLA).header;
 
     expect(header.mapped.map((column) => column.role)).toEqual(
       expect.arrayContaining(['date', 'description', 'debit', 'credit', 'balance']),
     );
-    // `Sucursal` es exactamente el hallazgo: una columna que el banco imprime y
-    // el perfil ignora.
-    expect(header.unmapped.map((column) => column.heading)).toContain('Sucursal');
+    expect(header.unmapped.map((column) => column.column)).toContain(5);
+    expect(header.mapped.every((column) => !('heading' in column))).toBe(true);
+    expect(header.unmapped.every((column) => !('heading' in column))).toBe(true);
   });
 
   it('cuántas filas se leyeron y cuántas no', () => {
@@ -167,10 +171,10 @@ describe('lo que el informe no puede decir nunca', () => {
     expect(text).not.toContain('2.155.000');
   });
 
-  it('ningún nombre de archivo, sólo su extensión y su huella', () => {
+  it('ningún nombre de archivo ni identificador estable, sólo su extensión', () => {
     expect(text).not.toContain('CartolaCuentaRut');
     expect(text).toContain('.csv');
-    expect(text).toContain('aaaaaaaaaaaa');
+    expect(text).not.toContain('aaaaaaaaaaaa');
   });
 
   it('y una cabecera que llevara un número de cuenta también se redacta', () => {
@@ -182,6 +186,24 @@ describe('lo que el informe no puede decir nunca', () => {
     );
     const printed = formatReport(withLeak);
     expect(printed).not.toContain('001234567890');
+  });
+
+  it('no imprime texto libre de una cabecera aunque no parezca un identificador', () => {
+    const withLeak = report(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Nombre Titular Jose Rodriguez',
+        '03/02/2026;COMPRA;45.000;;955.000',
+      ].join('\n'),
+    );
+
+    expect(formatReport(withLeak)).not.toMatch(/Jose|Rodriguez/i);
+  });
+
+  it('sólo revela extensiones de formatos conocidos', () => {
+    const withPrivateExtension = report(CARTOLA, 'generico.cuenta', 'cartola.Jose-Rodriguez');
+
+    expect(formatReport(withPrivateExtension)).not.toMatch(/Jose|Rodriguez/i);
+    expect(withPrivateExtension.file.extension).toBe('(no reconocida)');
   });
 });
 
@@ -249,14 +271,14 @@ describe('guarda del archivo privado', () => {
     expect(verdict.allowed).toBe(false);
   });
 
-  it('el rechazo nombra la ruta relativa, no la absoluta del usuario', () => {
+  it('el rechazo no refleja ninguna parte de la ruta privada', () => {
     const verdict = guardPrivateSample(`${repoRoot}/addon/cartola.csv`, {
       repoRoot,
       isIgnored: () => false,
     });
 
     if (!verdict.allowed) {
-      expect(verdict.reason).toContain('addon/cartola.csv');
+      expect(verdict.reason).not.toContain('addon/cartola.csv');
       expect(verdict.reason).not.toContain('/home/usuario');
     }
   });

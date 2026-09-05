@@ -207,8 +207,8 @@ equivocó el perfil. Para eso existe la herramienta.
 
 ```bash
 cd addon
-pnpm calibrate -- ~/Descargas/cartola.csv
-pnpm calibrate -- ~/Descargas/cartola.xlsx --parser banco-chile.cuenta-corriente
+pnpm --silent calibrate -- ~/Descargas/cartola.csv
+pnpm --silent calibrate -- ~/Descargas/cartola.xlsx --parser banco-chile.cuenta-corriente
 ```
 
 Imprime, y nada más que esto:
@@ -216,7 +216,7 @@ Imprime, y nada más que esto:
 | Bloque | Para qué sirve |
 | --- | --- |
 | Detección | Con qué perfil se leyó, con cuánta confianza y **qué otros perfiles reclamaron el archivo**. Dos perfiles empatados es un problema de perfiles que no aparece en la salida de ninguno de los dos. |
-| Cabecera | Las columnas mapeadas y, sobre todo, **las que no**. Una columna que el banco imprime y el perfil ignora es un `columnSynonyms` que falta. |
+| Cabecera | Roles normalizados y posiciones sin mapear. El operador mira esa posición en el archivo privado; el informe no copia texto libre. |
 | Filas | Leídas, omitidas, fallidas, con los números de línea de las fallidas. |
 | Montos | Cuántos montos quedaron en cada escala decimal. Una nube de escala 2 en una cartola en pesos dice que el separador de miles se leyó como decimal — el error más caro posible, invisible en un conteo de filas. |
 | Fechas | Orden del archivo, fechas distintas, filas cuya fecha o monto admitía más de una lectura. |
@@ -231,27 +231,26 @@ así que no lleva la cartola:
 - ninguna glosa, comercio ni nombre de titular;
 - ningún monto — ni siquiera un total. Sólo la *forma* de los montos;
 - ningún RUT, número de cuenta ni de tarjeta;
-- ningún nombre de archivo: su extensión, su tamaño y los primeros doce
-  caracteres de su huella SHA-256.
+- ningún nombre ni huella del archivo: sólo su extensión allowlisted y tamaño.
 
-Los encabezados de columna sí salen, y a propósito: `Cargo`, `Abono`,
-`Saldo contable` son el vocabulario de formato que un perfil tiene que
-aprender, y no identifican a nadie. Aun así pasan por `redactSensitive`.
+Los encabezados de columna no salen: una cabecera inusual puede contener un
+nombre o número de cuenta. El informe muestra roles canónicos (`date`,
+`description`, `debit`, `credit`, `balance`) y posiciones sin mapear.
 
 Todo esto está fijado por tests en `addon/tests/calibration.test.ts`, que
 comprueban tanto lo que el informe dice como lo que no puede decir.
 
 ### La guarda
 
-La herramienta **se niega** a leer un archivo que esté dentro del repositorio y
-que Git no ignore:
+La herramienta acepta dentro del repositorio sólo `samples/private/`, y sólo
+mientras Git lo ignore. Cualquier otra ubicación interna se rechaza sin repetir
+la ruta privada:
 
 ```
-"addon/cartola.csv" está dentro del repositorio y Git no lo ignora, así que un
-`git add -A` lo dejaría preparado para commit.
+El archivo está dentro del repositorio y fuera de samples/private/.
 ```
 
-`samples/private/` sí está ignorado y sí se acepta. La pregunta «¿está
+`samples/private/` está ignorado y se acepta. La pregunta «¿está
 ignorado?» se la hace a `git check-ignore`, no a una reimplementación de
 `.gitignore`.
 

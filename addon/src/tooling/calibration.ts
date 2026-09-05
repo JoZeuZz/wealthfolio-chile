@@ -19,7 +19,7 @@ import type { ParserInput } from '../core/providers/parser';
  *
  * What it must never produce is the statement. A calibration report is written
  * down, pasted into an issue, read over someone's shoulder — so it carries
- * counts, codes, column *headings* and classifications, and not one movement.
+ * counts, codes, normalized column roles and classifications, and not one movement.
  * Concretely, and enforced by tests:
  *
  * - no description, merchant or glosa, in any form;
@@ -27,13 +27,8 @@ import type { ParserInput } from '../core/providers/parser';
  *   and for a failed balance step the class of the discrepancy, never its
  *   size);
  * - no account, card or national id number, and no holder name;
- * - no file name — its extension, its size and the first bytes of its hash.
- *
- * Column headings are the exception, and deliberately: `Cargo`, `Abono`,
- * `Saldo contable` are the bank's format vocabulary, they are what a profile
- * has to learn, and they identify nobody. They still pass through
- * {@link redactSensitive}, because a bank that prints the account number in a
- * header cell is not a hypothesis worth betting on.
+ * - no file name or stable file identifier — only an allowlisted extension and size;
+ * - no raw column heading: an unusual heading can itself contain personal data.
  */
 
 export interface CalibrationReport {
@@ -53,8 +48,6 @@ export interface FileFacts {
   /** Extension only. The name can carry a RUT — see `core/privacy`. */
   extension: string;
   bytes: number;
-  /** First 12 characters of the SHA-256, enough to tell two samples apart. */
-  hashPrefix: string;
   sheets: number;
   /** Rows in the sheet the parser chose, header and preamble included. */
   sheetRows: number;
@@ -80,14 +73,14 @@ export interface HeaderFacts {
   /** Row index the header was found on, or -1. */
   row: number;
   /** Roles the profile resolved, in column order. */
-  mapped: Array<{ role: string; column: number; heading: string }>;
+  mapped: Array<{ role: string; column: number }>;
   /**
-   * Headings the profile did not map.
+   * Positions the profile did not map.
    *
-   * The single most useful line in the report: a column the bank prints and
-   * the profile ignores is either a missing synonym or a missing role.
+   * The operator inspects that position in the private file locally. Raw
+   * headings cannot enter the pasteable report because they may contain PII.
    */
-  unmapped: Array<{ column: number; heading: string }>;
+  unmapped: Array<{ column: number }>;
 }
 
 export interface RowFacts {
@@ -205,10 +198,10 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
 
 function fileFacts(input: CalibrationInput, sheet: Sheet | undefined): FileFacts {
   const dot = input.fileName.lastIndexOf('.');
+  const candidate = dot > 0 ? input.fileName.slice(dot).toLowerCase() : '';
   return {
-    extension: dot > 0 ? input.fileName.slice(dot).toLowerCase() : '(sin extensión)',
+    extension: ['.csv', '.xls', '.xlsx'].includes(candidate) ? candidate : '(no reconocida)',
     bytes: input.bytes.length,
-    hashPrefix: input.fileHash.slice(0, 12),
     sheets: input.sheets.length,
     sheetRows: sheet?.rows.length ?? 0,
   };
@@ -254,8 +247,8 @@ function headerFacts(sheet: Sheet | undefined, parserId: string): HeaderFacts {
   cells.forEach((heading, column) => {
     if (heading === '') return;
     const role = mappedColumns.get(column);
-    if (role) mapped.push({ role, column, heading: redactSensitive(heading) });
-    else unmapped.push({ column, heading: redactSensitive(heading) });
+    if (role) mapped.push({ role, column });
+    else unmapped.push({ column });
   });
 
   return { row: header.headerRow, mapped, unmapped };
@@ -437,7 +430,6 @@ export function formatReport(report: CalibrationReport): string {
   lines.push('── Archivo ───────────────────────────────────────────────');
   add('Extensión', report.file.extension);
   add('Tamaño', `${report.file.bytes} bytes`);
-  add('Huella', `${report.file.hashPrefix}…`);
   add('Hojas', report.file.sheets);
   add('Filas en la hoja', report.file.sheetRows);
 
@@ -458,12 +450,12 @@ export function formatReport(report: CalibrationReport): string {
   lines.push('', '── Cabecera ──────────────────────────────────────────────');
   add('Fila', report.header.row);
   for (const column of report.header.mapped) {
-    lines.push(`  [${column.column}] ${column.heading} → ${column.role}`);
+    lines.push(`  [${column.column}] ${column.role}`);
   }
   if (report.header.unmapped.length > 0) {
     lines.push('  Sin mapear:');
     for (const column of report.header.unmapped) {
-      lines.push(`  [${column.column}] ${column.heading}`);
+      lines.push(`  [${column.column}] rol no reconocido`);
     }
   }
 

@@ -35,13 +35,13 @@ defensa más, no la única.
 
 ```
 cd addon
-pnpm calibrate -- ../samples/private/cuentarut-feb.csv
+pnpm --silent calibrate -- ../samples/private/cuentarut-feb.csv
 ```
 
 Para forzar un perfil concreto y ver por qué falla:
 
 ```
-pnpm calibrate -- ../samples/private/cuentarut-feb.csv --parser banco-estado.cuenta
+pnpm --silent calibrate -- ../samples/private/cuentarut-feb.csv --parser banco-estado.cuenta
 ```
 
 El archivo se lee en su sitio. No se copia, no se cachea, no se escribe nada.
@@ -52,9 +52,9 @@ El informe es lo único que puede salir de esa máquina. Trae:
 
 | Bloque | Qué responde |
 | --- | --- |
-| Archivo | extensión, tamaño, huella, hojas, filas |
+| Archivo | extensión, tamaño, cantidad de hojas y filas |
 | Detección | qué perfil ganó, con cuánta confianza, y **qué otros perfiles lo reclamaron** |
-| Cabecera | qué columnas se mapearon y, sobre todo, **cuáles no** |
+| Cabecera | roles normalizados y posiciones de columnas sin mapear, nunca texto libre |
 | Filas | leídas, mapeadas, omitidas, fallidas, con números de línea |
 | Montos | en qué escala decimal quedaron, cuántas entradas y salidas |
 | Fechas | orden, fechas distintas, filas ambiguas |
@@ -62,7 +62,7 @@ El informe es lo único que puede salir de esa máquina. Trae:
 | Clasificación | cuántas filas por tipo, cuántas sin clasificar |
 | Avisos | los códigos del parser, agrupados |
 
-No trae glosas, montos, nombres, RUT, números de cuenta ni el nombre del
+No trae glosas, montos, nombres, RUT, números de cuenta, nombre ni huella del
 archivo. Eso es lo que lo hace pegable en un issue.
 
 Las dos líneas que más suelen valer: **columnas sin mapear** (una columna que el
@@ -96,8 +96,8 @@ pierde en la siguiente refactorización.
 ### 8. Recalibrar el perfil
 
 Corregir el perfil declarativo en `addon/src/core/providers/`, volver a correr
-`pnpm calibrate` sobre el archivo real y comprobar que el informe cambió como se
-esperaba. Después `pnpm verify`.
+`pnpm --silent calibrate` sobre el archivo real y comprobar que el informe
+cambió como se esperaba. Después `pnpm verify`.
 
 ### 9. Mover `validationStatus` sólo con evidencia
 

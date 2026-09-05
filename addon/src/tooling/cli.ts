@@ -1,6 +1,5 @@
 import { sha256Hex } from '../core/hash';
 import { loadWorkbook } from '../core/parsing/workbook';
-import { redactSensitive } from '../core/privacy';
 import { PARSERS, getParser } from '../core/providers/registry';
 import { calibrate, formatReport } from './calibration';
 import { guardPrivateSample } from './sample-guard';
@@ -49,7 +48,7 @@ export interface CalibrationIo {
 }
 
 const USAGE = [
-  'Uso: pnpm calibrate -- <archivo> [--parser <id>]',
+  'Uso: pnpm --silent calibrate -- <archivo> [--parser <id>]',
   '',
   'El archivo tiene que estar fuera del repositorio, o en samples/private/.',
   'Se lee en su sitio: no se copia, no se guarda y no se deja ningún rastro.',
@@ -90,20 +89,20 @@ export function runCalibration(argv: readonly string[], io: CalibrationIo): numb
   }
 
   if (parsed.parserId !== undefined && getParser(parsed.parserId) === undefined) {
-    return fail(io, `No existe el perfil "${parsed.parserId}".\n\n${parserList()}`);
+    return fail(io, `El perfil indicado no existe.\n\n${parserList()}`);
   }
 
   let bytes: Uint8Array;
   try {
     bytes = io.readFile(resolved);
-  } catch (error) {
-    return fail(io, `No se pudo leer el archivo (${errorKind(error)}).`);
+  } catch {
+    return fail(io, 'No se pudo leer el archivo.');
   }
 
   const name = baseName(parsed.file);
   let report: string;
   try {
-    const workbook = loadWorkbook({ name, bytes });
+    const workbook = withoutThirdPartyConsole(() => loadWorkbook({ name, bytes }));
     report = formatReport(
       calibrate({
         bytes,
@@ -116,8 +115,11 @@ export function runCalibration(argv: readonly string[], io: CalibrationIo): numb
         accountId: 'calibracion',
       }),
     );
-  } catch (error) {
-    return fail(io, `${safeMessage(error)}\n\n${parserList()}`);
+  } catch {
+    return fail(
+      io,
+      `No se pudo interpretar el archivo. Puedes intentar con --parser <id>.\n\n${parserList()}`,
+    );
   }
 
   io.stdout(`${report}\n`);
@@ -156,7 +158,7 @@ function parseArguments(argv: readonly string[]): ParsedArguments | { error: str
       continue;
     }
     if (argument.startsWith('--')) {
-      return { error: `No conozco la opción ${argument}.` };
+      return { error: 'Se indicó una opción desconocida.' };
     }
     if (file !== undefined) {
       return { error: 'Indica un solo archivo.' };
@@ -172,34 +174,25 @@ function parserList(): string {
   return ['Perfiles disponibles:', ...PARSERS.map((parser) => `  ${parser.id}`)].join('\n');
 }
 
-/**
- * What went wrong, without saying where.
- *
- * A file-system error names the path, and the path is the single most sensitive
- * string in this whole command — Chilean banks put the account holder's RUT in
- * the download name. So the message is thrown away and only the class of
- * failure survives.
- */
-function errorKind(error: unknown): string {
-  const code = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : 'error de lectura';
-}
-
-/**
- * A parser's own message, sanitised.
- *
- * These are written by this project and say things like "no se reconoció la
- * cabecera", but they can quote a cell, and a stack trace quotes file paths. So
- * the trace is dropped, anything path-shaped is removed, and what is left goes
- * through the same redactor every log line uses.
- */
-function safeMessage(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const withoutPaths = raw
-    .split(/\s+/)
-    .map((word) => (word.includes('/') || word.includes('\\') ? '[ruta]' : word))
-    .join(' ');
-  return redactSensitive(withoutPaths.split('\n')[0] as string);
+/** SheetJS has unconditional console paths containing workbook-owned names. */
+function withoutThirdPartyConsole<T>(operation: () => T): T {
+  const runtimeConsole = globalThis['console'];
+  const original = {
+    error: runtimeConsole.error,
+    log: runtimeConsole.log,
+    warn: runtimeConsole.warn,
+  };
+  const discard = () => undefined;
+  runtimeConsole.error = discard;
+  runtimeConsole.log = discard;
+  runtimeConsole.warn = discard;
+  try {
+    return operation();
+  } finally {
+    runtimeConsole.error = original.error;
+    runtimeConsole.log = original.log;
+    runtimeConsole.warn = original.warn;
+  }
 }
 
 /** The last path segment, without importing `node:path` into a pure module. */
