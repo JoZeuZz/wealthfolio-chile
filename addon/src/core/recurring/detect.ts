@@ -2,9 +2,10 @@ import { detectAutomaticMandate, type AutomaticMandate } from '../chile/mandates
 import { detectInstallment } from '../installments/detect';
 import { daysBetween, type IsoDate } from '../dates';
 import { abs, add, compare, toNumber, type Money } from '../money';
-import { Confidence, isSpending, TransactionKind } from '../model/kinds';
+import { isSpending, TransactionKind } from '../model/kinds';
+import { StatementProduct } from '../model/statement';
 import type { NormalizedTransaction } from '../model/transaction';
-import { foldCase } from '../text';
+import { collapseSpaces, foldCase } from '../text';
 
 /**
  * Recurring spending.
@@ -23,11 +24,10 @@ import { foldCase } from '../text';
  * So the exclusions are the load-bearing part of this file, and each one has a
  * test. What is left is the subscription and the standing mandate.
  *
- * Two sources of evidence, and they are not equal. The weak one is statistical:
- * three charges, a monthly cadence, a stable amount. The strong one is that the
- * bank said so — PAC, PAT, PAGO AUTOMATICO in the description are a standing
- * instruction the account holder signed, and no generic tool can derive that
- * from the numbers. With it, two charges are enough.
+ * Two sources of evidence, and they are not equal. Statistical repetition can
+ * only produce `possible`: three ordinary purchases can coincide. A bank-side
+ * PAC/PAT/PAGO AUTOMATICO marker lets two regular charges surface as possible;
+ * three regular charges carrying that marker can become `likely`.
  *
  * Nothing here is ever `confirmed`: the addon cannot see the contract. The
  * output carries the evidence it reasoned from so the UI can show why, rather
@@ -90,6 +90,23 @@ const POSSIBLE_INTERVAL = { min: 20, max: 45 } as const;
 /** Relative amount spread allowed at each confidence. */
 const LIKELY_SPREAD = 0.15;
 const POSSIBLE_SPREAD = 0.4;
+const BASIS_POINTS = 10_000;
+
+const GENERIC_MERCHANTS = new Set([
+  'AUTOMATICO',
+  'CARGO',
+  'CARGO AUTOMATICO',
+  'COMERCIO',
+  'COMPRA',
+  'DEBITO AUTOMATICO',
+  'DESCONOCIDO',
+  'PAC',
+  'PAGO AUTOMATICO',
+  'PAGO',
+  'PAT',
+  'SIN COMERCIO',
+  'SUSCRIPCION',
+]);
 
 /** One date on which a merchant charged, with everything charged that day. */
 interface Occurrence {
@@ -102,16 +119,17 @@ export function findRecurringCharges(
   transactions: readonly NormalizedTransaction[],
   options: RecurrenceOptions = {},
 ): RecurringCharge[] {
-  const minOccurrences = options.minOccurrences ?? 3;
+  const minOccurrences = Math.max(3, options.minOccurrences ?? 3);
   const groups = new Map<string, NormalizedTransaction[]>();
 
   for (const transaction of transactions) {
     if (!isEligible(transaction)) continue;
     const merchant = transaction.merchant as string;
+    const merchantKey = normalizeMerchant(merchant);
     // The currency is part of the key, not an assumption about the caller. Two
     // charges from the same merchant in different currencies are two different
     // commitments, and totalling them would need a rate nobody has.
-    const key = `${transaction.amount.currency} ${foldCase(merchant)}`;
+    const key = `${transaction.amount.currency} ${merchantKey}`;
     const bucket = groups.get(key);
     if (bucket) bucket.push(transaction);
     else groups.set(key, [transaction]);
@@ -150,6 +168,7 @@ export function findRecurringCharges(
  */
 function isEligible(transaction: NormalizedTransaction): boolean {
   if (!isSpending(transaction.kind, transaction.direction)) return false;
+  if (transaction.amount.minor >= 0) return false;
   if (
     transaction.kind === TransactionKind.internal_transfer ||
     transaction.kind === TransactionKind.credit_card_payment ||
@@ -164,11 +183,19 @@ function isEligible(transaction: NormalizedTransaction): boolean {
   // And again from the description, because the field is not always there. A
   // row imported by 0.1.x carries no `cuota` metadata, and a user who edits the
   // activity in Wealthfolio can drop it; the marker the bank printed survives
-  // both. Only the explicit `CUOTA n DE m` form counts here — a bare `3/6` is
-  // also a date, and `detectInstallment` says so.
-  const declared = detectInstallment(transaction.description);
-  if (declared !== undefined && declared.confidence === Confidence.confirmed) return false;
-  return transaction.merchant !== undefined && transaction.merchant !== '';
+  // both. A bare `3/6` is accepted only for a known card purchase, where that
+  // shape is more likely a cuota than a date.
+  const declared = detectInstallment(
+    transaction.description,
+    '',
+    transaction.kind === TransactionKind.credit_card_purchase
+      ? { product: StatementProduct.credit_card }
+      : {},
+  );
+  if (declared !== undefined) return false;
+  if (transaction.merchant === undefined) return false;
+  const merchantKey = normalizeMerchant(transaction.merchant);
+  return merchantKey !== '' && !GENERIC_MERCHANTS.has(merchantKey);
 }
 
 function describeGroup(
@@ -198,12 +225,12 @@ function describeGroup(
   const amounts = occurrences.map((occurrence) => occurrence.amount);
   const typicalAmount = lowerMedianMoney(amounts);
   const spread = amountSpread(amounts, typicalAmount);
-  if (spread > POSSIBLE_SPREAD) return undefined;
+  if (!spreadWithin(amounts, typicalAmount, POSSIBLE_SPREAD)) return undefined;
 
   const regular =
     minInterval >= LIKELY_INTERVAL.min &&
     maxInterval <= LIKELY_INTERVAL.max &&
-    spread <= LIKELY_SPREAD;
+    spreadWithin(amounts, typicalAmount, LIKELY_SPREAD);
 
   // Two charges are one interval and one comparison — the thinnest evidence
   // this function will act on at all, and only because the bank named a
@@ -215,14 +242,17 @@ function describeGroup(
   // A day with two charges from one merchant is a shop, not a rhythm. It does
   // not disqualify the pattern, but it cannot be the strong reading either.
   const oneChargePerDay = occurrences.every((occurrence) => occurrence.charges.length === 1);
-  const confidence: RecurrenceConfidence = regular && oneChargePerDay ? 'likely' : 'possible';
+  const confidence: RecurrenceConfidence =
+    regular && oneChargePerDay && mandate !== undefined && occurrences.length >= 3
+      ? 'likely'
+      : 'possible';
 
   const last = occurrences[occurrences.length - 1] as Occurrence;
   const lastCharge = last.charges[last.charges.length - 1] as NormalizedTransaction;
   const merchant = lastCharge.merchant as string;
 
   return {
-    merchantKey: foldCase(merchant),
+    merchantKey: normalizeMerchant(merchant),
     merchant,
     currency: typicalAmount.currency,
     typicalAmount,
@@ -277,15 +307,14 @@ function toOccurrences(rows: readonly NormalizedTransaction[]): Occurrence[] {
  * same thing regardless of which came first in the file.
  */
 function mandateOf(rows: readonly NormalizedTransaction[]): AutomaticMandate | undefined {
-  const seen = new Set<AutomaticMandate>();
-  for (const row of rows) {
-    const mandate = detectAutomaticMandate(row.normalizedDescription);
-    if (mandate) seen.add(mandate);
-  }
-  for (const candidate of ['pac', 'pat', 'automatico'] as const) {
-    if (seen.has(candidate)) return candidate;
-  }
-  return undefined;
+  const mandates = rows.map((row) => detectAutomaticMandate(row.normalizedDescription));
+  if (mandates.some((mandate) => mandate === undefined)) return undefined;
+
+  const seen = new Set(mandates);
+  if (seen.has('pac') && seen.has('pat')) return undefined;
+  if (seen.has('pac')) return 'pac';
+  if (seen.has('pat')) return 'pat';
+  return 'automatico';
 }
 
 /**
@@ -310,6 +339,24 @@ function amountSpread(values: readonly Money[], median: Money): number {
   const base = Math.abs(toNumber(median));
   if (base === 0) return 0;
   return Math.max(...values.map((value) => Math.abs(toNumber(value) - toNumber(median)) / base));
+}
+
+/** Threshold decisions stay exact even when their displayed ratio is a float. */
+function spreadWithin(values: readonly Money[], median: Money, limit: number): boolean {
+  const limitBasisPoints = BigInt(Math.round(limit * BASIS_POINTS));
+  return values.every((value) => {
+    const scale = Math.max(value.scale, median.scale);
+    const amount = BigInt(value.minor) * 10n ** BigInt(scale - value.scale);
+    const typical = BigInt(median.minor) * 10n ** BigInt(scale - median.scale);
+    const base = typical < 0n ? -typical : typical;
+    if (base === 0n) return amount === 0n;
+    const delta = amount >= typical ? amount - typical : typical - amount;
+    return delta * BigInt(BASIS_POINTS) <= base * limitBasisPoints;
+  });
+}
+
+function normalizeMerchant(merchant: string): string {
+  return collapseSpaces(foldCase(merchant).replace(/[^A-Z0-9]+/g, ' '));
 }
 
 function confidenceRank(confidence: RecurrenceConfidence): number {

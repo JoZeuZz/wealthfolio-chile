@@ -29,11 +29,12 @@
  *   position-independent for that reason, not by accident;
  * - `P.A.C.`, `PAC/PAT`, `DEBITO AUTOMATICO` and `CARGO AUTOMATICO` are
  *   plausible and unverified. They are accepted because the cost of a miss is
- *   an unreported mandate and the cost of a hit on one of them is nil;
+ *   an unreported mandate; the combined `PAC/PAT` form cannot identify a rail
+ *   and is therefore reported only as generic automatic payment;
  * - the residual false positive is a merchant whose own name is the token —
  *   there are real Chilean companies called "PAT ...". A mandate never creates
- *   a pattern on its own; `core/recurring` only lets it lower the evidence bar
- *   from three charges to two, and only inside the tight cadence window.
+ *   a pattern on its own; `core/recurring` only lets it surface two charges as
+ *   possible, and only inside the tight cadence window.
  */
 
 export type AutomaticMandate = 'pac' | 'pat' | 'automatico';
@@ -46,9 +47,9 @@ export type AutomaticMandate = 'pac' | 'pat' | 'automatico';
  * `\b` would already exclude those, but tokenising says so in a way that cannot
  * be weakened by a later edit to the pattern.
  */
-const PAC_TOKENS = new Set(['PAC', 'P.A.C.', 'PAC/PAT']);
+const PAC_TOKENS = new Set(['PAC', 'P.A.C.']);
 const PAT_TOKENS = new Set(['PAT', 'P.A.T.']);
-const GENERIC_TOKENS = new Set(['SUSCRIPCION', 'SUBSCRIPCION']);
+const GENERIC_TOKENS = new Set(['SUSCRIPCION', 'SUBSCRIPCION', 'PAC/PAT']);
 
 /** Written-out forms. Run against the normalised text, which is accent-folded. */
 const PAC_PHRASES = [/\bPAGO AUTOMATICO DE CUENTAS\b/, /\bCUENTAS? AUTOMATICAS?\b/];
@@ -77,12 +78,22 @@ export function detectAutomaticMandate(
   if (text === '') return undefined;
   const tokens = text.split(' ');
 
+  // A legal name can itself be PAT/PAC. Prefix plus legal suffix is narrow
+  // evidence of a company name and avoids guessing where bank tokens sit.
+  if (
+    tokens[0] === 'EMPRESA' &&
+    tokens.some((token) => token === 'PAC' || token === 'PAT') &&
+    ['SPA', 'S.A.', 'SA', 'LTDA'].includes(tokens[tokens.length - 1] as string)
+  ) {
+    return undefined;
+  }
+
   if (PAC_PHRASES.some((pattern) => pattern.test(text))) return 'pac';
   if (PAT_PHRASES.some((pattern) => pattern.test(text))) return 'pat';
-  if (tokens.some((token) => PAC_TOKENS.has(token))) return 'pac';
-  if (tokens.some((token) => PAT_TOKENS.has(token))) return 'pat';
   if (GENERIC_PHRASES.some((pattern) => pattern.test(text))) return 'automatico';
   if (tokens.some((token) => GENERIC_TOKENS.has(token))) return 'automatico';
+  if (tokens.some((token) => PAC_TOKENS.has(token))) return 'pac';
+  if (tokens.some((token) => PAT_TOKENS.has(token))) return 'pat';
   return undefined;
 }
 

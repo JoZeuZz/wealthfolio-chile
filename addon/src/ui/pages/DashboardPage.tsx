@@ -632,7 +632,11 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
       const categories = totalsByCategory(transactions, { currency });
       const previousCategories = totalsByCategory(inPrevious, { currency });
       const merchants = totalsByMerchant(transactions, 8, { currency });
-      const recurring = findRecurringCharges(history);
+      // A monthly pattern that has not charged in this or the previous month is
+      // historical evidence, not a current recurring expense.
+      const recurring = findRecurringCharges(history).filter(
+        (charge) => monthKey(charge.lastDate) >= previousMonth,
+      );
 
       const plans = buildInstallmentPlans(history);
       const outlook = buildOutlook(plans, month, 12, currency);
@@ -666,5 +670,4 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
     },
   );
 }
-
 

@@ -310,4 +310,35 @@ describe('gastos que se repiten', () => {
     await screen.findByText('Gastos por categoría');
     expect(screen.queryByText('Gastos que se repiten')).not.toBeInTheDocument();
   });
+
+  it('no presenta como vigente un patrón que terminó hace meses', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        ...[10, 9, 8].map((months) =>
+          activity({
+            accountId: 'acc-clp',
+            amount: -9900,
+            date: MONTHS_AGO(months),
+            description: 'PAC SERVICIO ANTIGUO',
+            merchant: 'Servicio antiguo',
+            kind: TransactionKind.expense,
+            type: 'WITHDRAWAL',
+          }),
+        ),
+        activity({
+          accountId: 'acc-clp',
+          amount: -15000,
+          date: DAY(0),
+          description: 'COMPRA ACTUAL',
+          merchant: 'Comercio actual',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    await screen.findByText('Gastos por categoría');
+    expect(screen.queryByText('Gastos que se repiten')).not.toBeInTheDocument();
+  });
 });

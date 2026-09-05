@@ -54,6 +54,12 @@ describe('detectAutomaticMandate', () => {
       'automatico',
     );
     expect(detectAutomaticMandate(normalizeDescription('SUSCRIPCION SPOTIFY'))).toBe('automatico');
+    expect(detectAutomaticMandate(normalizeDescription('CARGO AUTOMATICO SEGURO'))).toBe(
+      'automatico',
+    );
+    expect(detectAutomaticMandate(normalizeDescription('P.A.C. AGUAS ANDINAS'))).toBe('pac');
+    expect(detectAutomaticMandate(normalizeDescription('P.A.T. ENTEL'))).toBe('pat');
+    expect(detectAutomaticMandate(normalizeDescription('PAC/PAT SERVICIO'))).toBe('automatico');
   });
 
   it('no confunde una palabra que empieza igual', () => {
@@ -63,6 +69,9 @@ describe('detectAutomaticMandate', () => {
       'PACK FAMILIAR LIDER',
       'PATIO OUTLET',
       'PATAGONIA STORE',
+      'EMPRESA PAT SPA',
+      'EMPRESA PAT SERVICIOS SPA',
+      'COMPACTO SERVICIOS',
       'SUPERMERCADO PATRONATO',
     ]) {
       expect(detectAutomaticMandate(normalizeDescription(text))).toBeUndefined();
@@ -75,13 +84,13 @@ describe('detectAutomaticMandate', () => {
 });
 
 describe('findRecurringCharges', () => {
-  it('tres cargos mensuales del mismo comercio por el mismo monto son probables', () => {
+  it('tres cargos mensuales sin mandato siguen siendo posibles, no probables', () => {
     const rows = NETFLIX.map((date) => charge(date, 9_900, 'Netflix'));
     const found = findRecurringCharges(rows);
 
     expect(found).toHaveLength(1);
     expect(found[0]?.merchant).toBe('Netflix');
-    expect(found[0]?.confidence).toBe('likely');
+    expect(found[0]?.confidence).toBe('possible');
     expect(found[0]?.occurrences).toBe(3);
     expect(found[0]?.typicalAmount).toEqual(money(9_900, 0, 'CLP'));
     expect(found[0]?.medianIntervalDays).toBe(30);
@@ -92,7 +101,7 @@ describe('findRecurringCharges', () => {
     expect(findRecurringCharges(rows)).toEqual([]);
   });
 
-  it('dos cargos sí bastan cuando el banco declaró el mandato', () => {
+  it('dos cargos con mandato se muestran sólo como posibles', () => {
     const rows = ['2026-07-10', '2026-08-10'].map((date) =>
       charge(date, 32_000, 'Aguas Andinas', { description: 'PAC AGUAS ANDINAS' }),
     );
@@ -100,7 +109,43 @@ describe('findRecurringCharges', () => {
 
     expect(found).toHaveLength(1);
     expect(found[0]?.mandate).toBe('pac');
-    expect(found[0]?.confidence).toBe('likely');
+    expect(found[0]?.confidence).toBe('possible');
+  });
+
+  it('tres cargos con mandato y cadencia estable sí son probables', () => {
+    const rows = NETFLIX.map((date) =>
+      charge(date, 32_000, 'Aguas Andinas', { description: 'PAC AGUAS ANDINAS' }),
+    );
+
+    expect(findRecurringCharges(rows)[0]?.confidence).toBe('likely');
+  });
+
+  it('un mandato parcial o contradictorio no refuerza el patrón', () => {
+    const partial = NETFLIX.map((date, index) =>
+      charge(date, 32_000, 'Servicio', {
+        description: index === 0 ? 'PAC SERVICIO' : 'SERVICIO',
+      }),
+    );
+    const conflicting = NETFLIX.map((date, index) =>
+      charge(date, 32_000, 'Servicio', {
+        description: index === 1 ? 'PAT SERVICIO' : 'PAC SERVICIO',
+      }),
+    );
+
+    expect(findRecurringCharges(partial)[0]?.confidence).toBe('possible');
+    expect(findRecurringCharges(partial)[0]?.mandate).toBeUndefined();
+    expect(findRecurringCharges(conflicting)[0]?.confidence).toBe('possible');
+    expect(findRecurringCharges(conflicting)[0]?.mandate).toBeUndefined();
+  });
+
+  it('dos cargos necesitan mandato compatible en ambos', () => {
+    const rows = ['2026-07-10', '2026-08-10'].map((date, index) =>
+      charge(date, 32_000, 'Servicio', {
+        description: index === 0 ? 'PAC SERVICIO' : 'SERVICIO',
+      }),
+    );
+
+    expect(findRecurringCharges(rows)).toEqual([]);
   });
 
   it('dos cargos con mandato exigen la cadencia estrecha', () => {
@@ -153,6 +198,26 @@ describe('findRecurringCharges', () => {
     expect(findRecurringCharges(rows)).toEqual([]);
   });
 
+  it('acepta deriva mensual normal y rechaza una cadencia rota', () => {
+    const monthly = ['2026-04-01', '2026-04-28', '2026-05-30', '2026-06-29'].map((date) =>
+      charge(date, 9_900, 'Netflix'),
+    );
+    const broken = ['2026-01-01', '2026-01-06', '2026-02-05', '2026-04-06'].map((date) =>
+      charge(date, 9_900, 'Netflix'),
+    );
+
+    expect(findRecurringCharges(monthly)).toHaveLength(1);
+    expect(findRecurringCharges(broken)).toEqual([]);
+  });
+
+  it('no fusiona comercios distintos aunque cobren lo mismo', () => {
+    const rows = NETFLIX.map((date, index) =>
+      charge(date, 9_900, index === 1 ? 'Spotify' : 'Netflix'),
+    );
+
+    expect(findRecurringCharges(rows)).toEqual([]);
+  });
+
   describe('exclusiones', () => {
     it('una compra en cuotas no es un gasto recurrente', () => {
       const rows = NETFLIX.map((date, index) =>
@@ -166,6 +231,27 @@ describe('findRecurringCharges', () => {
           },
         }),
       );
+      expect(findRecurringCharges(rows)).toEqual([]);
+    });
+
+    it('una cuota histórica bare de tarjeta tampoco es recurrente', () => {
+      const rows = NETFLIX.map((date, index) =>
+        charge(date, 39_990, 'Falabella', {
+          description: `FALABELLA ${index + 1}/6`,
+          kind: TransactionKind.credit_card_purchase,
+        }),
+      );
+
+      expect(findRecurringCharges(rows)).toEqual([]);
+    });
+
+    it('un contador bare inequívoco tampoco es recurrencia fuera de tarjeta', () => {
+      const rows = NETFLIX.map((date, index) =>
+        charge(date, 39_990, 'Falabella', {
+          description: `FALABELLA ${index + 1}/24`,
+        }),
+      );
+
       expect(findRecurringCharges(rows)).toEqual([]);
     });
 
@@ -223,6 +309,28 @@ describe('findRecurringCharges', () => {
       });
       expect(findRecurringCharges(rows)).toEqual([]);
     });
+
+    it('un comercio vacío o genérico no puede fusionar cargos ajenos', () => {
+      expect(findRecurringCharges(NETFLIX.map((date) => charge(date, 9_900, '   ')))).toEqual([]);
+      expect(findRecurringCharges(NETFLIX.map((date) => charge(date, 9_900, 'Compra')))).toEqual([]);
+      expect(findRecurringCharges(NETFLIX.map((date) => charge(date, 9_900, 'Compra.')))).toEqual(
+        [],
+      );
+      expect(
+        findRecurringCharges(
+          NETFLIX.map((date) => charge(date, 9_900, 'PAC', { description: 'PAC SERVICIO' })),
+        ),
+      ).toEqual([]);
+    });
+
+    it('un movimiento de monto cero no constituye un cargo', () => {
+      const rows = NETFLIX.map((date) => ({
+        ...charge(date, 9_900, 'Netflix'),
+        amount: money(0, 0, 'CLP'),
+      }));
+
+      expect(findRecurringCharges(rows)).toEqual([]);
+    });
   });
 
   describe('invariantes', () => {
@@ -267,6 +375,22 @@ describe('findRecurringCharges', () => {
       const found = findRecurringCharges(rows);
 
       expect(found[0]?.fingerprints).toEqual([...rows.map((row) => row.fingerprint)].sort());
+    });
+
+    it('el umbral de 15 por ciento se decide con los enteros de Money', () => {
+      const amounts = [money(-200, 2, 'CLP'), money(-200, 2, 'CLP'), money(-170, 2, 'CLP')];
+      const rows = NETFLIX.map((date, index) => ({
+        ...charge(date, 1, 'Servicio', { description: 'PAC SERVICIO' }),
+        amount: amounts[index] as (typeof amounts)[number],
+      }));
+
+      expect(findRecurringCharges(rows)[0]?.confidence).toBe('likely');
+    });
+
+    it('la opción de mínimo no permite dos cargos sin mandato', () => {
+      const rows = NETFLIX.slice(0, 2).map((date) => charge(date, 9_900, 'Netflix'));
+
+      expect(findRecurringCharges(rows, { minOccurrences: 2 })).toEqual([]);
     });
   });
 });
