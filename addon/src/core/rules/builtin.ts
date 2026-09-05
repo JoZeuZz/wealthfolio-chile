@@ -46,6 +46,13 @@ const contains = (value: string): Rule['conditions'][number] => ({
  *
  * `matches` compiles case-insensitively against the same normalised
  * description `contains` reads, so the only difference is the word boundary.
+ *
+ * Every short marker below has a Chilean glosa that contains it by accident:
+ * `PATAGONIA` holds `TAG`, `PARAGUAS` holds `AGUAS`, `DENOMINACION` holds
+ * `NOMINA`, `BIPOLAR` holds `BIP` and `INTERESANTE` holds `INTERES`. Searched
+ * as substrings they filed a clothing shop under highway tolls. A marker the
+ * bank prints as a token of its own is matched as a token of its own — the
+ * same rule `core/chile/mandates.ts` follows for PAT and PAC.
  */
 const word = (value: string): Rule['conditions'][number] => ({
   field: 'description',
@@ -125,7 +132,7 @@ export const BUILTIN_RULES: readonly Rule[] = [
     'builtin.intereses',
     'Intereses',
     31,
-    [contains('INTERES'), contains('INTERESES')],
+    [word('INTERES'), word('INTERESES')],
     [
       { type: 'set_kind', value: TransactionKind.interest },
       { type: 'set_category', value: 'deudas.intereses' },
@@ -151,7 +158,7 @@ export const BUILTIN_RULES: readonly Rule[] = [
     'builtin.sueldo',
     'Sueldo',
     40,
-    [contains('SUELDO'), contains('REMUNERACION'), contains('LIQUIDACION'), contains('NOMINA')],
+    [contains('SUELDO'), contains('REMUNERACION'), contains('LIQUIDACION'), word('NOMINA')],
     [
       { type: 'set_kind', value: TransactionKind.income },
       { type: 'set_category', value: 'ingresos.sueldo' },
@@ -192,7 +199,7 @@ export const BUILTIN_RULES: readonly Rule[] = [
     'builtin.transporte-publico',
     'Transporte público',
     53,
-    [merchantIs('Metro de Santiago'), contains('BIP'), contains('TRANSANTIAGO')],
+    [merchantIs('Metro de Santiago'), word('BIP'), contains('TRANSANTIAGO')],
     [{ type: 'set_category', value: 'transporte.publico' }],
   ),
   rule(
@@ -206,7 +213,7 @@ export const BUILTIN_RULES: readonly Rule[] = [
     'builtin.tag',
     'TAG y autopistas',
     55,
-    [contains('AUTOPISTA'), contains('COSTANERA NORTE'), contains('VESPUCIO'), contains('TAG')],
+    [contains('AUTOPISTA'), contains('COSTANERA NORTE'), contains('VESPUCIO'), word('TAG')],
     [{ type: 'set_category', value: 'transporte.estacionamiento' }],
   ),
 
@@ -238,7 +245,7 @@ export const BUILTIN_RULES: readonly Rule[] = [
     'builtin.agua',
     'Agua',
     71,
-    [merchantIs('Aguas Andinas'), contains('ESVAL'), contains('AGUAS ')],
+    [merchantIs('Aguas Andinas'), contains('ESVAL'), word('AGUAS')],
     [{ type: 'set_category', value: 'servicios.agua' }],
   ),
   rule(
