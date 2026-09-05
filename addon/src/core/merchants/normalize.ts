@@ -18,6 +18,14 @@ export interface MerchantResult {
   merchant?: string;
   /** Processor that was stripped off, when one was recognised. */
   processor?: string;
+  /**
+   * True when the name came from the brand table rather than from leftover text.
+   *
+   * The two are not equally trustworthy — a brand is a name this project
+   * recognises, free text is whatever survived the peeling — and a caller that
+   * has to tell them apart cannot do it by looking at the string.
+   */
+  brand?: true;
   /** The canonical key used for grouping and rule matching. */
   key: string;
 }
@@ -202,6 +210,7 @@ export function normalizeMerchant(description: string): MerchantResult {
         merchant: brand,
         ...(processor !== undefined ? { processor } : {}),
         key: foldCase(brand),
+        brand: true,
       };
     }
   }

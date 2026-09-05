@@ -29,6 +29,7 @@ import {
   summarizeMonth,
   totalsByCategory,
   totalsByMerchant,
+  unattributedByProcessor,
   unattributedSpending,
 } from '../../core/metrics/monthly';
 import { financialCostLabel } from '../../core/model/financial-cost';
@@ -461,6 +462,18 @@ export function DashboardPage() {
                     {view.unattributed.transactionCount} movimiento(s) sin comercio identificado.
                   </p>
                 ) : null}
+                {/* Why, when there is a why. A charge routed through Mercado
+                    Pago is not a mystery: it is a payment method that by design
+                    does not report who was paid — the bank's own glosario says
+                    as much to its customers — and that is something a person
+                    can act on. The processor is named as an explanation, never
+                    as a row of the ranking. */}
+                {view.unattributedProcessors.map((group) => (
+                  <p key={group.processor} className="text-muted-foreground text-xs">
+                    <Amount value={group.amount} /> pasó por {group.processor}, que no informa el
+                    comercio ({group.transactionCount} movimiento(s)).
+                  </p>
+                ))}
               </CardContent>
             </Card>
           </section>
@@ -770,6 +783,7 @@ interface DashboardView {
   categories: ReturnType<typeof totalsByCategory>;
   merchants: ReturnType<typeof totalsByMerchant>;
   unattributed: ReturnType<typeof unattributedSpending>;
+  unattributedProcessors: ReturnType<typeof unattributedByProcessor>;
   financialCosts: ReturnType<typeof financialCostBreakdown>;
   recurring: ReturnType<typeof findRecurringCharges>;
   outlook: ReturnType<typeof buildOutlook>;
@@ -803,6 +817,7 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
       const merchants = totalsByMerchant(transactions, 8, { currency });
       const unattributed = unattributedSpending(transactions, { currency });
       const financialCosts = financialCostBreakdown(transactions, { currency });
+      const unattributedProcessors = unattributedByProcessor(transactions);
       // A monthly pattern that has not charged in this or the previous month is
       // historical evidence, not a current recurring expense.
       const recurring = findRecurringCharges(history).filter(
@@ -830,6 +845,7 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
           categories,
           merchants,
           unattributed,
+          unattributedProcessors,
           financialCosts,
           recurring,
           outlook,

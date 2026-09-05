@@ -1,5 +1,6 @@
 import type { ActivityCreate, ActivityType } from '@wealthfolio/addon-sdk';
 import { hashFields } from '../hash';
+import { attributePayment } from '../merchants/attribution';
 import { redactSensitive } from '../privacy';
 import {
   abs,
@@ -777,6 +778,12 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
   const description = activity.comment ?? '';
   const kind = reconcileKind(activity, metadata, direction);
 
+  // Recomputed, not read back. The glosa is in `comment`, so the attribution is
+  // derivable, and deriving it means a correction to the processor catalogue
+  // reaches movements that were imported before it — without a second copy of
+  // the evidence that could go stale against the first.
+  const attribution = attributePayment(description);
+
   return {
     sourceInstitution: metadata.inst,
     sourceParser: metadata.parser,
@@ -786,7 +793,16 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
     date: civilDate(activity.date),
     description,
     normalizedDescription: normalizeDescription(description),
-    ...(metadata.merchant ? { merchant: metadata.merchant } : {}),
+    attribution,
+    // Stored merchant first: it is what the import decided, including anything
+    // a user rule set with `set_merchant`. Only when there is none does the
+    // freshly derived candidate stand in.
+    ...(metadata.merchant
+      ? { merchant: metadata.merchant }
+      : attribution.merchant
+        ? { merchant: attribution.merchant.name }
+        : {}),
+    ...(attribution.processor ? { paymentProcessor: attribution.processor.name } : {}),
     amount,
     direction,
     kind,

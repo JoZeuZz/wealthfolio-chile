@@ -1,5 +1,6 @@
 import type { IsoDate } from '../dates';
 import type { Money } from '../money';
+import type { PaymentAttribution } from '../merchants/attribution';
 import type { FinancialCostKind } from './financial-cost';
 import type { Confidence, Direction, TransactionKind } from './kinds';
 
@@ -49,6 +50,15 @@ export interface NormalizedTransaction {
   merchant?: string;
   /** Payment processor stripped off the merchant (WEBPAY, TRANSBANK, MERPAGO…). */
   paymentProcessor?: string;
+  /**
+   * The evidence behind `merchant` — and, when there is none, why.
+   *
+   * `merchant` is the name to group by; this is how it was arrived at. The two
+   * are kept apart because a merchant read off a known brand and one read off
+   * whatever text survived the peeling are not equally trustworthy, and the
+   * string alone cannot say which it is. See `core/merchants/attribution`.
+   */
+  attribution?: PaymentAttribution;
 
   // ── Amount ────────────────────────────────────────────────────────────
   /** Signed amount: negative leaves the account, positive enters it. */

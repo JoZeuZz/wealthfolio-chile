@@ -750,3 +750,64 @@ describe('la tarjeta de costos financieros', () => {
     expect(screen.queryByText('Costos financieros')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Por qué falta el comercio.
+ *
+ * El panel ya decía cuánto quedó sin comercio identificado. No decía por qué, y
+ * las razones no son intercambiables: un cargo que entró por Mercado Pago no es
+ * un misterio — es un medio de pago que por diseño no informa a quién le
+ * pagaste, y eso es accionable. El propio Banco Falabella se lo explica así a
+ * sus clientes.
+ */
+describe('el desglose de lo que no tiene comercio', () => {
+  it('nombra al procesador que no dejó ver el comercio', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -30000,
+          date: DAY(0),
+          description: 'MERCADO PAGO 4 TCOM',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+        activity({
+          accountId: 'acc-clp',
+          amount: -45000,
+          date: DAY(1),
+          description: 'SUPERMERCADO LIDER',
+          merchant: 'Lider',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    await screen.findByText('Comercios principales');
+    expect(screen.getByText(/Mercado Pago/)).toBeInTheDocument();
+    // El procesador explica un gasto sin comercio; no es un comercio del ranking.
+    expect(screen.queryByText('Mercado Pago')).not.toBeInTheDocument();
+  });
+
+  it('no dice nada cuando todo tiene comercio', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -45000,
+          date: DAY(0),
+          description: 'SUPERMERCADO LIDER',
+          merchant: 'Lider',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    await screen.findByText('Comercios principales');
+    expect(screen.queryByText(/no informa el comercio/)).not.toBeInTheDocument();
+  });
+});

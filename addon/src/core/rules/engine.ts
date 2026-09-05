@@ -2,7 +2,7 @@ import { toNumber, type Money } from '../money';
 import { Confidence, TransactionKind, type Direction } from '../model/kinds';
 import type { StatementProduct } from '../model/statement';
 import type { EnrichedTransaction, NormalizedTransaction } from '../model/transaction';
-import { normalizeMerchant } from '../merchants/normalize';
+import { attributePayment } from '../merchants/attribution';
 import { foldCase } from '../text';
 
 /**
@@ -121,22 +121,22 @@ export interface RuleOutcome {
 /**
  * Apply the rule set to one transaction.
  *
- * Merchant normalisation runs first so rules can match on the cleaned name
- * rather than on raw acquirer noise.
+ * Attribution runs first so rules can match on the cleaned merchant name rather
+ * than on raw acquirer noise — and so a rule keyed on `merchant` never matches
+ * a name the attribution refused to claim.
  */
 export function applyRules(
   transaction: NormalizedTransaction,
   rules: readonly Rule[],
   context: RuleContext,
 ): RuleOutcome {
-  const merchantResult = normalizeMerchant(transaction.description);
+  const attribution = attributePayment(transaction.description);
 
   let current: EnrichedTransaction = {
     ...transaction,
-    ...(merchantResult.merchant !== undefined ? { merchant: merchantResult.merchant } : {}),
-    ...(merchantResult.processor !== undefined
-      ? { paymentProcessor: merchantResult.processor }
-      : {}),
+    attribution,
+    ...(attribution.merchant ? { merchant: attribution.merchant.name } : {}),
+    ...(attribution.processor ? { paymentProcessor: attribution.processor.name } : {}),
     tags: [...transaction.tags],
     appliedRules: [],
   };

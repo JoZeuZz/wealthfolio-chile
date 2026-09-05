@@ -445,6 +445,56 @@ export function unattributedSpending(
   return { amount, transactionCount };
 }
 
+/** Spending with no merchant, grouped by the processor that stood in the way. */
+export interface UnattributedGroup {
+  /** Display name of the processor. */
+  processor: string;
+  amount: Money;
+  transactionCount: number;
+}
+
+/**
+ * Why part of the month has no merchant.
+ *
+ * `unattributedSpending` says how much; this says on whose account. The reasons
+ * are not interchangeable: a charge routed through Mercado Pago is not a
+ * mystery, it is a payment method that by design does not report who was paid —
+ * which is something a person can act on. A charge the bank itself labelled
+ * `PAGO ONLINE` is the bank saying it does not know either, and has no
+ * processor to name, so it is counted in the total and not here.
+ */
+export function unattributedByProcessor(
+  transactions: readonly NormalizedTransaction[],
+): UnattributedGroup[] {
+  // No currency accumulator: every group starts from a real amount, so an empty
+  // month produces no groups rather than a zero in a currency nobody used.
+  // Mixing currencies inside one group throws, which is the invariant we want.
+  const groups = new Map<string, UnattributedGroup>();
+
+  for (const transaction of transactions) {
+    if (!isSpending(transaction.kind, transaction.direction)) continue;
+    if (transaction.merchant !== undefined && transaction.merchant !== '') continue;
+
+    const processor = transaction.attribution?.processor;
+    if (!processor) continue;
+
+    const magnitude = abs(transaction.amount);
+    const existing = groups.get(processor.id);
+    if (existing) {
+      existing.amount = add(existing.amount, magnitude);
+      existing.transactionCount += 1;
+    } else {
+      groups.set(processor.id, {
+        processor: processor.name,
+        amount: magnitude,
+        transactionCount: 1,
+      });
+    }
+  }
+
+  return [...groups.values()].sort((a, b) => compare(b.amount, a.amount));
+}
+
 /**
  * Recurring-charge detection used to live here.
  *
