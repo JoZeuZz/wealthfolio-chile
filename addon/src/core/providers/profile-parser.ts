@@ -17,6 +17,7 @@ import { isIgnoredRow, mapRows } from '../parsing/rows';
 import type { NormalizedTransaction } from '../model/transaction';
 import { isBlankRow, type Sheet } from '../parsing/tabular';
 import { pickDataSheet } from '../parsing/workbook';
+import { readCardFacts } from './card-facts';
 import { foldCase } from '../text';
 import type { DetectionHints, ParserInput, StatementParser } from './parser';
 
@@ -244,6 +245,19 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
     issues,
   });
 
+  // Only on a card. A cuenta corriente has no billing cycle, no minimum payment
+  // and no cupo, so `PAGO MINIMO` in its preamble is somebody else's figure —
+  // a card mentioned in passing, or marketing copy.
+  const cardFacts =
+    profile.product === StatementProduct.credit_card ||
+    profile.product === StatementProduct.credit_line
+      ? readCardFacts({
+          preamble: preambleText(sheet, header.headerRow),
+          currency,
+          ...(profile.numberFormat ? { numberFormat: profile.numberFormat } : {}),
+        })
+      : undefined;
+
   return {
     institution: profile.institution,
     parser: profile.parserId,
@@ -254,6 +268,7 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
     rowStats: mapped.stats,
     ...(balances.opening !== undefined ? { openingBalance: balances.opening } : {}),
     ...(balances.closing !== undefined ? { closingBalance: balances.closing } : {}),
+    ...(cardFacts && Object.keys(cardFacts).length > 0 ? { cardFacts } : {}),
     issues,
     fileHash: input.fileHash,
     fileName: input.file.name,

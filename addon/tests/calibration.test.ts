@@ -292,3 +292,47 @@ describe('guarda del archivo privado', () => {
     expect(verdict.allowed).toBe(true);
   });
 });
+
+/**
+ * Los hechos del estado de cuenta, en el informe.
+ *
+ * Es la parte del informe que existe para un archivo que todavía no tenemos.
+ * Ningún perfil tiene una cartola real detrás, así que hoy todas las etiquetas
+ * dicen «no encontrado» — y eso es exactamente lo útil: cuando llegue la
+ * primera cartola de verdad, esta lista es la lista de etiquetas a corregir.
+ */
+describe('el informe y el estado de cuenta de una tarjeta', () => {
+  const CARD = [
+    'Banco Generico — Estado de Cuenta Tarjeta de Credito',
+    'Tarjeta N: XXXX-XXXX-XXXX-7788',
+    'PAGAR HASTA: 05/10/2026',
+    'El Pago Minimo es de $35.000',
+    '',
+    'Fecha;Descripcion;Monto;Cuotas;Rubro',
+    '02/09/2026;COMPRA GENERICA;45.000;;Otros',
+  ].join('\n');
+
+  it('lista qué encontró y qué no', () => {
+    const text = formatReport(report(CARD, 'generico.tarjeta', 'estado.csv'));
+    expect(text).toContain('Estado de cuenta');
+    expect(text).toContain('Pago mínimo');
+    expect(text).toContain('encontrado (declared)');
+    expect(text).toContain('no encontrado');
+  });
+
+  /**
+   * Un pago mínimo es una cifra sobre la deuda de una persona. El informe lleva
+   * la pregunta, nunca la respuesta.
+   */
+  it('no imprime ninguna cifra del estado de cuenta', () => {
+    const text = formatReport(report(CARD, 'generico.tarjeta', 'estado.csv'));
+    expect(text).not.toContain('35.000');
+    expect(text).not.toContain('35000');
+    expect(text).not.toContain('05/10/2026');
+    expect(text).not.toContain('2026-10-05');
+  });
+
+  it('una cartola de cuenta no trae esa sección', () => {
+    expect(formatReport(report(CARTOLA))).not.toContain('── Estado de cuenta');
+  });
+});

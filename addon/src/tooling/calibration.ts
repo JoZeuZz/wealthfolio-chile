@@ -1,10 +1,20 @@
 import { compare, negate, type Money } from '../core/money';
 import { Confidence, TransactionKind } from '../core/model/kinds';
 import type { NormalizedTransaction } from '../core/model/transaction';
-import { DETECTION_FLOOR, type ParsedStatement, type ValidationResult } from '../core/model/statement';
+import {
+  DETECTION_FLOOR,
+  StatementProduct,
+  type ParsedStatement,
+  type ValidationResult,
+} from '../core/model/statement';
 import { detectHeader, mapColumns } from '../core/parsing/columns';
 import type { Sheet } from '../core/parsing/tabular';
 import { redactSensitive } from '../core/privacy';
+import {
+  cardFactLabel,
+  factPresence,
+  type FactPresence,
+} from '../core/model/statement-facts';
 import { detectAll, getParser } from '../core/providers/registry';
 import type { ParserInput } from '../core/providers/parser';
 
@@ -40,6 +50,14 @@ export interface CalibrationReport {
   dates: DateFacts;
   balances: BalanceFacts;
   classification: ClassificationFacts;
+  /**
+   * Which statement facts the profile found, on a card statement.
+   *
+   * Presence only, never a value: this report gets pasted into an issue, and a
+   * pago mínimo is a figure about a person's debt. Absent entirely when the
+   * statement is not a card — a cuenta corriente has none of these.
+   */
+  cardFacts?: FactPresence[];
   /** Issue codes the parser raised, with how many times each. */
   issues: Array<{ code: string; level: string; count: number }>;
 }
@@ -192,8 +210,17 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
     dates: dateFacts(statement.transactions),
     balances: balanceFacts(statement),
     classification: classificationFacts(statement.transactions),
+    ...(isCardStatement(statement) ? { cardFacts: factPresence(statement.cardFacts ?? {}) } : {}),
     issues: issueFacts(validation),
   };
+}
+
+/** Whether the parsed statement is one that can carry card facts at all. */
+function isCardStatement(statement: ParsedStatement): boolean {
+  return (
+    statement.account.product === StatementProduct.credit_card ||
+    statement.account.product === StatementProduct.credit_line
+  );
 }
 
 function fileFacts(input: CalibrationInput, sheet: Sheet | undefined): FileFacts {
@@ -489,6 +516,17 @@ export function formatReport(report: CalibrationReport): string {
   }
   add('Saldo inicial', report.balances.opening ?? 'sin evidencia');
   add('Saldo final', report.balances.closing ?? 'sin evidencia');
+
+  if (report.cardFacts) {
+    lines.push('', '── Estado de cuenta ──────────────────────────────────────');
+    // What the profile's labels found, and nothing about what they said. On a
+    // profile with no real cartola behind it every line reads "no encontrado",
+    // and that is the honest starting point: it turns the first real statement
+    // into a list of labels to correct.
+    for (const fact of report.cardFacts) {
+      add(cardFactLabel(fact.key), fact.found ? `encontrado (${fact.source})` : 'no encontrado');
+    }
+  }
 
   lines.push('', '── Clasificación ─────────────────────────────────────────');
   for (const kind of report.classification.byKind) {

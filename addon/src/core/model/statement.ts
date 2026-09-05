@@ -1,5 +1,6 @@
 import type { IsoDate } from '../dates';
 import type { Money } from '../money';
+import type { CreditCardStatementFacts } from './statement-facts';
 import type { NormalizedTransaction } from './transaction';
 
 /** What kind of product the statement covers. Drives the default classification. */
@@ -94,6 +95,15 @@ export interface ParsedStatement {
   openingBalance?: StatementBalance;
   /** The balance after the last movement of the period. Same rule. */
   closingBalance?: StatementBalance;
+  /**
+   * What a credit-card statement asserts about the debt it bills.
+   *
+   * Only on a card or a credit line: a cuenta corriente has no billing cycle,
+   * no minimum payment and no cupo, so looking for those labels there can only
+   * produce false positives. Absent means the labels were not found, which is
+   * not the same as zero — see `core/model/statement-facts`.
+   */
+  cardFacts?: CreditCardStatementFacts;
   /** File-level problems that are not tied to a single row. */
   issues: StatementIssue[];
   /** SHA-256 of the source bytes. */

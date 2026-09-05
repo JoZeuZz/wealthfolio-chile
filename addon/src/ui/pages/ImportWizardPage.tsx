@@ -18,6 +18,10 @@ import { categoryPath } from '../../core/categories/defaults';
 import { buildDuplicateIndex } from '../../core/dedupe/classify';
 import { formatIsoDate } from '../../core/dates';
 import { formatCLP, toDecimalString } from '../../core/money';
+import {
+  cardFactLabel,
+  type CreditCardStatementFacts,
+} from '../../core/model/statement-facts';
 import { maskAccountNumber } from '../../core/privacy';
 import type { ParsedStatement, RowStats, StatementBalance } from '../../core/model/statement';
 import { setRowSelection, type PreparedImport, type PreviewRow } from '../../core/pipeline';
@@ -569,6 +573,14 @@ function DetectionStep({
               hint={describeBalanceSources(statement)}
             />
           ) : null}
+          {/* What a card statement asserts about the debt it bills — the part a
+              person actually acts on, and which the wizard read and then threw
+              away. Each one appears only if the document said it: an absent
+              pago mínimo is not drawn as "$0", because zero would claim there
+              is nothing to pay this month. */}
+          {cardFactFields(statement.cardFacts).map((fact) => (
+            <Field key={fact.label} label={fact.label} value={fact.value} hint={fact.hint} />
+          ))}
         </div>
 
         {accountMatch && !accountMatch.blocking ? (
@@ -947,6 +959,49 @@ export function describeRowStats(stats: RowStats): string {
   if (stats.skipped > 0) parts.push(`${stats.skipped} omitidas`);
   if (stats.failed > 0) parts.push(`${stats.failed} con error`);
   return parts.join(' · ');
+}
+
+/**
+ * The card facts a statement declared, ready to render.
+ *
+ * Only declared facts, and only the ones present. Nothing here computes a
+ * figure: a billed amount added up from the rows would look identical to one
+ * the issuer printed, and they are not the same claim.
+ */
+function cardFactFields(
+  facts: CreditCardStatementFacts | undefined,
+): Array<{ label: string; value: string; hint?: string }> {
+  if (!facts) return [];
+  const out: Array<{ label: string; value: string; hint?: string }> = [];
+
+  const period = facts.billingPeriod;
+  if (period) {
+    out.push({
+      label: cardFactLabel('billingPeriod'),
+      value: `${formatIsoDate(period.value.from)} → ${formatIsoDate(period.value.to)}`,
+      hint: 'El ciclo que factura este estado de cuenta, que no es un mes calendario.',
+    });
+  }
+
+  for (const key of ['statementDate', 'dueDate'] as const) {
+    const fact = facts[key];
+    if (fact) out.push({ label: cardFactLabel(key), value: formatIsoDate(fact.value) });
+  }
+
+  for (const key of [
+    'billedAmount',
+    'minimumPayment',
+    'totalDebt',
+    'domesticDebt',
+    'foreignDebt',
+    'creditLimit',
+    'availableCredit',
+  ] as const) {
+    const fact = facts[key];
+    if (fact) out.push({ label: cardFactLabel(key), value: formatCLP(fact.value) });
+  }
+
+  return out;
 }
 
 const KIND_LABELS: Record<string, string> = {

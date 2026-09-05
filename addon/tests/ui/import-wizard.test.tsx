@@ -482,3 +482,41 @@ describe('cada tipo de movimiento tiene nombre en la interfaz', () => {
     expect(kindLabel(TransactionKind.cash_advance)).toBe('Avance en efectivo');
   });
 });
+
+/**
+ * Lo que el estado de cuenta declara, antes de importar.
+ *
+ * Un estado de cuenta de tarjeta afirma cosas que ninguna cartola de cuenta
+ * afirma: cuánto se facturó, cuánto es el mínimo y hasta cuándo hay plazo. Son
+ * el dato que la persona realmente usa, y hasta ahora el wizard leía el archivo
+ * entero sin mostrar ninguno.
+ *
+ * Cada uno se muestra sólo si el documento lo dijo. Un pago mínimo ausente no
+ * se dibuja como «$0»: cero afirmaría que este mes no hay nada que pagar.
+ */
+describe('los hechos del estado de cuenta en la vista previa', () => {
+  const CARD = [
+    'Banco Generico - Estado de Cuenta Tarjeta de Credito',
+    'PAGAR HASTA: 05/10/2026',
+    'TOTAL A PAGAR: $412.900',
+    'El Pago Minimo es de $35.000',
+    '',
+    'Fecha;Descripcion;Monto;Cuotas;Rubro',
+    '02/09/2026;COMPRA GENERICA;45.000;;Otros',
+  ].join('\n');
+
+  it('muestra el monto facturado, el mínimo y el vencimiento', async () => {
+    await openWizardWith(CARD);
+
+    expect(await screen.findByText('Monto facturado')).toBeInTheDocument();
+    expect(screen.getByText('Pago mínimo')).toBeInTheDocument();
+    expect(screen.getByText('Fecha de vencimiento')).toBeInTheDocument();
+  });
+
+  it('no muestra un hecho que el documento no declaró', async () => {
+    await openWizardWith(CARD);
+
+    await screen.findByText('Monto facturado');
+    expect(screen.queryByText('Cupo disponible')).not.toBeInTheDocument();
+  });
+});
