@@ -342,3 +342,127 @@ describe('gastos que se repiten', () => {
     expect(screen.queryByText('Gastos que se repiten')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Lo que el panel afirma sobre sí mismo.
+ *
+ * Tres afirmaciones que el panel hacía y que sus propios datos contradecían en
+ * la misma pantalla.
+ */
+describe('el panel y lo que dice de sí mismo', () => {
+  const RUN = {
+    id: 'run-vieja',
+    timestamp: '2026-03-01T12:00:00.000Z',
+    fileName: 'cartola.csv',
+    fileHash: 'hash',
+    institution: 'banco-chile',
+    parser: 'banco-chile.cuenta-corriente',
+    parserVersion: '1.0.0',
+    profileStatus: 'pending-real-sample',
+    accountId: 'acc-clp',
+    accountName: 'Cuenta CLP',
+    currency: 'CLP',
+    importedRows: 12,
+  };
+  const HISTORY = {
+    'wfcl.imports.index': JSON.stringify({ v: 1, shards: 1, perShard: 50, lastShardLength: 1 }),
+    'wfcl.imports.s0': JSON.stringify([RUN]),
+  };
+
+  it('un mes sin movimientos no es «todavía no has importado nada»', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [],
+      storage: HISTORY,
+    });
+
+    // La tarjeta de estrena aparecía junto a un historial con importaciones
+    // dentro de la misma pantalla: el panel se contradecía a sí mismo.
+    expect(await screen.findByText('Últimas importaciones')).toBeInTheDocument();
+    expect(screen.queryByText('Todavía no hay movimientos importados')).not.toBeInTheDocument();
+    expect(screen.queryByText('Importar mi primera cartola')).not.toBeInTheDocument();
+  });
+
+  it('sin ninguna importación sí ofrece la primera', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: [] });
+
+    expect(await screen.findByText('Todavía no hay movimientos importados')).toBeInTheDocument();
+  });
+
+  it('los gastos fijos y variables no viven bajo «movimientos que no son gasto»', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -50000,
+          date: DAY(0),
+          description: 'COMPRA TIENDA',
+          merchant: 'Tienda',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    const title = await screen.findByText('Movimientos que no son gasto');
+    const card = title.parentElement?.parentElement;
+    expect(card?.className).toContain('bg-card');
+    expect(card?.textContent).not.toContain('Gastos fijos');
+    expect(card?.textContent).not.toContain('Gastos variables');
+    // Siguen estando en el panel, con un título que no los desmiente.
+    expect(screen.getByText('Gastos fijos')).toBeInTheDocument();
+  });
+
+  it('el gasto sin comercio se informa aparte, no como un comercio', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -500000,
+          date: DAY(0),
+          description: 'GIRO CAJERO AUTOMATICO',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+        activity({
+          accountId: 'acc-clp',
+          amount: -30000,
+          date: DAY(1),
+          description: 'SUPERMERCADO LIDER',
+          merchant: 'Lider',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    await screen.findByText('Comercios principales');
+    expect(screen.queryByText('Sin comercio')).not.toBeInTheDocument();
+    expect(screen.getByText(/sin comercio identificado/i)).toBeInTheDocument();
+  });
+
+  it('la evidencia de una recurrencia se lee antes que el resumen que la cita', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [0, 1, 2, 3].map((months) =>
+        activity({
+          accountId: 'acc-clp',
+          amount: -9900,
+          date: MONTHS_AGO(months),
+          description: 'PAC SERVICIO SINTETICO',
+          merchant: 'Servicio sintetico',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ),
+    });
+
+    const recurring = await screen.findByText('Gastos que se repiten');
+    const observations = screen.getByText('Observaciones');
+    expect(
+      recurring.compareDocumentPosition(observations) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});

@@ -28,6 +28,7 @@ import {
   summarizeMonth,
   totalsByCategory,
   totalsByMerchant,
+  unattributedSpending,
 } from '../../core/metrics/monthly';
 import { findRecurringCharges } from '../../core/recurring/detect';
 import { mandateLabel } from '../../core/chile/mandates';
@@ -205,7 +206,12 @@ export function DashboardPage() {
         </p>
       ) : null}
 
-      {!loading && data && data.transactions.length === 0 ? (
+      {/* Only when nothing has ever been imported. Keyed on the window alone,
+          this card appeared above a populated import history whenever the user
+          walked back to a month older than the loaded window: the panel told
+          them to import their first statement and listed five imports on the
+          same screen. */}
+      {!loading && data && data.transactions.length === 0 && data.runs.length === 0 ? (
         <Card>
           <CardHeader>
             <CardTitle>Todavía no hay movimientos importados</CardTitle>
@@ -371,6 +377,19 @@ export function DashboardPage() {
                     </div>
                   ))
                 )}
+                {/* Fixed and variable used to sit under "Movimientos que no son
+                    gasto", a card whose title denied they were spending at all.
+                    They are the same month's spending seen another way, so they
+                    belong beside the categories. */}
+                <Separator />
+                <div className="flex items-baseline justify-between gap-2 text-sm">
+                  <span>Gastos fijos</span>
+                  <Amount value={view.summary.fixedExpenses} />
+                </div>
+                <div className="flex items-baseline justify-between gap-2 text-sm">
+                  <span>Gastos variables</span>
+                  <Amount value={view.summary.variableExpenses} />
+                </div>
               </CardContent>
             </Card>
 
@@ -397,6 +416,15 @@ export function DashboardPage() {
                     </div>
                   ))
                 )}
+                {/* What the ranking leaves out, said out loud. Filed under a
+                    shared "Sin comercio" row it fused unrelated movements and
+                    competed for the top of the list. */}
+                {view.unattributed.transactionCount > 0 ? (
+                  <p className="text-muted-foreground text-xs">
+                    Además <Amount value={view.unattributed.amount} /> en{' '}
+                    {view.unattributed.transactionCount} movimiento(s) sin comercio identificado.
+                  </p>
+                ) : null}
               </CardContent>
             </Card>
           </section>
@@ -463,33 +491,9 @@ export function DashboardPage() {
                   Ninguno de estos montos se cuenta como ingreso ni como gasto: mueven dinero que ya
                   tenías.
                 </p>
-                <Separator />
-                <div className="flex items-baseline justify-between gap-2">
-                  <span>Gastos fijos</span>
-                  <Amount value={view.summary.fixedExpenses} />
-                </div>
-                <div className="flex items-baseline justify-between gap-2">
-                  <span>Gastos variables</span>
-                  <Amount value={view.summary.variableExpenses} />
-                </div>
               </CardContent>
             </Card>
           </section>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Observaciones</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              {view.insights.length === 0 ? (
-                <p className="text-muted-foreground text-sm">
-                  Necesitamos al menos dos meses de datos para comparar tendencias.
-                </p>
-              ) : (
-                view.insights.map((insight) => <InsightRow key={insight.id} insight={insight} />)
-              )}
-            </CardContent>
-          </Card>
 
           {view.recurring.length > 0 ? (
             <Card>
@@ -536,6 +540,21 @@ export function DashboardPage() {
               </CardContent>
             </Card>
           ) : null}
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Observaciones</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              {view.insights.length === 0 ? (
+                <p className="text-muted-foreground text-sm">
+                  Necesitamos al menos dos meses de datos para comparar tendencias.
+                </p>
+              ) : (
+                view.insights.map((insight) => <InsightRow key={insight.id} insight={insight} />)
+              )}
+            </CardContent>
+          </Card>
 
           {data && data.runs.length > 0 ? (
             <Card>
@@ -602,6 +621,7 @@ interface DashboardView {
   summary: ReturnType<typeof summarizeMonth>;
   categories: ReturnType<typeof totalsByCategory>;
   merchants: ReturnType<typeof totalsByMerchant>;
+  unattributed: ReturnType<typeof unattributedSpending>;
   recurring: ReturnType<typeof findRecurringCharges>;
   outlook: ReturnType<typeof buildOutlook>;
   insights: Insight[];
@@ -632,6 +652,7 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
       const categories = totalsByCategory(transactions, { currency });
       const previousCategories = totalsByCategory(inPrevious, { currency });
       const merchants = totalsByMerchant(transactions, 8, { currency });
+      const unattributed = unattributedSpending(transactions, { currency });
       // A monthly pattern that has not charged in this or the previous month is
       // historical evidence, not a current recurring expense.
       const recurring = findRecurringCharges(history).filter(
@@ -658,6 +679,7 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
           summary,
           categories,
           merchants,
+          unattributed,
           recurring,
           outlook,
           insights,

@@ -370,7 +370,18 @@ export function totalsByCategory(
     .sort((a, b) => compare(b.amount, a.amount) || (a.category < b.category ? -1 : 1));
 }
 
-/** Expense totals per merchant, largest first. */
+/**
+ * Expense totals per merchant, largest first.
+ *
+ * A movement whose merchant could not be resolved is left out rather than
+ * filed under a shared placeholder. Grouping them fused unrelated expenses
+ * into one row that then competed for the top of the ranking, and the
+ * concentration insight read that row as a merchant: "Sin comercio concentra
+ * el 89 % de tus gastos" was a sentence about nothing.
+ *
+ * The money is not dropped — `unattributedSpending` reports it under its own
+ * name, which is what it is.
+ */
 export function totalsByMerchant(
   transactions: readonly NormalizedTransaction[],
   limit = 10,
@@ -381,7 +392,8 @@ export function totalsByMerchant(
 
   for (const transaction of transactions) {
     if (!isSpending(transaction.kind, transaction.direction)) continue;
-    const merchant = transaction.merchant ?? 'Sin comercio';
+    const merchant = transaction.merchant;
+    if (merchant === undefined || merchant === '') continue;
     const magnitude = abs(transaction.amount);
     const entry = totals.get(merchant);
     if (entry) {
@@ -402,6 +414,31 @@ export function totalsByMerchant(
     }))
     .sort((a, b) => compare(b.amount, a.amount) || (a.merchant < b.merchant ? -1 : 1))
     .slice(0, limit);
+}
+
+/**
+ * Spending the parser could not attribute to any merchant.
+ *
+ * The counterpart of `totalsByMerchant`: what the ranking deliberately leaves
+ * out, so a panel can still add it up instead of quietly showing a smaller
+ * number than the month actually holds.
+ */
+export function unattributedSpending(
+  transactions: readonly NormalizedTransaction[],
+  options: MetricsOptions = {},
+): { amount: Money; transactionCount: number } {
+  const currency = options.currency ?? 'CLP';
+  let amount = zero(currency);
+  let transactionCount = 0;
+
+  for (const transaction of transactions) {
+    if (!isSpending(transaction.kind, transaction.direction)) continue;
+    if (transaction.merchant !== undefined && transaction.merchant !== '') continue;
+    amount = add(amount, abs(transaction.amount));
+    transactionCount += 1;
+  }
+
+  return { amount, transactionCount };
 }
 
 /**
