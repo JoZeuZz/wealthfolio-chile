@@ -16,8 +16,6 @@ import { collapseSpaces, foldCase } from '../text';
 export interface MerchantResult {
   /** Cleaned merchant name in title case, or undefined if nothing survived. */
   merchant?: string;
-  /** Processor that was stripped off, when one was recognised. */
-  processor?: string;
   /**
    * True when the name came from the brand table rather than from leftover text.
    *
@@ -29,26 +27,6 @@ export interface MerchantResult {
   /** The canonical key used for grouping and rule matching. */
   key: string;
 }
-
-/** Payment processors and acquirers that prefix Chilean card descriptions. */
-const PROCESSORS: Array<[RegExp, string]> = [
-  [/\bWEBPAY\s*PLUS\b/g, 'Webpay'],
-  [/\bWEBPAY\b/g, 'Webpay'],
-  [/\bTRANSBANK\b/g, 'Transbank'],
-  [/\bREDCOMPRA\b/g, 'Redcompra'],
-  [/\bRED\s*COMPRA\b/g, 'Redcompra'],
-  [/\bKHIPU\b/g, 'Khipu'],
-  [/\bMERCADO\s*PAGO\b/g, 'Mercado Pago'],
-  [/\bMERPAGO\b/g, 'Mercado Pago'],
-  [/\bMPAGO\b/g, 'Mercado Pago'],
-  [/\bGETNET\b/g, 'Getnet'],
-  [/\bSUMUP\b/g, 'SumUp'],
-  [/\bPAYPAL\b/g, 'PayPal'],
-  [/\bPAY\s*PAL\b/g, 'PayPal'],
-  [/\bFLOW\b/g, 'Flow'],
-  [/\bETPAY\b/g, 'ETpay'],
-  [/\bKLAP\b/g, 'Klap'],
-];
 
 /**
  * Transaction verbs banks prepend. Removed only from the *start* of the
@@ -155,6 +133,10 @@ const BRAND_ALIASES: Array<[RegExp, string]> = [
 
 /** Reference blobs acquirers append: `*1234`, `#00987`, long digit runs. */
 const REFERENCE_NOISE = [
+  // `4 TCOM` / `5 TCOM`, the routing suffix the Banco Falabella glosario shows.
+  // It rides on any merchant, not only on Mercado Pago's, and left in place it
+  // split one shop into two rows of the ranking by its digit.
+  /\b\d\s*TCOMP?\b/g,
   /\*+\s*\d+/g,
   /#\s*\d+/g,
   /\bN[º°]?\s*\d{3,}\b/g,
@@ -164,16 +146,12 @@ const REFERENCE_NOISE = [
 ];
 
 export function normalizeMerchant(description: string): MerchantResult {
+  // Processors are not peeled here. They have their own catalogue, with
+  // per-processor evidence and a policy for whether the merchant comes through
+  // at all (`core/chile/processors`), and `merchants/attribution` applies it
+  // before calling this. A second, dumber copy of the list here peeled `FLOW`
+  // out of `SUSHI FLOW` — a shop the catalogue deliberately protects.
   let text = foldCase(String(description ?? ''));
-  let processor: string | undefined;
-
-  for (const [pattern, name] of PROCESSORS) {
-    if (pattern.test(text)) {
-      processor ??= name;
-      text = text.replace(pattern, ' ');
-    }
-    pattern.lastIndex = 0;
-  }
 
   text = collapseSpaces(text.replace(/[^A-Z0-9+.\s-]+/g, ' '));
 
@@ -206,27 +184,16 @@ export function normalizeMerchant(description: string): MerchantResult {
 
   for (const [pattern, brand] of BRAND_ALIASES) {
     if (pattern.test(text)) {
-      return {
-        merchant: brand,
-        ...(processor !== undefined ? { processor } : {}),
-        key: foldCase(brand),
-        brand: true,
-      };
+      return { merchant: brand, key: foldCase(brand), brand: true };
     }
   }
 
   // Trailing lone digits are card tails or sequence numbers, never a name.
   text = collapseSpaces(text.replace(/\b\d{1,5}\b\s*$/, ''));
 
-  if (text === '' || text.length < 2) {
-    return { ...(processor !== undefined ? { processor } : {}), key: '' };
-  }
+  if (text === '' || text.length < 2) return { key: '' };
 
-  return {
-    merchant: titleCase(text),
-    ...(processor !== undefined ? { processor } : {}),
-    key: text,
-  };
+  return { merchant: titleCase(text), key: text };
 }
 
 /** Words that stay lowercase inside a Spanish merchant name. */

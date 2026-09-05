@@ -782,7 +782,12 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
   // derivable, and deriving it means a correction to the processor catalogue
   // reaches movements that were imported before it — without a second copy of
   // the evidence that could go stale against the first.
-  const attribution = attributePayment(description);
+  // Attributed on the glosa alone. `buildComment` appends ` (cuota 3/12)`, and
+  // that tail made the bank's anchored placeholders stop matching: the same row
+  // the preview showed as "sin comercio" came back from the host as a shop
+  // called "Online Cuota 3" — the invented merchant this layer exists to kill,
+  // resurrected by the read path.
+  const attribution = attributePayment(withoutInstallmentMarker(description));
 
   return {
     sourceInstitution: metadata.inst,
@@ -835,6 +840,11 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
     warnings: [],
     rawMetadata: {},
   };
+}
+
+/** Drop the marker `buildComment` appends, leaving the glosa the bank printed. */
+function withoutInstallmentMarker(comment: string): string {
+  return comment.replace(/\s*\(cuota\s+\d+\/\d+\)\s*$/i, '');
 }
 
 /**

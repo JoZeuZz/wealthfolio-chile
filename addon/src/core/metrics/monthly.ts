@@ -465,18 +465,26 @@ export interface UnattributedGroup {
  */
 export function unattributedByProcessor(
   transactions: readonly NormalizedTransaction[],
+  options: MetricsOptions = {},
 ): UnattributedGroup[] {
-  // No currency accumulator: every group starts from a real amount, so an empty
-  // month produces no groups rather than a zero in a currency nobody used.
-  // Mixing currencies inside one group throws, which is the invariant we want.
+  // Filtered by currency like every other total here, rather than trusting the
+  // caller to pass one currency's rows. Adding CLP to USD throws — correctly —
+  // and a throw in a metric takes the whole panel down with it, which is the
+  // regression the per-currency views were built to end.
+  const currency = options.currency;
   const groups = new Map<string, UnattributedGroup>();
 
   for (const transaction of transactions) {
+    if (currency !== undefined && transaction.amount.currency !== currency) continue;
     if (!isSpending(transaction.kind, transaction.direction)) continue;
     if (transaction.merchant !== undefined && transaction.merchant !== '') continue;
 
     const processor = transaction.attribution?.processor;
-    if (!processor) continue;
+    // Only the ones that by design do not report the merchant. Webpay is a
+    // passthrough: it normally carries the name the shop configured, so saying
+    // "Webpay no informa el comercio" because one row lacked it is a false
+    // claim about a named third party.
+    if (!processor || processor.visibility !== 'hidden') continue;
 
     const magnitude = abs(transaction.amount);
     const existing = groups.get(processor.id);

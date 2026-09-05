@@ -817,7 +817,7 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
       const merchants = totalsByMerchant(transactions, 8, { currency });
       const unattributed = unattributedSpending(transactions, { currency });
       const financialCosts = financialCostBreakdown(transactions, { currency });
-      const unattributedProcessors = unattributedByProcessor(transactions);
+      const unattributedProcessors = unattributedByProcessor(transactions, { currency });
       // A monthly pattern that has not charged in this or the previous month is
       // historical evidence, not a current recurring expense.
       const recurring = findRecurringCharges(history).filter(

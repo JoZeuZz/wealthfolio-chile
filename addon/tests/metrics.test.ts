@@ -8,6 +8,7 @@ import {
   totalsByCategory,
   totalsByMerchant,
 } from '../src/core/metrics/monthly';
+import { attributePayment } from '../src/core/merchants/attribution';
 import { normalizeMerchant } from '../src/core/merchants/normalize';
 import { money, toDecimalString } from '../src/core/money';
 import { Confidence, Direction, TransactionKind } from '../src/core/model/kinds';
@@ -49,10 +50,24 @@ function tx(
 }
 
 describe('normalizeMerchant', () => {
-  it('peels the processor off a Webpay purchase', () => {
-    const result = normalizeMerchant('COMPRA INT WEBPAY TRANSBANK 1234 SUPERMERCADO LIDER LAS CONDES');
+  /**
+   * Los procesadores ya no se pelan aquí: tienen catálogo propio, con evidencia
+   * por procesador y una política sobre si el comercio llega o no
+   * (`core/chile/processors`), y `attributePayment` la aplica antes de llamar a
+   * esta función. La copia tonta que vivía acá pelaba `FLOW` dentro de
+   * `SUSHI FLOW`.
+   */
+  it('deja el nombre limpio cuando el procesador ya fue pelado', () => {
+    const result = normalizeMerchant('COMPRA INT 1234 SUPERMERCADO LIDER LAS CONDES');
     expect(result.merchant).toBe('Lider');
-    expect(result.processor).toBe('Webpay');
+  });
+
+  it('la atribución es la que reconoce al procesador', () => {
+    const result = attributePayment(
+      'COMPRA INT WEBPAY TRANSBANK 1234 SUPERMERCADO LIDER LAS CONDES',
+    );
+    expect(result.merchant?.name).toBe('Lider');
+    expect(result.processor?.name).toBe('Webpay');
   });
 
   it('resolves brand aliases to one name', () => {

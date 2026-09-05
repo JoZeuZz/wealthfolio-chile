@@ -1,5 +1,5 @@
 import {
-  findProcessor,
+  findProcessors,
   isBankPlaceholder,
   type MerchantVisibility,
   type ProcessorEvidence,
@@ -84,13 +84,13 @@ export function attributePayment(description: string): PaymentAttribution {
   const normalized = normalizeDescription(descriptor);
   if (normalized === '') return { descriptor };
 
-  const processor = findProcessor(normalized);
+  // Every processor the glosa names, first in the glosa first. `COMPRA WEBPAY
+  // PAYU TIENDA X` names two: the first one is the one reported, and *both* are
+  // peeled, so neither gateway's name can end up inside the shop's.
+  const processors = findProcessors(normalized);
+  const processor = processors[0];
   const match = processor ? toMatch(processor) : undefined;
   const base = { descriptor, ...(match ? { processor: match } : {}) };
-
-  if (isBankPlaceholder(normalized)) {
-    return { ...base, unresolved: 'bank-placeholder' };
-  }
 
   // A grammar the processor publishes beats everything else about that
   // processor, because it is the processor describing its own output.
@@ -106,21 +106,32 @@ export function attributePayment(description: string): PaymentAttribution {
     };
   }
 
-  const residue = processor ? stripProcessor(normalized, processor) : normalized;
+  const residue = stripProcessors(normalized, processors);
   const peeled = normalizeMerchant(residue);
 
   // A brand this project recognises outranks the processor's policy: if the
   // glosa says Falabella, the merchant is Falabella however the charge was
-  // routed.
+  // routed. It also outranks the bank's placeholders, which are matched
+  // anywhere in the glosa: `RETIRO DE EFECTIVO REDCOMPRA LIDER` is a cashback
+  // at a supermarket, and the supermarket is named.
+  //
+  // Under a `hidden` processor the confidence is capped: this file's own claim
+  // is that what remains there is not the merchant, and `BIP` or `EASY` inside
+  // a Mercado Pago glosa is as likely a seller reference as a brand.
   if (peeled.merchant && peeled.brand) {
     return {
       ...base,
       merchant: {
         name: peeled.merchant,
-        confidence: Confidence.confirmed,
+        confidence:
+          processor?.visibility === 'hidden' ? Confidence.suggested : Confidence.confirmed,
         source: 'brand-alias',
       },
     };
+  }
+
+  if (isBankPlaceholder(normalized)) {
+    return { ...base, unresolved: 'bank-placeholder' };
   }
 
   // The reason is the processor, whether or not anything survived the peeling:
@@ -181,10 +192,15 @@ function readSubmerchant(
   return peeled.merchant;
 }
 
-function stripProcessor(normalized: string, processor: ProcessorProfile): string {
+function stripProcessors(
+  normalized: string,
+  processors: readonly ProcessorProfile[],
+): string {
   let text = normalized;
-  for (const pattern of processor.patterns) {
-    text = text.replace(pattern, ' ');
+  for (const processor of processors) {
+    for (const pattern of processor.patterns) {
+      text = text.replace(pattern, ' ');
+    }
   }
   return text;
 }

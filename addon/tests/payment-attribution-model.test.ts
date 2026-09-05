@@ -59,12 +59,15 @@ describe('un procesador que nunca deja ver el comercio', () => {
   /**
    * Una marca conocida en el residuo es evidencia más fuerte que la política
    * del procesador: si la glosa dice Falabella, el comercio es Falabella
-   * aunque el cargo haya entrado por Fpay.
+   * aunque el cargo haya entrado por Fpay. Como candidato, eso sí — bajo un
+   * procesador que oculta el comercio, este archivo afirma que lo que queda no
+   * es el comercio, y una marca ahí adentro no puede salir con la confianza
+   * más alta del sistema.
    */
   it('una marca reconocible en el residuo gana', () => {
     const result = at('FPAY FALABELLA');
     expect(result.merchant?.name).toBe('Falabella');
-    expect(result.merchant?.confidence).toBe(Confidence.confirmed);
+    expect(result.merchant?.confidence).toBe(Confidence.suggested);
   });
 });
 

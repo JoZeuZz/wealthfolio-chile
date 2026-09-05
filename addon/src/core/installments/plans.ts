@@ -8,7 +8,7 @@ import type {
   InstallmentSchedule,
 } from '../model/installment';
 import type { NormalizedTransaction } from '../model/transaction';
-import { normalizeMerchant } from '../merchants/normalize';
+import { attributePayment } from '../merchants/attribution';
 
 /**
  * Reconstruct installment plans from individual charges.
@@ -44,7 +44,12 @@ export function buildInstallmentPlans(
       continue;
     }
 
-    const merchant = transaction.merchant ?? normalizeMerchant(transaction.description).merchant;
+    // The same attribution the rest of the pipeline uses. The old fallback
+    // fired exactly on the rows attribution had refused to name and handed back
+    // the raw residue: the panel said "sin comercio" and the plan said
+    // "4 Tcom" — and the group key was that invented name.
+    const merchant =
+      transaction.merchant ?? attributePayment(transaction.description).merchant?.name;
     if (!merchant) continue;
 
     const key = groupKey({
@@ -184,7 +189,8 @@ function buildPlan(id: string, charges: NormalizedTransaction[]): InstallmentPla
       ? Confidence.confirmed
       : Confidence.suggested;
 
-  const merchant = first.merchant ?? normalizeMerchant(first.description).merchant ?? 'Sin comercio';
+  const merchant =
+    first.merchant ?? attributePayment(first.description).merchant?.name ?? 'Sin comercio';
 
   return {
     id,

@@ -55,6 +55,20 @@ export interface ProcessorProfile {
   name: string;
   /** Matched against the normalised description, as whole words. */
   patterns: readonly RegExp[];
+  /**
+   * The name is also an ordinary word a Chilean business can be called.
+   *
+   * `FLOW`, `TOKU` and `KLAP` all fit inside a razón social — `SUSHI FLOW`,
+   * `TOKU SUSHI`, `TIENDA KLAP LTDA` are shops, not gateways. Matched anywhere
+   * they erased the merchant the bank *had* reported, and then the panel blamed
+   * the money on a processor that never touched it. It is the mistake RC3 had
+   * to fix with `TAG` inside `PATAGONIA`, one layer up.
+   *
+   * So these are only read where a processor actually sits: at the head of the
+   * glosa, right after the bank's verb, or immediately followed by its own
+   * separator. Elsewhere the word is part of a name.
+   */
+  ambiguousName?: true;
   visibility: MerchantVisibility;
   evidence: ProcessorEvidence;
   /**
@@ -76,10 +90,10 @@ export const PROCESSORS: readonly ProcessorProfile[] = [
   {
     id: 'mercado-pago',
     name: 'Mercado Pago',
-    // The trailing `4 TCOM` / `5 TCOM` of the Falabella glosario is a routing
-    // suffix, not a merchant, and it is consumed here so nothing downstream
-    // mistakes it for one.
-    patterns: [/\bMERCADO\s*PAGO(?:\s+\d+\s+TCOM)?\b/, /\bMERPAGO\b/, /\bMPAGO\b/],
+    // The `4 TCOM` / `5 TCOM` of the Falabella glosario is a routing suffix and
+    // it is *not* handled here: it rides on any merchant, not only this one, so
+    // it belongs to the general noise stripping in `merchants/normalize`.
+    patterns: [/\bMERCADO\s*PAGO\b/, /\bMERPAGO\b/, /\bMPAGO\b/],
     visibility: 'hidden',
     evidence: 'observed',
   },
@@ -89,6 +103,7 @@ export const PROCESSORS: readonly ProcessorProfile[] = [
     patterns: [/\bPAGOS?\.FLOW\.CL\b/, /\bFLOW\b/],
     visibility: 'hidden',
     evidence: 'official',
+    ambiguousName: true,
   },
   {
     id: 'servipag',
@@ -181,7 +196,14 @@ export const PROCESSORS: readonly ProcessorProfile[] = [
     visibility: 'passthrough',
     evidence: 'assumed',
   },
-  { id: 'klap', name: 'Klap', patterns: [/\bKLAP\b/], visibility: 'passthrough', evidence: 'assumed' },
+  {
+    id: 'klap',
+    name: 'Klap',
+    patterns: [/\bKLAP\b/],
+    visibility: 'passthrough',
+    evidence: 'assumed',
+    ambiguousName: true,
+  },
   {
     id: 'getnet',
     name: 'Getnet',
@@ -196,7 +218,14 @@ export const PROCESSORS: readonly ProcessorProfile[] = [
     visibility: 'passthrough',
     evidence: 'assumed',
   },
-  { id: 'toku', name: 'Toku', patterns: [/\bTOKU\b/], visibility: 'passthrough', evidence: 'assumed' },
+  {
+    id: 'toku',
+    name: 'Toku',
+    patterns: [/\bTOKU\b/],
+    visibility: 'passthrough',
+    evidence: 'assumed',
+    ambiguousName: true,
+  },
   {
     id: 'etpay',
     name: 'ETpay',
@@ -240,11 +269,57 @@ export const BANK_PLACEHOLDERS: readonly RegExp[] = [
   /\bRETIRO\s+(?:DE\s+)?EFECTIVO\b/,
 ];
 
-/** The processor a normalised description names, if any. */
+/**
+ * Verbs a bank prints before the processor's name.
+ *
+ * Short list on purpose: it exists so `PAGO FLOW` counts as the processor
+ * leading the glosa, not to peel verbs — `merchants/normalize` does that.
+ */
+const LEADING_VERBS = /^(?:COMPRA|PAGO|CARGO|ABONO|GIRO|TRANSFERENCIA)(?:\s+\w+)?\s+/;
+
+/**
+ * Every processor the glosa names, in the order they appear in it.
+ *
+ * Order in the glosa, not order in this file. `COMPRA WEBPAY PAYU TIENDA X`
+ * names two, and the array order used to decide the winner: Webpay won because
+ * it is listed earlier here, only Webpay was peeled, and `Payu` stayed glued to
+ * the shop's name — the exact failure this layer exists to prevent.
+ */
+export function findProcessors(normalized: string): ProcessorProfile[] {
+  const hits: Array<{ processor: ProcessorProfile; at: number }> = [];
+
+  for (const processor of PROCESSORS) {
+    let at = -1;
+    for (const pattern of processor.patterns) {
+      const match = pattern.exec(normalized);
+      if (!match) continue;
+      if (processor.ambiguousName && !isProcessorPosition(normalized, match)) continue;
+      if (at < 0 || match.index < at) at = match.index;
+    }
+    if (at >= 0) hits.push({ processor, at });
+  }
+
+  return hits.sort((a, b) => a.at - b.at).map((hit) => hit.processor);
+}
+
+/** The processor a normalised description names first, if any. */
 export function findProcessor(normalized: string): ProcessorProfile | undefined {
-  return PROCESSORS.find((processor) =>
-    processor.patterns.some((pattern) => pattern.test(normalized)),
-  );
+  return findProcessors(normalized)[0];
+}
+
+/**
+ * Whether an ambiguous name sits where a processor sits rather than where a
+ * merchant's name does.
+ */
+function isProcessorPosition(normalized: string, match: RegExpExecArray): boolean {
+  // The whole glosa is the name: `FLOW`, which is the form Flow documents.
+  if (match[0] === normalized) return true;
+  // Carrying its own separator: `FLOW*BIP`, `KLAP.CL`, `TOKU-1234`.
+  const after = normalized.slice(match.index + match[0].length);
+  if (/^[*.\-/]/.test(after)) return true;
+  // Straight after the bank's verb: `PAGO FLOW`.
+  const before = normalized.slice(0, match.index);
+  return LEADING_VERBS.test(before) && before.trim().split(/\s+/).length <= 2;
 }
 
 /** True when the glosa is the bank declaring it cannot name the merchant. */
