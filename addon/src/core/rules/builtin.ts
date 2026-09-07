@@ -60,6 +60,18 @@ const word = (value: string): Rule['conditions'][number] => ({
   value: `\\b${value}\\b`,
 });
 
+const matches = (value: string): Rule['conditions'][number] => ({
+  field: 'description',
+  operator: 'matches',
+  value,
+});
+
+const outgoing: Rule['conditions'][number] = {
+  field: 'direction',
+  operator: 'equals',
+  value: 'out',
+};
+
 const merchantIs = (value: string): Rule['conditions'][number] => ({
   field: 'merchant',
   operator: 'equals',
@@ -126,25 +138,32 @@ export const BUILTIN_RULES: readonly Rule[] = [
     'Comisiones y mantención',
     30,
     [
-      contains('COMISION'),
-      contains('MANTENCION'),
-      contains('MANTENIMIENTO CUENTA'),
-      contains('CARGO POR ADMINISTRACION'),
+      matches(
+        String.raw`\b(?:COMISION(?:ES)?|(?:CARGO[\s./-]+POR[\s./-]+ADMINISTRACION)|(?:MANTENCION|MANTENIMIENTO)(?:[\s./-]+DE)?[\s./-]+(?:TARJETA|CUENTA|LINEA[\s./-]+DE[\s./-]+CREDITO))\b`,
+      ),
+      outgoing,
     ],
     [
       { type: 'set_kind', value: TransactionKind.fee },
       { type: 'set_category', value: 'comisiones' },
     ],
+    { match: 'all' },
   ),
   rule(
     'builtin.intereses',
     'Intereses',
     31,
-    [word('INTERES'), word('INTERESES')],
+    [
+      matches(
+        String.raw`\bINTERES(?:ES)?[\s./-]+(?:(?:POR[\s./-]+)?(?:MORA|SOBREGIRO|CUOTAS?)|MORATORIOS?|ROTATIVOS?|ADICIONALES?|REFUNDIDOS?|(?:POR[\s./-]+)?COMPRAS?[\s./-]+EN[\s./-]+CUOTAS?)\b`,
+      ),
+      outgoing,
+    ],
     [
       { type: 'set_kind', value: TransactionKind.interest },
       { type: 'set_category', value: 'deudas.intereses' },
     ],
+    { match: 'all' },
   ),
   rule(
     'builtin.impuestos',
@@ -154,11 +173,17 @@ export const BUILTIN_RULES: readonly Rule[] = [
     // `CONSULTA PRIVADA` and `UNIVERSIDAD` into taxes: the totals survive —
     // tax is spending either way — but the category does not, and a wrong
     // category is a panel that misreports where the money went.
-    [contains('IMPUESTO'), word('IVA'), contains('TIMBRES')],
+    [
+      matches(
+        String.raw`\b(?:IMPUESTOS?|IVA|TIMBRES[\s./-]+Y[\s./-]+ESTAMPILLAS|(?:IMPUESTO|LEY)(?:[\s./-]+DE)?[\s./-]+TIMBRES)\b`,
+      ),
+      outgoing,
+    ],
     [
       { type: 'set_kind', value: TransactionKind.tax },
       { type: 'set_category', value: 'impuestos' },
     ],
+    { match: 'all' },
   ),
 
   // ── Income ───────────────────────────────────────────────────────────

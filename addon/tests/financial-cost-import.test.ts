@@ -36,6 +36,9 @@ const STATEMENT = [
   '30/09/2026;DEVOLUCION INTERES POR MORA;-4.500;;Intereses',
   '30/09/2026;DEVOLUCION IMPUESTO AL CREDITO;-1.200;;Impuestos',
   '30/09/2026;PAGO RECIBIDO COMISION DE SERVICIO;-25.000;;Pagos',
+  '30/09/2026;MANTENCION ASCENSORES;18.000;;Servicios',
+  '30/09/2026;TIMBRES Y GOMAS SPA;12.000;;Comercio',
+  '30/09/2026;LIBRERIA EL INTERES;9.000;;Comercio',
 ].join('\n');
 
 function prepared() {
@@ -112,6 +115,16 @@ describe('un estado de cuenta con costos financieros, de punta a punta', () => {
     expect(row.kind).toBe(TransactionKind.credit_card_payment);
     expect(row.direction).toBe('in');
     expect(row.amount.minor).toBeGreaterThan(0);
+    expect(row.financialCost).toBeUndefined();
+  });
+
+  it.each([
+    'MANTENCION ASCENSORES',
+    'TIMBRES Y GOMAS SPA',
+    'LIBRERIA EL INTERES',
+  ])('una palabra financiera dentro de un comercio no convierte %s en costo', (description) => {
+    const row = find(description);
+    expect(row.kind).toBe(TransactionKind.credit_card_purchase);
     expect(row.financialCost).toBeUndefined();
   });
 
