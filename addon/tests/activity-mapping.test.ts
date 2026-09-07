@@ -88,6 +88,25 @@ describe('activity flow sign', () => {
   });
 });
 
+describe('invalid fixed-direction financial kinds', () => {
+  it.each([TransactionKind.fee, TransactionKind.tax])(
+    'refuses to turn incoming %s into a host outflow',
+    (kind) => {
+      const incoming = makeTransaction({
+        date: '2026-03-01',
+        amount: 5_900,
+        description: 'DEVOLUCION CARGO',
+        kind,
+        direction: Direction.in,
+      });
+
+      expect(() => toActivityCreate(incoming, { accountId: ACCOUNT, runId: RUN })).toThrow(
+        /direction/i,
+      );
+    },
+  );
+});
+
 /**
  * Observed against a real Wealthfolio v3.6.2 container on 2026-08-07.
  *

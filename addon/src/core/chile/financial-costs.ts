@@ -209,6 +209,10 @@ export function detectFinancialCost(
  * product default and was reported as a purchase, next to the supermarket.
  */
 export function withFinancialCost<T extends NormalizedTransaction>(transaction: T): T {
+  // Financial costs are charges. A refund or payment may repeat the original
+  // charge's wording, but money entering cannot become a cost subtype.
+  if (transaction.direction !== Direction.out) return transaction;
+
   const reading = detectFinancialCost(transaction.normalizedDescription);
   if (!reading) return transaction;
 

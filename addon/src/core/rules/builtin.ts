@@ -82,6 +82,14 @@ export const BUILTIN_RULES: readonly Rule[] = [
     [{ type: 'set_category', value: 'pago-tarjeta' }],
     { stopProcessing: true },
   ),
+  rule(
+    'builtin.devolucion-confirmada',
+    'Devolución confirmada',
+    11,
+    [{ field: 'kind', operator: 'equals', value: TransactionKind.refund }],
+    [],
+    { stopProcessing: true },
+  ),
 
   // Split in two on purpose. The wording is only unambiguous on an account
   // statement: on a tarjeta, `TRASPASO` is refinancing — `TRASPASO A 12

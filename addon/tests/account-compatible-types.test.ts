@@ -37,6 +37,15 @@ describe('tipos permitidos en una cuenta de tarjeta', () => {
   it('ningún tipo de movimiento nuestro produce algo que el host rechace', () => {
     for (const kind of TRANSACTION_KINDS) {
       for (const direction of [Direction.in, Direction.out]) {
+        if (
+          direction === Direction.in &&
+          (kind === TransactionKind.fee || kind === TransactionKind.tax)
+        ) {
+          expect(() =>
+            resolveActivityType({ kind, direction }, { accountType: 'CREDIT_CARD' }),
+          ).toThrow(/direction/i);
+          continue;
+        }
         const { activityType } = resolveActivityType(
           { kind, direction },
           { accountType: 'CREDIT_CARD' },

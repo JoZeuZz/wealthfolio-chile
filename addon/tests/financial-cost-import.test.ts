@@ -32,6 +32,10 @@ const STATEMENT = [
   '05/09/2026;GASTOS DE COBRANZA;9.900;;Cobranza',
   '06/09/2026;IMPUESTO AL CREDITO;1.200;;Impuestos',
   '30/09/2026;COMISION DE MANTENCION TARJETA;5.900;;Comisiones',
+  '30/09/2026;DEVOLUCION COMISION DE MANTENCION;-5.900;;Comisiones',
+  '30/09/2026;DEVOLUCION INTERES POR MORA;-4.500;;Intereses',
+  '30/09/2026;DEVOLUCION IMPUESTO AL CREDITO;-1.200;;Impuestos',
+  '30/09/2026;PAGO RECIBIDO COMISION DE SERVICIO;-25.000;;Pagos',
 ].join('\n');
 
 function prepared() {
@@ -89,6 +93,26 @@ describe('un estado de cuenta con costos financieros, de punta a punta', () => {
     const row = find('SUPERMERCADO GENERICO SUCURSAL CENTRO');
     expect(row.financialCost).toBeUndefined();
     expect(row.kind).toBe(TransactionKind.credit_card_purchase);
+  });
+
+  it.each([
+    'DEVOLUCION COMISION DE MANTENCION',
+    'DEVOLUCION INTERES POR MORA',
+    'DEVOLUCION IMPUESTO AL CREDITO',
+  ])('una devolución conserva dirección y semántica aunque diga %s', (description) => {
+    const row = find(description);
+    expect(row.kind).toBe(TransactionKind.refund);
+    expect(row.direction).toBe('in');
+    expect(row.amount.minor).toBeGreaterThan(0);
+    expect(row.financialCost).toBeUndefined();
+  });
+
+  it('un pago de tarjeta confirmado gana a palabras de costo financiero', () => {
+    const row = find('PAGO RECIBIDO COMISION DE SERVICIO');
+    expect(row.kind).toBe(TransactionKind.credit_card_payment);
+    expect(row.direction).toBe('in');
+    expect(row.amount.minor).toBeGreaterThan(0);
+    expect(row.financialCost).toBeUndefined();
   });
 
   /**
