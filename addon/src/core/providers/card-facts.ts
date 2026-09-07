@@ -90,12 +90,25 @@ export interface ReadCardFactsInput {
  * sentence to a number that belongs to something else.
  */
 /**
- * Between a label and its figure: a colon, spaces, filler.
+ * A parenthesis that opens something other than a figure.
+ *
+ * `(` was kept out of the gap so the pattern could capture the accounting
+ * negative, which left two ordinary spreadsheet conventions mute: the unit in a
+ * header cell (`Total a pagar ($)`, `Monto facturado (CLP)`) and the footnote
+ * marker (`Pago Mínimo (*)`, `(1)`) that a Chilean statement uses to hang the
+ * legal text of the minimum payment. Neither contains a figure, which is what
+ * tells them apart from `($45.230)`.
+ */
+const NOTE = String.raw`\([^)\d\n]{0,8}\)|\(\d{1,2}\)`;
+
+/**
+ * Between a label and its figure: a colon, spaces, filler, a note.
  *
  * A run of dots is how a statement lines a label up with its column and can be
  * far longer than any prose filler, so it is allowed on its own terms.
  */
-const GAP = String.raw`(?:[^\d\n($+-]{0,24}|[.\s]{0,80})`;
+const GAP_TEXT = String.raw`(?:[^\d\n($+-]|${NOTE}){0,24}`;
+const GAP = String.raw`(?:${GAP_TEXT}|[.\s]{0,80})`;
 
 /**
  * Every label this file knows, for counting rather than for matching.
@@ -130,7 +143,7 @@ const AMOUNT = String.raw`(\(?\s*[-+]?\s*\$?\s*[-+]?\s*\d[\d.,]*)\s*\)?`;
  * own sub-concept: `CUPO TOTAL UTILIZADO` reported the opposite number as the
  * cupo total, and `TOTAL A PAGAR NACIONAL` filed a subtotal as the whole bill.
  */
-const QUALIFIER = String.raw`(?!\s*(?:UTILIZADO|USADO|OCUPADO|NACIONAL|INTERNACIONAL|EN\s+CUOTAS|EN\s+MONEDA|EN\s+DOLARES|PARA\s+AVANCES?|PARA\s+COMPRAS?|DE\s+AVANCES?))`;
+const QUALIFIER = String.raw`(?!\s*(?:UTILIZADO|USADO|OCUPADO|NACIONAL|INTERNACIONAL|EN\s+CUOTAS|EN\s+MONEDA|EN\s+DOLARES|(?:PARA|DE|EN)\s+(?:EL\s+)?(?:AVANCES?|EFECTIVO|COMPRAS?)|SUPER\s*AVANCE|AVANCE))`;
 const DATE = String.raw`(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})`;
 
 /**
@@ -146,9 +159,13 @@ const IDENTIFIER_LINE = [
   /\bRUT\b|\bR\.U\.T\b/i,
   // Card number, masked or not.
   /\b(?:\d{4}[\s-]?){3}\d{4}\b|[*xX]{4}[\s-]?[*xX]{4}/,
-  /\bTARJETA\s+N|\bN[°º]?\s*(?:DE\s+)?TARJETA\b/i,
+  // The number token, not a bare `N`: `\bTARJETA\s+N` also bit `TARJETA
+  // NACIONAL`, which is the name of the section this model exists to tell apart
+  // from the international one — and bit only that side, because
+  // `INTERNACIONAL` does not start with an N.
+  /\bTARJETA\s+(?:N[°º.:]|NRO\b|NUMERO\b)|\bN[°º]?\s*(?:DE\s+)?TARJETA\b/i,
   // Account number and phone.
-  /\bCUENTA\s+N|\bN[°º]?\s*(?:DE\s+)?CUENTA\b/i,
+  /\bCUENTA\s+(?:N[°º.:]|NRO\b|NUMERO\b)|\bN[°º]?\s*(?:DE\s+)?CUENTA\b/i,
   /\b\+?56\s?9\s?\d{4}\s?\d{4}\b/,
   // Customer number, folio, Transbank merchant code, cédula serial. With cells
   // joined by a space these sit in the column next to a label, which is how the
