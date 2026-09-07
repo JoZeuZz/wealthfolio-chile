@@ -41,9 +41,8 @@ import { Amount } from '../components/Money';
  *
  * So this page answers the question the addon *can* answer — "which of my
  * movements are the same money seen twice, and how sure is that?" — and leaves
- * the ledger alone. The addon's own metrics already net a matched pair out of
- * income and spending; what this adds is the ability to check that they were
- * right to.
+ * the ledger alone. These candidates do not alter the dashboard because no
+ * public host operation exists to apply the pairing.
  *
  * Nothing here presents a suggestion as a fact. Confirmed, suggested and
  * ambiguous are three different claims and they read differently.
@@ -140,8 +139,8 @@ export function ReconciliationPage() {
         <AlertTitle>Esta pantalla no cambia nada</AlertTitle>
         <AlertDescription>
           Wealthfolio no expone todavía a los addons una forma de enlazar los dos tramos de una
-          transferencia, así que aquí sólo se revisa. Los totales del panel Chile ya descuentan los
-          pares reconocidos; esto sirve para comprobar que estaban bien reconocidos.
+          transferencia, así que aquí sólo se revisa. Los pares mostrados no alteran los totales del
+          panel Chile.
         </AlertDescription>
       </Alert>
 

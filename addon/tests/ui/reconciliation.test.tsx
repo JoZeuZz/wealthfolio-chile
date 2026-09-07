@@ -157,6 +157,8 @@ describe('la pantalla es de sólo lectura', () => {
   it('lo dice antes de mostrar nada', async () => {
     open(CLARO);
     expect(screen.getByText(/Esta pantalla no cambia nada/)).toBeInTheDocument();
+    expect(screen.getByText(/no alteran los totales del panel Chile/)).toBeInTheDocument();
+    expect(screen.queryByText(/ya descuentan los pares/)).not.toBeInTheDocument();
     await screen.findByText(/Pares confirmados/);
   });
 
