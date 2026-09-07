@@ -396,6 +396,7 @@ export function totalsByMerchant(
 
   for (const transaction of transactions) {
     if (!isSpending(transaction.kind, transaction.direction)) continue;
+    if (isIssuerCharge(transaction)) continue;
     const merchant = transaction.merchant;
     if (merchant === undefined || merchant === '') continue;
     const magnitude = abs(transaction.amount);
@@ -437,6 +438,9 @@ export function unattributedSpending(
 
   for (const transaction of transactions) {
     if (!isSpending(transaction.kind, transaction.direction)) continue;
+    // An issuer charge is not unattributed: we know exactly who took it. It is
+    // reported by `issuerCharges` under its own name.
+    if (isIssuerCharge(transaction)) continue;
     if (transaction.merchant !== undefined && transaction.merchant !== '') continue;
     amount = add(amount, abs(transaction.amount));
     transactionCount += 1;
@@ -501,6 +505,53 @@ export function unattributedByProcessor(
   }
 
   return [...groups.values()].sort((a, b) => compare(b.amount, a.amount));
+}
+
+/**
+ * Whether the money went to the issuer rather than to a shop.
+ *
+ * A fee, an interest charge, a tax on the credit and cash drawn against the
+ * cupo are all charges by the bank that issued the card. None of them has a
+ * merchant, and the name the glosa carries is a description of the charge —
+ * seen on a real host, `INTERES POR MORA`, `GASTOS DE COBRANZA` and
+ * `COMISION POR AVANCE EN EFECTIVO` sat in "Comercios principales" between the
+ * supermarket and the petrol station.
+ */
+function isIssuerCharge(transaction: NormalizedTransaction): boolean {
+  return (
+    transaction.financialCost !== undefined ||
+    transaction.kind === TransactionKind.fee ||
+    transaction.kind === TransactionKind.interest ||
+    transaction.kind === TransactionKind.tax ||
+    transaction.kind === TransactionKind.cash_advance
+  );
+}
+
+/**
+ * What the issuer took this month, as a total.
+ *
+ * The counterpart of leaving those rows out of the merchant ranking: the money
+ * does not vanish from the panel, and it is not filed under "sin comercio
+ * identificado" either — that would say we do not know who charged it, and we
+ * do. Every peso here is already inside the month's gross spending; the
+ * financial-cost breakdown says what kind of charge each one was.
+ */
+export function issuerCharges(
+  transactions: readonly NormalizedTransaction[],
+  options: MetricsOptions = {},
+): { amount: Money; transactionCount: number } {
+  const currency = options.currency ?? 'CLP';
+  let amount = zero(currency);
+  let transactionCount = 0;
+
+  for (const transaction of transactions) {
+    if (!isSpending(transaction.kind, transaction.direction)) continue;
+    if (!isIssuerCharge(transaction)) continue;
+    amount = add(amount, abs(transaction.amount));
+    transactionCount += 1;
+  }
+
+  return { amount, transactionCount };
 }
 
 /**

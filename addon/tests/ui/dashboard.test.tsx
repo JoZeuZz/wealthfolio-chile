@@ -811,3 +811,58 @@ describe('el desglose de lo que no tiene comercio', () => {
     expect(screen.queryByText(/no informa el comercio/)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Lo que se llevó el emisor, dicho por su nombre.
+ *
+ * Visto en el host real: «Interes POR Mora» y «Gastos de Cobranza» competían
+ * por el primer puesto de «Comercios principales» con el supermercado. Nadie le
+ * pagó a un comercio llamado así — ese dinero se lo quedó el banco, y ya tiene
+ * su lugar en el desglose de costos financieros. Sale del ranking, y sale
+ * diciendo cuánto era, porque un ranking que muestra menos de lo que el mes
+ * tuvo es peor que uno que muestra de más.
+ */
+describe('los cobros del emisor no compiten con los comercios', () => {
+  const withCharges = () => [
+    activity({
+      accountId: 'acc-clp',
+      amount: -45000,
+      date: DAY(0),
+      description: 'SUPERMERCADO GENERICO',
+      kind: TransactionKind.credit_card_purchase,
+      type: 'WITHDRAWAL',
+      merchant: 'Supermercado Generico',
+    }),
+    activity({
+      accountId: 'acc-clp',
+      amount: -12400,
+      date: DAY(1),
+      description: 'INTERES POR MORA',
+      kind: TransactionKind.interest,
+      type: 'FEE',
+      financialCost: FinancialCostKind.late_interest,
+    }),
+  ];
+
+  it('el interés por mora no aparece entre los comercios', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: withCharges() });
+
+    let card = (await screen.findByText('Comercios principales')) as HTMLElement;
+    while (card.parentElement && !card.textContent?.includes('Supermercado Generico')) {
+      card = card.parentElement;
+    }
+    expect(card.textContent).toContain('Supermercado Generico');
+    expect(card.textContent).not.toContain('Interes');
+  });
+
+  it('pero el panel dice cuánto se llevó el emisor', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: withCharges() });
+
+    let card = (await screen.findByText('Comercios principales')) as HTMLElement;
+    while (card.parentElement && !card.textContent?.includes('del emisor')) {
+      card = card.parentElement;
+    }
+    expect(card.textContent).toContain('del emisor');
+    expect(card.textContent).toContain('$12.400');
+  });
+});
