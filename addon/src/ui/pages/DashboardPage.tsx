@@ -640,14 +640,20 @@ export function DashboardPage() {
                     why the card says what it is a part of before it shows a
                     figure. */}
                 <p className="text-muted-foreground text-xs">
-                  Parte del gasto del mes, no algo aparte: es lo que costó el crédito, separado de
-                  lo que compraste con él.
+                  Consumo cuenta compras y servicios. Costos financieros y avances se muestran
+                  aparte, sin presentarlos como compras.
                 </p>
+
+                <div className="flex items-baseline justify-between gap-2 font-medium">
+                  <span>Consumo</span>
+                  <Amount value={view.summary.consumptionSpending} />
+                </div>
 
                 {view.financialCosts.items.length > 0 ? (
                   <>
+                    <Separator />
                     <div className="flex items-baseline justify-between gap-2 font-medium">
-                      <span>Total</span>
+                      <span>Total de costos</span>
                       <Amount value={view.financialCosts.total} />
                     </div>
                     <Separator />

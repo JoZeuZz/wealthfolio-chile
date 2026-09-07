@@ -695,6 +695,32 @@ describe('la tarjeta de costos financieros', () => {
     expect(screen.getByText('Comisión de mantención')).toBeInTheDocument();
   });
 
+  it('muestra consumo aparte de costos y principal de avance', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        ...withCosts(),
+        activity({
+          accountId: 'acc-clp',
+          amount: -200000,
+          date: DAY(3),
+          description: 'AVANCE EN EFECTIVO',
+          kind: TransactionKind.cash_advance,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    let card = (await screen.findByText('Costos financieros')) as HTMLElement;
+    while (card.parentElement && !card.textContent?.includes('Avance en efectivo')) {
+      card = card.parentElement;
+    }
+    expect(within(card).getByText('Consumo')).toBeInTheDocument();
+    expect(within(card).getByText('$45.000')).toBeInTheDocument();
+    expect(within(card).getByText('$18.300')).toBeInTheDocument();
+    expect(within(card).getByText('$200.000')).toBeInTheDocument();
+  });
+
   it('separa lo que costó deber de lo que cuesta tener la tarjeta', async () => {
     renderPage(<DashboardPage />, { accounts: [CLP], activities: withCosts() });
 
