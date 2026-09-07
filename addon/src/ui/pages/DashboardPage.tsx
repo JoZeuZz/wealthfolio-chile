@@ -40,7 +40,10 @@ import { formatCLP } from '../../core/money';
 import { Confidence } from '../../core/model/kinds';
 import type { NormalizedTransaction } from '../../core/model/transaction';
 import { ImportHistory, type ImportRun } from '../../services/import-history';
-import { loadImportedTransactions } from '../../services/imported-transactions';
+import {
+  loadImportedTransactions,
+  type ReviewItem,
+} from '../../services/imported-transactions';
 import { useAddon } from '../context';
 import { DeltaLine } from '../components/Delta';
 import { Amount, Stat } from '../components/Money';
@@ -65,8 +68,24 @@ import { Amount, Stat } from '../components/Money';
  */
 const HISTORY_MONTHS = 13;
 
+/** How many rows wait for each reason. */
+function reviewCounts(review: readonly ReviewItem[]): {
+  unresolved: number;
+  substituted: number;
+} {
+  let unresolved = 0;
+  let substituted = 0;
+  for (const item of review) {
+    if (item.reason === 'unresolved') unresolved += 1;
+    else substituted += 1;
+  }
+  return { unresolved, substituted };
+}
+
 interface DashboardData {
   transactions: NormalizedTransaction[];
+  /** Rows the addon wrote and the host still flags. See `ReviewItem`. */
+  review: ReviewItem[];
   runs: ImportRun[];
   /** Currency to show when there are no movements to take one from. */
   fallbackCurrency: string;
@@ -97,6 +116,7 @@ export function DashboardPage() {
         if (cancelled) return;
         setData({
           transactions: loaded.transactions,
+          review: loaded.review,
           runs,
           // Only the fallback for a panel with nothing in it. The totals are
           // sums of the movements, so their currency comes from the movements —
@@ -213,6 +233,40 @@ export function DashboardPage() {
             Este período tiene más movimientos de los que se alcanzaron a leer, así que los totales
             de abajo están por debajo del valor real. Reduce el rango o revisa los movimientos
             directamente en Wealthfolio.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {/* What the addon wrote and could not finish describing. Two reasons, and
+          they are not the same question: a draft row contributes to no total in
+          Wealthfolio while it stays one, and a substituted row does contribute
+          — under a type that is not what the movement was. The host's own
+          "needs review" filter searches by status, so it finds the first and
+          not the second, which is why this is here at all. */}
+      {data && data.review.length > 0 ? (
+        <Alert>
+          <AlertTitle>Movimientos que necesitan revisión</AlertTitle>
+          <AlertDescription className="flex flex-col gap-1">
+            <span>
+              {`Quedaron ${data.review.length} movimiento(s) que el addon escribió sin poder
+              describir del todo.`}
+            </span>
+            {reviewCounts(data.review).unresolved > 0 ? (
+              <span>
+                {reviewCounts(data.review).unresolved} no se pudo leer y quedó en borrador:
+                Wealthfolio no los cuenta en ningún total mientras sigan así.
+              </span>
+            ) : null}
+            {reviewCounts(data.review).substituted > 0 ? (
+              <span>
+                {reviewCounts(data.review).substituted} quedaron guardados con un tipo distinto
+                del que les corresponde, porque la cuenta de destino no aceptaba el suyo. Ésos sí
+                cuentan en los totales del host, y su filtro de revisión no los encuentra.
+              </span>
+            ) : null}
+            <span className="text-muted-foreground text-xs">
+              Contados sobre los últimos {HISTORY_MONTHS} meses de movimientos importados.
+            </span>
           </AlertDescription>
         </Alert>
       ) : null}

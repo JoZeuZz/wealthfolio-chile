@@ -590,6 +590,37 @@ function canonicalAmountText(amount: string | number | null | undefined, currenc
 }
 
 /**
+ * Why a stored activity is still waiting for a person, if it is.
+ *
+ * The inverse of the `needsReview` decision made when writing, and it has to be
+ * a separate surface for one reason: only one of the two cases also carries
+ * `status: DRAFT`, and the host's own "needs review" filter searches by status.
+ * So the filter finds the rows nothing could be read from, and does not find
+ * the rows written under a type the account would accept instead of the one
+ * they deserved — which are exactly the ones nobody would otherwise find.
+ *
+ * The host has the casting vote on *whether*: if the person cleared the flag,
+ * the row is done, whatever this addon's metadata still says. The addon only
+ * supplies the *why*, and only for rows it wrote — inventing a Chilean reason
+ * for somebody else's activity would be speaking for the host.
+ */
+export type ReviewReason =
+  /** Nothing could be read. The kind was left unresolved rather than guessed. */
+  | 'unresolved'
+  /** The account refused the natural type; the row wears the nearest one. */
+  | 'substituted-type';
+
+export function reviewReason(
+  activity: HostActivity & { needsReview?: boolean },
+): ReviewReason | undefined {
+  if (activity.needsReview !== true) return undefined;
+  const metadata = readChileMetadata(activity.metadata);
+  if (!metadata) return undefined;
+  if (metadata.kind === TransactionKind.unknown) return 'unresolved';
+  return metadata.subst === true ? 'substituted-type' : undefined;
+}
+
+/**
  * Our kind for a Wealthfolio activity type, when our own record is missing or
  * contradicted.
  *

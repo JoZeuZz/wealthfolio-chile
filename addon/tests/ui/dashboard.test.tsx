@@ -866,3 +866,106 @@ describe('los cobros del emisor no compiten con los comercios', () => {
     expect(card.textContent).toContain('$12.400');
   });
 });
+
+/**
+ * Lo que quedó esperando a una persona.
+ *
+ * El addon deja dos clases de fila sin terminar de describir, y son las dos
+ * formas de decir «la actividad que Wealthfolio guarda no dice qué fue el
+ * movimiento»: la que no se pudo leer, y la que se escribió bajo un tipo que la
+ * cuenta aceptaba en vez del que le correspondía.
+ *
+ * Sólo la primera queda en borrador, y el filtro «necesita revisión» del host
+ * busca por estado — así que encuentra la primera y no la segunda. La segunda
+ * es justamente la que nadie encontraría: plata que el addon se negó a
+ * clasificar y que entró al portafolio bajo un tipo prestado.
+ */
+describe('la cola de revisión', () => {
+  const pending = () => [
+    activityStub({
+      id: 'act-1',
+      accountId: 'acc-clp',
+      activityType: 'UNKNOWN',
+      amount: '45000',
+      date: DAY(0),
+      comment: 'MOVIMIENTO SIN CLASIFICAR',
+      needsReview: true,
+      status: 'DRAFT',
+      metadata: {
+        v: 4,
+        fp: 'fp-1',
+        inst: 'banco-chile',
+        parser: 'p',
+        parserVersion: '1',
+        fileHash: 'h',
+        runId: 'r',
+        kind: TransactionKind.unknown,
+        dir: 'out',
+      },
+    }),
+    activityStub({
+      id: 'act-2',
+      accountId: 'acc-clp',
+      activityType: 'FEE',
+      amount: '1200',
+      date: DAY(1),
+      comment: 'IMPUESTO AL CREDITO',
+      needsReview: true,
+      metadata: {
+        v: 4,
+        fp: 'fp-2',
+        inst: 'banco-chile',
+        parser: 'p',
+        parserVersion: '1',
+        fileHash: 'h',
+        runId: 'r',
+        kind: TransactionKind.tax,
+        dir: 'out',
+        subst: true,
+      },
+    }),
+  ];
+
+  it('dice cuántos movimientos quedaron esperando', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: pending() });
+
+    let card = (await screen.findByText('Movimientos que necesitan revisión')) as HTMLElement;
+    while (card.parentElement && !card.textContent?.includes('Quedaron 2')) {
+      card = card.parentElement;
+    }
+    expect(card.textContent).toContain('Quedaron 2');
+  });
+
+  /**
+   * Las dos razones no son la misma pregunta y no se cuentan juntas sin
+   * decirlo: una es plata que el host no está contando en ningún total, la otra
+   * es plata que sí cuenta bajo un tipo que no le corresponde.
+   */
+  it('separa las dos razones', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: pending() });
+
+    let card = (await screen.findByText('Movimientos que necesitan revisión')) as HTMLElement;
+    while (card.parentElement && !card.textContent?.includes('tipo')) card = card.parentElement;
+    expect(card.textContent).toMatch(/no se pudo leer|sin clasificar/i);
+    expect(card.textContent).toMatch(/tipo/i);
+  });
+
+  it('un panel sin nada pendiente no muestra la cola', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -45000,
+          date: DAY(0),
+          description: 'SUPERMERCADO GENERICO',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+      ],
+    });
+
+    await screen.findByText('Flujo de caja');
+    expect(screen.queryByText('Movimientos que necesitan revisión')).not.toBeInTheDocument();
+  });
+});

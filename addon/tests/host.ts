@@ -292,6 +292,9 @@ export interface ActivityStubInput {
   date: string;
   comment?: string;
   metadata?: Partial<ChileMetadata>;
+  /** What the host reports back, which is what decides the review queue. */
+  needsReview?: boolean;
+  status?: 'POSTED' | 'PENDING' | 'DRAFT' | 'VOID';
 }
 
 let stubCounter = 0;
@@ -314,7 +317,8 @@ export function activityStub(input: ActivityStubInput): ActivityDetails {
     amount: input.amount,
     fee: null,
     currency: input.currency ?? 'CLP',
-    needsReview: false,
+    needsReview: input.needsReview ?? false,
+    ...(input.status ? { status: input.status } : {}),
     comment: input.comment ?? '',
     createdAt: new Date(`${input.date}T00:00:00Z`),
     updatedAt: new Date(`${input.date}T00:00:00Z`),

@@ -1,5 +1,10 @@
 import type { AddonContext } from '@wealthfolio/addon-sdk';
-import { activityToTransaction } from '../core/mapping/activities';
+import {
+  activityToTransaction,
+  reviewReason,
+  type ReviewReason,
+} from '../core/mapping/activities';
+import type { Money } from '../core/money';
 import type { NormalizedTransaction } from '../core/model/transaction';
 import type { ScopedTransaction } from '../core/reconcile/transfers';
 import { activityDateFilters, withinWindow } from './activity-index';
@@ -37,6 +42,27 @@ export interface TransactionWindow {
   accountId?: string;
 }
 
+/**
+ * One movement the addon wrote and could not finish describing.
+ *
+ * Carries everything a panel needs to show the row without asking the host
+ * again, and the one thing the host's own filter cannot tell apart: whether the
+ * row is a draft. A draft contributes to no balance and no total while it
+ * stays one; a substituted row does contribute, under a type that is not what
+ * the movement was.
+ */
+export interface ReviewItem {
+  activityId: string;
+  accountId: string;
+  date: string;
+  /** Signed, the addon's own reading. */
+  amount: Money;
+  description: string;
+  reason: ReviewReason;
+  /** True when the host is leaving this row out of every calculation. */
+  draft: boolean;
+}
+
 export interface ImportedTransactions {
   /** Canonical transactions rebuilt from activity metadata. */
   transactions: NormalizedTransaction[];
@@ -48,6 +74,15 @@ export interface ImportedTransactions {
   totalRowCount: number;
   /** True when the page cap stopped the scan short of the full result set. */
   truncated: boolean;
+  /**
+   * Rows this addon wrote that the host still flags for review.
+   *
+   * Built on the same pass rather than by a second query: a separate index
+   * could disagree with the ledger, and the ledger is the answer. Scoped to the
+   * same window as everything else, so a caller showing it has to say which
+   * window it is.
+   */
+  review: ReviewItem[];
 }
 
 export async function loadImportedTransactions(
@@ -56,6 +91,7 @@ export async function loadImportedTransactions(
 ): Promise<ImportedTransactions> {
   const transactions: NormalizedTransaction[] = [];
   const scoped: ScopedTransaction[] = [];
+  const review: ReviewItem[] = [];
   let scanned = 0;
   let totalRowCount = 0;
   let truncated = false;
@@ -80,6 +116,19 @@ export async function loadImportedTransactions(
       if (!transaction) continue;
       transactions.push(transaction);
       scoped.push({ accountId: activity.accountId, transaction });
+
+      const reason = reviewReason(activity);
+      if (reason) {
+        review.push({
+          activityId: activity.id,
+          accountId: activity.accountId,
+          date: transaction.date,
+          amount: transaction.amount,
+          description: transaction.description,
+          reason,
+          draft: activity.status === 'DRAFT',
+        });
+      }
     }
 
     const seen = (page + 1) * PAGE_SIZE;
@@ -87,5 +136,5 @@ export async function loadImportedTransactions(
     if (page === MAX_PAGES - 1) truncated = true;
   }
 
-  return { transactions, scoped, scanned, totalRowCount, truncated };
+  return { transactions, scoped, scanned, totalRowCount, truncated, review };
 }
