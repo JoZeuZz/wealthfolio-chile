@@ -396,7 +396,7 @@ export function totalsByMerchant(
 
   for (const transaction of transactions) {
     if (!isSpending(transaction.kind, transaction.direction)) continue;
-    if (isIssuerCharge(transaction)) continue;
+    if (hasNoMerchant(transaction)) continue;
     const merchant = transaction.merchant;
     if (merchant === undefined || merchant === '') continue;
     const magnitude = abs(transaction.amount);
@@ -438,9 +438,9 @@ export function unattributedSpending(
 
   for (const transaction of transactions) {
     if (!isSpending(transaction.kind, transaction.direction)) continue;
-    // An issuer charge is not unattributed: we know exactly who took it. It is
-    // reported by `issuerCharges` under its own name.
-    if (isIssuerCharge(transaction)) continue;
+    // Confirmed issuer costs are reported by `issuerCharges`; advance principal
+    // has its own field. Neither is an unknown merchant purchase.
+    if (hasNoMerchant(transaction)) continue;
     if (transaction.merchant !== undefined && transaction.merchant !== '') continue;
     amount = add(amount, abs(transaction.amount));
     transactionCount += 1;
@@ -510,25 +510,24 @@ export function unattributedByProcessor(
 /**
  * Whether the money went to the issuer rather than to a shop.
  *
- * A fee, an interest charge, a tax on the credit and cash drawn against the
- * cupo are all charges by the bank that issued the card. None of them has a
- * merchant, and the name the glosa carries is a description of the charge —
+ * A confirmed financial-cost reading names a charge by the institution rather
+ * than a shop. General activity kinds cannot prove who received the money —
+ * `fee` may be a brokerage commission and `tax` may be municipal. The glosa —
  * seen on a real host, `INTERES POR MORA`, `GASTOS DE COBRANZA` and
  * `COMISION POR AVANCE EN EFECTIVO` sat in "Comercios principales" between the
  * supermarket and the petrol station.
  */
 function isIssuerCharge(transaction: NormalizedTransaction): boolean {
-  return (
-    transaction.financialCost !== undefined ||
-    transaction.kind === TransactionKind.fee ||
-    transaction.kind === TransactionKind.interest ||
-    transaction.kind === TransactionKind.tax ||
-    transaction.kind === TransactionKind.cash_advance
-  );
+  return transaction.financialCost?.confidence === Confidence.confirmed;
+}
+
+/** Movements that have no merchant even though only some are issuer charges. */
+function hasNoMerchant(transaction: NormalizedTransaction): boolean {
+  return transaction.kind === TransactionKind.cash_advance || isIssuerCharge(transaction);
 }
 
 /**
- * What the issuer took this month, as a total.
+ * Charges identified from the issuer's own financial-cost wording.
  *
  * The counterpart of leaving those rows out of the merchant ranking: the money
  * does not vanish from the panel, and it is not filed under "sin comercio

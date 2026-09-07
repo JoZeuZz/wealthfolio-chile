@@ -1,7 +1,7 @@
 import { addMonths, addMonthsToKey, monthKey, type MonthKey } from '../dates';
 import { hashFields } from '../hash';
 import { abs, add, multiplyInt, zero, type Money } from '../money';
-import { Confidence } from '../model/kinds';
+import { Confidence, TransactionKind } from '../model/kinds';
 import type {
   InstallmentOutlook,
   InstallmentPlan,
@@ -38,6 +38,12 @@ export function buildInstallmentPlans(
   const groups = new Map<string, NormalizedTransaction[]>();
 
   for (const transaction of transactions) {
+    if (
+      transaction.kind !== TransactionKind.credit_card_purchase &&
+      transaction.kind !== TransactionKind.expense
+    ) {
+      continue;
+    }
     const installment = transaction.installment;
     if (!installment) continue;
     if (minimum === Confidence.confirmed && installment.confidence !== Confidence.confirmed) {

@@ -543,8 +543,8 @@ export function DashboardPage() {
                 {view.issuerCharges.transactionCount > 0 ? (
                   <p className="text-muted-foreground text-xs">
                     Y <Amount value={view.issuerCharges.amount} /> en{' '}
-                    {view.issuerCharges.transactionCount} cobro(s) del emisor —intereses,
-                    comisiones, impuestos, avances—, que no son de ningún comercio.
+                    {view.issuerCharges.transactionCount} cargo(s) identificado(s) del emisor:
+                    intereses, comisiones e impuestos, no comercios.
                   </p>
                 ) : null}
                 {/* Why, when there is a why. A charge routed through Mercado
@@ -947,4 +947,3 @@ function buildViews(data: DashboardData, month: string): CurrencyView[] {
     },
   );
 }
-

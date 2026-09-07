@@ -726,9 +726,13 @@ describe('la tarjeta de costos financieros', () => {
       ],
     });
 
-    expect(await screen.findByText(/Avance en efectivo/)).toBeInTheDocument();
+    let card = (await screen.findByText('Costos financieros')) as HTMLElement;
+    while (card.parentElement && !card.textContent?.includes('Avance en efectivo')) {
+      card = card.parentElement;
+    }
+    expect(within(card).getByText(/Avance en efectivo/)).toBeInTheDocument();
     // 12.400 + 5.900, no 218.300.
-    expect(screen.getByText('$18.300')).toBeInTheDocument();
+    expect(within(card).getByText('$18.300')).toBeInTheDocument();
   });
 
   it('un mes sin costos financieros no muestra la tarjeta', async () => {
@@ -864,6 +868,7 @@ describe('los cobros del emisor no compiten con los comercios', () => {
     }
     expect(card.textContent).toContain('del emisor');
     expect(card.textContent).toContain('$12.400');
+    expect(card.textContent).not.toContain('avances');
   });
 });
 

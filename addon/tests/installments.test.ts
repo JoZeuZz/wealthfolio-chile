@@ -162,6 +162,14 @@ describe('buildInstallmentPlans', () => {
     expect(buildInstallmentPlans([noCuota])).toHaveLength(0);
   });
 
+  it('un avance en cuotas no se convierte en plan de compra', () => {
+    const advance = {
+      ...charge('Avance', '2026-02-04', 50_000, 2, 12),
+      kind: TransactionKind.cash_advance,
+    };
+    expect(buildInstallmentPlans([advance])).toHaveLength(0);
+  });
+
   it('produces the same plans regardless of charge order', () => {
     const charges = [
       charge('Falabella', '2026-01-04', 49990, 1, 6),

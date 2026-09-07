@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { attributePayment } from '../src/core/merchants/attribution';
 import {
+  financialCostBreakdown,
   issuerCharges,
   summarizeMonth,
   totalsByMerchant,
@@ -50,6 +51,11 @@ const MONTH = [
   row('IMPUESTO AL CREDITO', 1_200, {
     kind: TransactionKind.tax,
     kindConfidence: Confidence.confirmed,
+    financialCost: {
+      kind: FinancialCostKind.credit_tax,
+      confidence: Confidence.confirmed,
+      matchedText: 'IMPUESTO AL CREDITO',
+    },
   }),
   row('AVANCE EN EFECTIVO', 200_000, {
     kind: TransactionKind.cash_advance,
@@ -85,8 +91,22 @@ describe('el ranking de comercios y los cobros del emisor', () => {
    */
   it('informa aparte cuánto se llevó el emisor', () => {
     const charges = issuerCharges(MONTH, { currency: 'CLP' });
-    expect(charges.amount.minor).toBe(12_400 + 9_900 + 1_200 + 200_000);
-    expect(charges.transactionCount).toBe(4);
+    expect(charges.amount.minor).toBe(12_400 + 9_900 + 1_200);
+    expect(charges.transactionCount).toBe(3);
+  });
+
+  it('un fee genérico no prueba que el emisor recibió el dinero', () => {
+    const charges = issuerCharges(
+      [
+        row('COMISION CORRETAJE PROPIEDAD', 1_500_000, {
+          kind: TransactionKind.fee,
+          kindConfidence: Confidence.confirmed,
+        }),
+      ],
+      { currency: 'CLP' },
+    );
+    expect(charges.amount.minor).toBe(0);
+    expect(charges.transactionCount).toBe(0);
   });
 
   it('no los cuenta como gasto sin comercio identificado', () => {
@@ -102,8 +122,9 @@ describe('el ranking de comercios y los cobros del emisor', () => {
     const { grossSpending } = summarizeMonth('2026-09', MONTH, { currency: 'CLP' });
     const merchants = totalsByMerchant(MONTH, 10, { currency: 'CLP' });
     const charges = issuerCharges(MONTH, { currency: 'CLP' });
+    const advances = financialCostBreakdown(MONTH, { currency: 'CLP' }).cashAdvances;
     const ranked = merchants.reduce((sum, t) => sum + t.amount.minor, 0);
-    expect(ranked + charges.amount.minor).toBe(grossSpending.minor);
+    expect(ranked + charges.amount.minor + advances.minor).toBe(grossSpending.minor);
   });
 
   it('un mes sin cargos del emisor informa cero movimientos', () => {
