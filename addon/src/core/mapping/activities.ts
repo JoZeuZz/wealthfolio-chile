@@ -661,8 +661,18 @@ function kindFromActivityType(
     case 'TRANSFER_IN':
     case 'TRANSFER_OUT':
       return TransactionKind.internal_transfer;
-    case 'CREDIT':
-      return TransactionKind.refund;
+    case 'CREDIT': {
+      const creditSubtype = subtype?.toUpperCase();
+      if (creditSubtype === 'BONUS') return TransactionKind.income;
+      if (
+        creditSubtype === 'REFUND' ||
+        creditSubtype === 'REBATE' ||
+        creditSubtype === 'REIMBURSEMENT'
+      ) {
+        return TransactionKind.refund;
+      }
+      return TransactionKind.unknown;
+    }
     case 'FEE':
       return subtype === 'INTEREST_CHARGE' ? TransactionKind.interest : TransactionKind.fee;
     case 'TAX':
