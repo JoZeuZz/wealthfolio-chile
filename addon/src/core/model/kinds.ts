@@ -88,6 +88,7 @@ export type Confidence = (typeof Confidence)[keyof typeof Confidence];
 export const NON_SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
   TransactionKind.internal_transfer,
   TransactionKind.credit_card_payment,
+  TransactionKind.cash_advance,
   TransactionKind.investment,
   TransactionKind.unknown,
 ]);
@@ -95,18 +96,10 @@ export const NON_SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
 /**
  * Kinds that count as real outflow in cash-flow and category reports.
  *
- * `cash_advance` is here for the same reason a `GIRO CAJERO` on a current
- * account has always been spending: the cash left the tool's field of view and
- * was spent. Leaving it out would report a month where $200.000 was drawn as a
- * month where nothing happened.
- *
- * The exclusion of the later card payment is what stops the *card* leg being
- * counted twice, and that much is settled. What it does not cover is an advance
- * paid into an account the user also imports: the cash reappears as an inflow
- * there, and spending it is a second, real movement. `defaultKindForRow` leaves
- * that inflow unresolved rather than calling it income, which puts it in front
- * of a person instead of inventing $200.000 of earnings — the pairing itself is
- * for the reconciliation screen to propose, not for a classifier to assume.
+ * `cash_advance` is not here: drawing principal creates debt and delivers cash,
+ * but does not buy a good or service. Its amount remains visible in the
+ * dedicated financing breakdown, while later spending of that cash is counted
+ * by the movement that actually paid for something.
  *
  * `interest` is here for the charged direction only — the direction gate in
  * `isSpending` handles that, and `isIncome` keeps interest *earned* as income.
@@ -119,7 +112,6 @@ export const NON_SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
 export const SPENDING_KINDS: ReadonlySet<TransactionKind> = new Set([
   TransactionKind.expense,
   TransactionKind.credit_card_purchase,
-  TransactionKind.cash_advance,
   TransactionKind.fee,
   TransactionKind.tax,
   TransactionKind.interest,

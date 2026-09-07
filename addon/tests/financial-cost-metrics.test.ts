@@ -24,6 +24,7 @@ const MONTH = [
   makeTransaction({ amount: -45000, date: '2026-09-02', description: 'SUPERMERCADO' }),
   cost(FinancialCostKind.late_interest, 12400, TransactionKind.interest),
   cost(FinancialCostKind.revolving_interest, 8000, TransactionKind.interest),
+  cost(FinancialCostKind.cash_advance_interest, 6000, TransactionKind.interest),
   cost(FinancialCostKind.maintenance, 5900, TransactionKind.fee),
   cost(FinancialCostKind.credit_tax, 1200, TransactionKind.tax),
   makeTransaction({
@@ -46,13 +47,13 @@ describe('el desglose de costos financieros del mes', () => {
   it('mide consumo por las filas que son compras, no restando otros totales', () => {
     const summary = summarizeMonth('2026-09', MONTH, { currency: 'CLP' });
     expect(summary.consumptionSpending.minor).toBe(45_000);
-    expect(summary.grossSpending.minor).toBe(45_000 + 12_400 + 8_000 + 5_900 + 1_200 + 200_000);
+    expect(summary.grossSpending.minor).toBe(45_000 + 12_400 + 8_000 + 6_000 + 5_900 + 1_200);
   });
 
   it('consumo, costos y principal no se cuentan dos veces en un mes completamente clasificado', () => {
     const summary = summarizeMonth('2026-09', MONTH, { currency: 'CLP' });
     const costs = financialCostBreakdown(MONTH, { currency: 'CLP' });
-    expect(summary.consumptionSpending.minor + costs.total.minor + costs.cashAdvances.minor).toBe(
+    expect(summary.consumptionSpending.minor + costs.total.minor).toBe(
       summary.grossSpending.minor,
     );
     expect(costs.items.reduce((sum, item) => sum + item.amount.minor, 0)).toBe(
@@ -85,12 +86,12 @@ describe('el desglose de costos financieros del mes', () => {
 
   it('suma sólo las líneas que nombran un costo', () => {
     const breakdown = financialCostBreakdown(MONTH, { currency: 'CLP' });
-    expect(breakdown.total.minor).toBe(12400 + 8000 + 5900 + 1200);
+    expect(breakdown.total.minor).toBe(12400 + 8000 + 6000 + 5900 + 1200);
   });
 
   it('separa lo que costó deber de lo que cuesta tener la tarjeta', () => {
     const breakdown = financialCostBreakdown(MONTH, { currency: 'CLP' });
-    expect(breakdown.borrowing.minor).toBe(12400 + 8000 + 1200);
+    expect(breakdown.borrowing.minor).toBe(12400 + 8000 + 6000 + 1200);
     expect(breakdown.instrument.minor).toBe(5900);
   });
 
@@ -99,6 +100,7 @@ describe('el desglose de costos financieros del mes', () => {
     expect(items.map((item) => item.kind)).toEqual([
       FinancialCostKind.late_interest,
       FinancialCostKind.revolving_interest,
+      FinancialCostKind.cash_advance_interest,
       FinancialCostKind.maintenance,
       FinancialCostKind.credit_tax,
     ]);
@@ -113,7 +115,7 @@ describe('el desglose de costos financieros del mes', () => {
     const breakdown = financialCostBreakdown(MONTH, { currency: 'CLP' });
     expect(breakdown.cashAdvances.minor).toBe(200000);
     expect(breakdown.cashAdvanceCount).toBe(1);
-    expect(breakdown.total.minor).not.toBe(12400 + 8000 + 5900 + 1200 + 200000);
+    expect(breakdown.total.minor).not.toBe(12400 + 8000 + 6000 + 5900 + 1200 + 200000);
   });
 
   it('un mes sin costos devuelve cero y ninguna línea', () => {
@@ -143,6 +145,6 @@ describe('el desglose de costos financieros del mes', () => {
       },
     });
     const breakdown = financialCostBreakdown([...MONTH, refund], { currency: 'CLP' });
-    expect(breakdown.total.minor).toBe(12400 + 8000 + 5900 + 1200);
+    expect(breakdown.total.minor).toBe(12400 + 8000 + 6000 + 5900 + 1200);
   });
 });

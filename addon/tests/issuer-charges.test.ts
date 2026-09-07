@@ -124,7 +124,8 @@ describe('el ranking de comercios y los cobros del emisor', () => {
     const charges = issuerCharges(MONTH, { currency: 'CLP' });
     const advances = financialCostBreakdown(MONTH, { currency: 'CLP' }).cashAdvances;
     const ranked = merchants.reduce((sum, t) => sum + t.amount.minor, 0);
-    expect(ranked + charges.amount.minor + advances.minor).toBe(grossSpending.minor);
+    expect(ranked + charges.amount.minor).toBe(grossSpending.minor);
+    expect(advances.minor).toBe(200_000);
   });
 
   it('un mes sin cargos del emisor informa cero movimientos', () => {

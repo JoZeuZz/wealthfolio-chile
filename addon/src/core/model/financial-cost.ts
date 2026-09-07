@@ -44,6 +44,8 @@ export const FinancialCostKind = {
   late_interest: 'late_interest',
   /** Interés pactado dentro de una compra en cuotas. */
   installment_interest: 'installment_interest',
+  /** Interés explícitamente cobrado por un avance en efectivo. */
+  cash_advance_interest: 'cash_advance_interest',
   /** Comisión de mantención o administración: the price of holding the card. */
   maintenance: 'maintenance',
   /** Comisión por compra internacional o en moneda extranjera. */
@@ -74,6 +76,7 @@ export function transactionKindForCost(cost: FinancialCostKind): TransactionKind
     case FinancialCostKind.revolving_interest:
     case FinancialCostKind.late_interest:
     case FinancialCostKind.installment_interest:
+    case FinancialCostKind.cash_advance_interest:
       return TransactionKind.interest;
     case FinancialCostKind.credit_tax:
       return TransactionKind.tax;
@@ -94,6 +97,7 @@ export const COST_OF_BORROWING: ReadonlySet<FinancialCostKind> = new Set([
   FinancialCostKind.revolving_interest,
   FinancialCostKind.late_interest,
   FinancialCostKind.installment_interest,
+  FinancialCostKind.cash_advance_interest,
   FinancialCostKind.cash_advance_fee,
   FinancialCostKind.collection,
   FinancialCostKind.credit_tax,
@@ -112,6 +116,8 @@ export function financialCostLabel(cost: FinancialCostKind): string {
       return 'Interés por mora';
     case FinancialCostKind.installment_interest:
       return 'Interés de cuotas';
+    case FinancialCostKind.cash_advance_interest:
+      return 'Interés de avance';
     case FinancialCostKind.maintenance:
       return 'Comisión de mantención';
     case FinancialCostKind.international_purchase:

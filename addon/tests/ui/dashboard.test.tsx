@@ -719,6 +719,7 @@ describe('la tarjeta de costos financieros', () => {
     expect(within(card).getByText('$45.000')).toBeInTheDocument();
     expect(within(card).getByText('$18.300')).toBeInTheDocument();
     expect(within(card).getByText('$200.000')).toBeInTheDocument();
+    expect(screen.getByText('Gasto neto').parentElement?.textContent).toContain('$63.300');
   });
 
   it('separa lo que costó deber de lo que cuesta tener la tarjeta', async () => {

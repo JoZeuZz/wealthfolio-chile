@@ -31,12 +31,15 @@ describe('la taxonomía de costo financiero', () => {
     }
   });
 
-  it('los tres intereses son intereses, no comisiones', () => {
+  it('todos los intereses son intereses, no comisiones', () => {
     expect(transactionKindForCost(FinancialCostKind.revolving_interest)).toBe(
       TransactionKind.interest,
     );
     expect(transactionKindForCost(FinancialCostKind.late_interest)).toBe(TransactionKind.interest);
     expect(transactionKindForCost(FinancialCostKind.installment_interest)).toBe(
+      TransactionKind.interest,
+    );
+    expect(transactionKindForCost(FinancialCostKind.cash_advance_interest)).toBe(
       TransactionKind.interest,
     );
   });
@@ -55,6 +58,7 @@ describe('la taxonomía de costo financiero', () => {
     expect(isCostOfBorrowing(FinancialCostKind.revolving_interest)).toBe(true);
     expect(isCostOfBorrowing(FinancialCostKind.collection)).toBe(true);
     expect(isCostOfBorrowing(FinancialCostKind.credit_tax)).toBe(true);
+    expect(isCostOfBorrowing(FinancialCostKind.cash_advance_interest)).toBe(true);
 
     expect(isCostOfBorrowing(FinancialCostKind.maintenance)).toBe(false);
     expect(isCostOfBorrowing(FinancialCostKind.international_purchase)).toBe(false);
@@ -83,6 +87,12 @@ describe('leer el costo que la glosa nombra', () => {
   it('distingue el interés de una compra en cuotas', () => {
     expect(read('INTERES COMPRA EN CUOTAS')?.kind).toBe(FinancialCostKind.installment_interest);
     expect(read('INTERES CUOTAS')?.kind).toBe(FinancialCostKind.installment_interest);
+  });
+
+  it('distingue el interés cobrado por un avance de su principal', () => {
+    expect(read('INTERES POR AVANCE EN EFECTIVO')?.kind).toBe(
+      FinancialCostKind.cash_advance_interest,
+    );
   });
 
   it('reconoce la comisión de mantención y la de administración', () => {

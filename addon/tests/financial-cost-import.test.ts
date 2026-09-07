@@ -40,6 +40,7 @@ const STATEMENT = [
   '30/09/2026;TIMBRES Y GOMAS SPA;12.000;;Comercio',
   '30/09/2026;LIBRERIA EL INTERES;9.000;;Comercio',
   '30/09/2026;DEVOLUCION COMPRA LIDER;-8.000;;Comercio',
+  '30/09/2026;INTERES POR AVANCE EN EFECTIVO;6.000;;Intereses',
 ].join('\n');
 
 function prepared() {
@@ -67,6 +68,12 @@ describe('un estado de cuenta con costos financieros, de punta a punta', () => {
     const row = find('COMISION POR AVANCE EN EFECTIVO');
     expect(row.kind).toBe(TransactionKind.fee);
     expect(row.financialCost?.kind).toBe(FinancialCostKind.cash_advance_fee);
+  });
+
+  it('el interés del avance es costo, nunca principal ni compra', () => {
+    const row = find('INTERES POR AVANCE EN EFECTIVO');
+    expect(row.kind).toBe(TransactionKind.interest);
+    expect(row.financialCost?.kind).toBe(FinancialCostKind.cash_advance_interest);
   });
 
   it('el interés por mora se distingue del rotativo', () => {
@@ -146,7 +153,10 @@ describe('un estado de cuenta con costos financieros, de punta a punta', () => {
     const outflow = rows
       .filter((row) => row.transaction.direction === 'out')
       .reduce((sum, row) => sum + Math.abs(row.transaction.amount.minor), 0);
-    expect(Math.abs(totals.expenses.minor)).toBe(outflow);
+    const principal = rows
+      .filter((row) => row.transaction.kind === TransactionKind.cash_advance)
+      .reduce((sum, row) => sum + Math.abs(row.transaction.amount.minor), 0);
+    expect(Math.abs(totals.expenses.minor) + principal).toBe(outflow);
   });
 });
 
@@ -162,10 +172,13 @@ describe('el costo financiero sobrevive el viaje a Wealthfolio', () => {
 
   it('el avance se escribe como retiro y se relee como avance', () => {
     const row = find('AVANCE EN EFECTIVO');
+    expect(row.merchant).toBeUndefined();
+    expect(row.attribution).toBeUndefined();
     const activity = toActivityCreate(row, { accountId: 'acct-cmr', runId: 'run-1' });
 
     expect(activity.activityType).toBe('WITHDRAWAL');
     expect(readChileMetadata(activity.metadata)?.kind).toBe(TransactionKind.cash_advance);
+    expect(readChileMetadata(activity.metadata)?.merchant).toBeUndefined();
   });
 
   it('una fila sin costo no escribe el campo', () => {

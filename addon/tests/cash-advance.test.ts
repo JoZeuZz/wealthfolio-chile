@@ -41,8 +41,20 @@ const account = (description: string) =>
 describe('el avance en efectivo tiene su propia clasificación', () => {
   it('un avance en la tarjeta no es una compra con tarjeta', () => {
     expect(card('AVANCE EN EFECTIVO').kind).toBe(TransactionKind.cash_advance);
-    expect(card('AVANCE EFECTIVO CAJERO').kind).toBe(TransactionKind.cash_advance);
-    expect(card('SUPER AVANCE 12 CUOTAS').kind).toBe(TransactionKind.cash_advance);
+  });
+
+  it.each([
+    'AVANCE',
+    'AVANCE EFECTIVO CAJERO',
+    'AVANCE EN CUOTAS',
+    'AVANCE 12 CUOTAS',
+    'SUPER AVANCE 12 CUOTAS',
+    'SUPERAVANCE',
+  ])('deja %s sin resolver hasta observar una cartola real', (description) => {
+    expect(card(description)).toMatchObject({
+      kind: TransactionKind.unknown,
+      confidence: Confidence.unknown,
+    });
   });
 
   it('la glosa lo nombró, así que no es una suposición del producto', () => {
@@ -61,6 +73,11 @@ describe('el avance en efectivo tiene su propia clasificación', () => {
 
   it('la comisión del avance es la comisión, no el avance', () => {
     expect(card('COMISION POR AVANCE EN EFECTIVO').kind).not.toBe(TransactionKind.cash_advance);
+    expect(card('INTERES POR AVANCE EN EFECTIVO').kind).not.toBe(TransactionKind.cash_advance);
+    expect(card('IMPUESTO AL CREDITO AVANCE EN EFECTIVO').kind).not.toBe(
+      TransactionKind.cash_advance,
+    );
+    expect(card('SEGURO AVANCE EN EFECTIVO').kind).not.toBe(TransactionKind.cash_advance);
   });
 
   /**
@@ -85,9 +102,9 @@ describe('qué hace el avance con los totales', () => {
    * hay doble conteo, porque el pago posterior de la tarjeta ya está fuera del
    * gasto.
    */
-  it('cuenta como gasto del mes en que se retiró', () => {
-    expect(isSpending(TransactionKind.cash_advance, Direction.out)).toBe(true);
-    expect(NON_SPENDING_KINDS.has(TransactionKind.cash_advance)).toBe(false);
+  it('no llama gasto al principal financiado', () => {
+    expect(isSpending(TransactionKind.cash_advance, Direction.out)).toBe(false);
+    expect(NON_SPENDING_KINDS.has(TransactionKind.cash_advance)).toBe(true);
   });
 
   it('no cuenta como gasto en la dirección contraria', () => {

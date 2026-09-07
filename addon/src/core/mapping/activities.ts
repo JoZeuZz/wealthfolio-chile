@@ -252,7 +252,9 @@ export function toActivityCreate(
     // glosa like `TARJETA 4051 2233 4455 6677 SUPERMERCADO` carried the card
     // number into the activity's metadata for no benefit at all. The `comment`
     // still holds the glosa the bank printed, which is the field meant to.
-    ...(transaction.merchant ? { merchant: redactSensitive(transaction.merchant) } : {}),
+    ...(transaction.kind !== TransactionKind.cash_advance && transaction.merchant
+      ? { merchant: redactSensitive(transaction.merchant) }
+      : {}),
     ...(transaction.tags.length > 0 ? { tags: transaction.tags } : {}),
     ...(transaction.installment
       ? { cuota: { n: transaction.installment.current, of: transaction.installment.total } }
@@ -844,6 +846,7 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
   // called "Online Cuota 3" — the invented merchant this layer exists to kill,
   // resurrected by the read path.
   const attribution = attributePayment(withoutInstallmentMarker(description));
+  const carriesMerchantAttribution = kind !== TransactionKind.cash_advance;
 
   return {
     sourceInstitution: metadata.inst,
@@ -854,16 +857,18 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
     date: civilDate(activity.date),
     description,
     normalizedDescription: normalizeDescription(description),
-    attribution,
+    ...(carriesMerchantAttribution ? { attribution } : {}),
     // Stored merchant first: it is what the import decided, including anything
     // a user rule set with `set_merchant`. Only when there is none does the
     // freshly derived candidate stand in.
-    ...(cacheIsCurrent && metadata.merchant
+    ...(carriesMerchantAttribution && cacheIsCurrent && metadata.merchant
       ? { merchant: metadata.merchant }
       : attribution.merchant
         ? { merchant: attribution.merchant.name }
         : {}),
-    ...(attribution.processor ? { paymentProcessor: attribution.processor.name } : {}),
+    ...(carriesMerchantAttribution && attribution.processor
+      ? { paymentProcessor: attribution.processor.name }
+      : {}),
     amount,
     direction,
     kind,

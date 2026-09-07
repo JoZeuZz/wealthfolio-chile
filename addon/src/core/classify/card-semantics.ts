@@ -88,9 +88,18 @@ export const CARD_REVERSAL_MARKERS: readonly string[] = [
  * report a $4.500 charge as $4.500 of cash the user never received.
  */
 const CASH_ADVANCE_PHRASES: readonly RegExp[] = [
-  /\bAVANCES?\s+(?:EN\s+|DE\s+)?EFECTIVO\b/,
+  /\bAVANCES?\s+EN\s+EFECTIVO\b/,
+];
+
+/** Plausible commercial spellings that need a real statement before acting. */
+const UNVERIFIED_CASH_ADVANCE_PHRASES: readonly RegExp[] = [
+  /^AVANCES?$/,
+  /\bAVANCES?\s+EFECTIVO\b/,
+  /\bAVANCES?\s+(?:EN\s+|\d+\s+)?CUOTAS?\b/,
   /\bSUPER\s*AVANCES?\b/,
 ];
+
+const CASH_ADVANCE_COST = /\b(?:COMISION(?:ES)?|INTERES(?:ES)?|IMPUESTOS?|SEGUROS?|PRIMAS?)\b/;
 
 /** The subset of a movement this module reads. */
 export interface DescribedMovement {
@@ -238,7 +247,16 @@ function named(kind: TransactionKind): DefaultKind {
  * a merchant name, and neither is a loan against this account's cupo.
  */
 function readCashAdvance(description: string): DefaultKind | undefined {
-  return mentionsCashAdvance(description) ? named(TransactionKind.cash_advance) : undefined;
+  const text = normalizeDescription(description);
+  const confirmed = CASH_ADVANCE_PHRASES.some((pattern) => pattern.test(text));
+  const unverified = UNVERIFIED_CASH_ADVANCE_PHRASES.some((pattern) => pattern.test(text));
+  if (!confirmed && !unverified) return undefined;
+  if (confirmed && !CASH_ADVANCE_COST.test(text)) return named(TransactionKind.cash_advance);
+  return {
+    kind: TransactionKind.unknown,
+    confidence: Confidence.unknown,
+    ambiguousCardCredit: false,
+  };
 }
 
 /**
@@ -253,8 +271,11 @@ function readCashAdvance(description: string): DefaultKind | undefined {
  */
 function mentionsCashAdvance(description: string): boolean {
   const text = normalizeDescription(description);
-  if (text === '' || /\bCOMISION(?:ES)?\b/.test(text)) return false;
-  return CASH_ADVANCE_PHRASES.some((pattern) => pattern.test(text));
+  if (text === '' || CASH_ADVANCE_COST.test(text)) return false;
+  return (
+    CASH_ADVANCE_PHRASES.some((pattern) => pattern.test(text)) ||
+    UNVERIFIED_CASH_ADVANCE_PHRASES.some((pattern) => pattern.test(text))
+  );
 }
 
 /** Nothing named it; this is what the product defaults to. */

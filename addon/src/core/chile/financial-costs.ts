@@ -1,4 +1,4 @@
-import { Confidence, Direction, NON_SPENDING_KINDS } from '../model/kinds';
+import { Confidence, Direction, NON_SPENDING_KINDS, TransactionKind } from '../model/kinds';
 import { FinancialCostKind, transactionKindForCost } from '../model/financial-cost';
 import type { FinancialCostInfo, NormalizedTransaction } from '../model/transaction';
 
@@ -88,6 +88,14 @@ const PATTERNS: readonly Pattern[] = [
     pattern: phrase(
       'INTERES(?:ES)?',
       '(?:POR' + S + ')?(?:COMPRAS?' + S + 'EN' + S + ')?CUOTAS?',
+    ),
+    confidence: Confidence.confirmed,
+  },
+  {
+    kind: FinancialCostKind.cash_advance_interest,
+    pattern: phrase(
+      'INTERES(?:ES)?',
+      '(?:(?:POR|DE)' + S + ')?AVANCES?' + S + 'EN' + S + 'EFECTIVO',
     ),
     confidence: Confidence.confirmed,
   },
@@ -230,7 +238,7 @@ export function withFinancialCost<T extends NormalizedTransaction>(transaction: 
     reading.confidence === Confidence.confirmed &&
     transaction.direction === Direction.out &&
     transaction.kindConfidence !== Confidence.confirmed &&
-    !NON_SPENDING_KINDS.has(transaction.kind) &&
+    (!NON_SPENDING_KINDS.has(transaction.kind) || transaction.kind === TransactionKind.unknown) &&
     transaction.transferCandidate === undefined;
 
   if (!mayCorrect) return { ...transaction, financialCost };

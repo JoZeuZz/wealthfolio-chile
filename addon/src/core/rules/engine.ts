@@ -197,6 +197,13 @@ export function applyRules(
     if (rule.stopProcessing) break;
   }
 
+  if (current.kind === TransactionKind.cash_advance) {
+    const withoutMerchant = { ...current };
+    delete withoutMerchant.merchant;
+    delete withoutMerchant.attribution;
+    current = withoutMerchant;
+  }
+
   return { transaction: current, ignored };
 }
 
