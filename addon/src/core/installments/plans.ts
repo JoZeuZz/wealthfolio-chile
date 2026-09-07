@@ -38,12 +38,7 @@ export function buildInstallmentPlans(
   const groups = new Map<string, NormalizedTransaction[]>();
 
   for (const transaction of transactions) {
-    if (
-      transaction.kind !== TransactionKind.credit_card_purchase &&
-      transaction.kind !== TransactionKind.expense
-    ) {
-      continue;
-    }
+    if (transaction.kind !== TransactionKind.credit_card_purchase) continue;
     const installment = transaction.installment;
     if (!installment) continue;
     if (minimum === Confidence.confirmed && installment.confidence !== Confidence.confirmed) {

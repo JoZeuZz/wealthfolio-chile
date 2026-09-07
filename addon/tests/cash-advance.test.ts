@@ -112,6 +112,20 @@ describe('qué hace el avance con los totales', () => {
   });
 });
 
+describe('reversa del principal', () => {
+  it('revierte financiamiento, no una compra', () => {
+    const reversal = defaultKindForRow({
+      product: StatementProduct.credit_card,
+      direction: Direction.in,
+      description: 'REVERSA AVANCE EN EFECTIVO',
+    });
+    expect(reversal).toMatchObject({
+      kind: TransactionKind.cash_advance,
+      confidence: Confidence.confirmed,
+    });
+  });
+});
+
 describe('cómo llega el avance a Wealthfolio', () => {
   /**
    * El host no tiene un tipo para "préstamo contra el cupo". `WITHDRAWAL` es el

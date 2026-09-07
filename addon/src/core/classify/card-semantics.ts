@@ -213,6 +213,13 @@ export function defaultKindForRow(input: {
     return byProduct(TransactionKind.credit_card_purchase);
   }
 
+  if (
+    mentions(input.description, CARD_REVERSAL_MARKERS) &&
+    mentionsConfirmedCashAdvance(input.description)
+  ) {
+    return named(TransactionKind.cash_advance);
+  }
+
   switch (classifyCardInflow(input.description)) {
     case 'payment':
       return named(TransactionKind.credit_card_payment);
@@ -257,6 +264,14 @@ function readCashAdvance(description: string): DefaultKind | undefined {
     confidence: Confidence.unknown,
     ambiguousCardCredit: false,
   };
+}
+
+function mentionsConfirmedCashAdvance(description: string): boolean {
+  const text = normalizeDescription(description);
+  return (
+    !CASH_ADVANCE_COST.test(text) &&
+    CASH_ADVANCE_PHRASES.some((pattern) => pattern.test(text))
+  );
 }
 
 /**

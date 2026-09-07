@@ -146,6 +146,13 @@ export function applyRules(
 
   for (const rule of sortRules(rules)) {
     if (!rule.enabled) continue;
+    if (
+      rule.origin === 'builtin' &&
+      !builtinMayChangeKind &&
+      rule.actions.some((action) => action.type === 'mark_transfer')
+    ) {
+      continue;
+    }
     if (!ruleMatches(rule, current, context)) continue;
 
     current = { ...current, appliedRules: [...current.appliedRules, rule.id] };

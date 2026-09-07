@@ -8,7 +8,7 @@ import {
   mentionsCashSideCardPayment,
 } from '../src/core/classify/card-semantics';
 import { buildDuplicateIndex } from '../src/core/dedupe/classify';
-import { TransactionKind } from '../src/core/model/kinds';
+import { Confidence, TransactionKind } from '../src/core/model/kinds';
 import { StatementProduct } from '../src/core/model/statement';
 import { prepareImport } from '../src/core/pipeline';
 import { defaultRules } from '../src/core/rules/builtin';
@@ -292,6 +292,7 @@ describe('reglas y producto de la cartola', () => {
       amount: -120_000,
       date: '2026-02-03',
       kind: TransactionKind.expense,
+      kindConfidence: Confidence.suggested,
     });
 
     const { transaction: out } = applyRules(transaction, defaultRules(), {
@@ -308,6 +309,7 @@ describe('reglas y producto de la cartola', () => {
       amount: -120_000,
       date: '2026-02-03',
       kind: TransactionKind.expense,
+      kindConfidence: Confidence.suggested,
     });
 
     const { transaction: out } = applyRules(transaction, defaultRules(), { accountId: 'acc-1' });

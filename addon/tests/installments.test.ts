@@ -170,6 +170,14 @@ describe('buildInstallmentPlans', () => {
     expect(buildInstallmentPlans([advance])).toHaveLength(0);
   });
 
+  it('un pago de crédito en una cuenta no se convierte en plan de compra', () => {
+    const loanPayment = {
+      ...charge('Pago credito', '2026-02-04', 50_000, 2, 12),
+      kind: TransactionKind.expense,
+    };
+    expect(buildInstallmentPlans([loanPayment])).toHaveLength(0);
+  });
+
   it('produces the same plans regardless of charge order', () => {
     const charges = [
       charge('Falabella', '2026-01-04', 49990, 1, 6),
@@ -285,6 +293,7 @@ describe('una última cuota desigual sigue siendo el mismo plan', () => {
       date,
       description: `PARIS CUOTA ${current} DE 3`,
       merchant: 'PARIS',
+      kind: TransactionKind.credit_card_purchase,
       installment: {
         current,
         total: 3,
@@ -340,6 +349,7 @@ describe('dos planes del mismo comercio solapados en el tiempo', () => {
       date,
       description: `FALABELLA RETAIL CUOTA ${current} DE ${total}`,
       merchant: 'FALABELLA',
+      kind: TransactionKind.credit_card_purchase,
       installment: {
         current,
         total,

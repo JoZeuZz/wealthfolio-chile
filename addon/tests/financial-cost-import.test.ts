@@ -41,6 +41,7 @@ const STATEMENT = [
   '30/09/2026;LIBRERIA EL INTERES;9.000;;Comercio',
   '30/09/2026;DEVOLUCION COMPRA LIDER;-8.000;;Comercio',
   '30/09/2026;INTERES POR AVANCE EN EFECTIVO;6.000;;Intereses',
+  '30/09/2026;DEVOLUCION COMPRA CUENTA PROPIA LIDER;-7.000;;Comercio',
 ].join('\n');
 
 function prepared() {
@@ -122,6 +123,12 @@ describe('un estado de cuenta con costos financieros, de punta a punta', () => {
     const row = find('DEVOLUCION COMPRA LIDER');
     expect(row.kind).toBe(TransactionKind.refund);
     expect(row.category).toBe('alimentacion.supermercado');
+  });
+
+  it('una devolución confirmada no se convierte en transferencia propia', () => {
+    const row = find('DEVOLUCION COMPRA CUENTA PROPIA LIDER');
+    expect(row.kind).toBe(TransactionKind.refund);
+    expect(row.transferCandidate).toBeUndefined();
   });
 
   it('un pago de tarjeta confirmado gana a palabras de costo financiero', () => {

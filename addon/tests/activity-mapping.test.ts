@@ -106,6 +106,23 @@ describe('invalid fixed-direction financial kinds', () => {
       expect(readChileMetadata(create.metadata)?.kind).toBe(kind);
     },
   );
+
+  it.each([
+    [TransactionKind.expense, Direction.in, 'CREDIT'],
+    [TransactionKind.income, Direction.out, 'WITHDRAWAL'],
+    [TransactionKind.refund, Direction.out, 'WITHDRAWAL'],
+  ] as const)('preserves %s/%s with a generic host type', (kind, direction, activityType) => {
+    const transaction = makeTransaction({
+      date: '2026-03-01',
+      amount: direction === Direction.in ? 5_900 : -5_900,
+      description: 'MOVIMIENTO RECLASIFICADO',
+      kind,
+      direction,
+    });
+    const create = toActivityCreate(transaction, { accountId: ACCOUNT, runId: RUN });
+    expect(create.activityType).toBe(activityType);
+    expect(create.needsReview).toBe(true);
+  });
 });
 
 /**
@@ -497,6 +514,20 @@ describe('round trip: our model → Wealthfolio → our model', () => {
     });
     const { stored } = roundTrip(original);
     expect(activityToTransaction(stored)?.kindConfidence).toBe('suggested');
+  });
+
+  it('un avance no recupera un merchant automático al releerse', () => {
+    const original = makeTransaction({
+      date: '2026-03-16',
+      amount: -200_000,
+      description: 'AVANCE EN EFECTIVO CAJERO AUTOMATICO',
+      kind: TransactionKind.cash_advance,
+      merchant: 'Cajero Automatico',
+    });
+    const { stored } = roundTrip(original);
+    const rebuilt = activityToTransaction(stored);
+    expect(rebuilt?.merchant).toBeUndefined();
+    expect(rebuilt?.attribution).toBeUndefined();
   });
 
   it('ignores activities the addon did not write', () => {

@@ -414,16 +414,14 @@ export function resolveActivityType(
   },
   options: { accountType?: HostAccountType } = {},
 ): ResolvedType {
-  if (
-    transaction.direction === Direction.in &&
-    (transaction.kind === TransactionKind.fee ||
-      transaction.kind === TransactionKind.tax ||
-      transaction.kind === TransactionKind.cash_advance)
-  ) {
-    return { activityType: 'CREDIT', substituted: true };
-  }
-
   const natural = naturalActivityType(transaction);
+  const mappedDirection = activityDirection(natural.activityType);
+  if (mappedDirection !== undefined && mappedDirection !== transaction.direction) {
+    return {
+      activityType: transaction.direction === Direction.in ? 'CREDIT' : 'WITHDRAWAL',
+      substituted: true,
+    };
+  }
   if (options.accountType === 'CREDIT_CARD') {
     return substituteForCreditCard(natural, transaction.direction);
   }
@@ -877,11 +875,13 @@ export function activityToTransaction(
     // Stored merchant first: it is what the import decided, including anything
     // a user rule set with `set_merchant`. Only when there is none does the
     // freshly derived candidate stand in.
-    ...(carriesMerchantAttribution && cacheIsCurrent && metadata.merchant
-      ? { merchant: metadata.merchant }
-      : attribution.merchant
-        ? { merchant: attribution.merchant.name }
-        : {}),
+    ...(carriesMerchantAttribution
+      ? cacheIsCurrent && metadata.merchant
+        ? { merchant: metadata.merchant }
+        : attribution.merchant
+          ? { merchant: attribution.merchant.name }
+          : {}
+      : {}),
     ...(carriesMerchantAttribution && attribution.processor
       ? { paymentProcessor: attribution.processor.name }
       : {}),
@@ -954,7 +954,9 @@ function reconcileKind(
   accountType?: HostAccountType,
 ): TransactionKind {
   const cached = (metadata.kind ?? TransactionKind.unknown) as TransactionKind;
-  const implied = resolveActivityType({ kind: cached, direction });
+  const written =
+    metadata.dir === Direction.in || metadata.dir === Direction.out ? metadata.dir : direction;
+  const implied = naturalActivityType({ kind: cached, direction: written });
   if (implied.activityType === activity.activityType) return cached;
 
   // A recorded substitution explains the mismatch: the type was chosen for the
@@ -966,9 +968,6 @@ function reconcileKind(
     // makes every outflow on a card look like the substitution that produces
     // `WITHDRAWAL`, so a genuine reclassification would be waved through as
     // ours.
-    const written = metadata.dir === Direction.in || metadata.dir === Direction.out
-      ? metadata.dir
-      : direction;
     const forAccount = resolveActivityType(
       { kind: cached, direction: written },
       { accountType: 'CREDIT_CARD' },
