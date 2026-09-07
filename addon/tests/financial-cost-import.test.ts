@@ -211,6 +211,7 @@ describe('releer un costo financiero desde el host', () => {
     });
 
     expect(reread?.financialCost?.kind).toBe(FinancialCostKind.collection);
+    expect(reread?.financialCost?.matchedText).toBeUndefined();
     expect(reread?.kind).toBe(TransactionKind.fee);
   });
 

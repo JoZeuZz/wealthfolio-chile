@@ -130,8 +130,8 @@ export interface FinancialCostInfo {
   kind: FinancialCostKind;
   /** `confirmed` when the glosa named the specific cost, not just the family. */
   confidence: Confidence;
-  /** The exact substring that named it, for the review UI. */
-  matchedText: string;
+  /** Exact substring when still available; omitted after persisted round-trip. */
+  matchedText?: string;
 }
 
 /** One leg of a suspected transfer between two accounts the user owns. */

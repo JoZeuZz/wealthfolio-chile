@@ -487,6 +487,18 @@ describe('round trip: our model → Wealthfolio → our model', () => {
     expect(rebuilt?.date).toBe('2026-03-06');
   });
 
+  it('una clasificación sugerida sigue sugerida después del round-trip', () => {
+    const original = makeTransaction({
+      date: '2026-03-16',
+      amount: -25_000,
+      description: 'COMPRA SIN MAS EVIDENCIA',
+      kind: TransactionKind.credit_card_purchase,
+      kindConfidence: 'suggested',
+    });
+    const { stored } = roundTrip(original);
+    expect(activityToTransaction(stored)?.kindConfidence).toBe('suggested');
+  });
+
   it('ignores activities the addon did not write', () => {
     const foreign = activityStub({ activityType: 'DEPOSIT', amount: '1000', date: '2026-03-01' });
     expect(activityToTransaction(foreign)).toBeUndefined();

@@ -58,12 +58,14 @@ export const METADATA_NAMESPACE = 'wealthfolioChile';
  *   by omission: an older row is not "cost unknown", it is a row imported
  *   before the addon could read costs at all, and re-reading it produces the
  *   same `undefined` either way.
+ * - `5` — records `kc`, preserving whether the imported kind was confirmed,
+ *   suggested or unresolved instead of promoting every round-trip.
  *
  * Readers must keep accepting `1` and `2`: activities written by 0.1.x are
  * still in the user's ledger and still have to round-trip. Without `proj` the
  * question "was this edited?" falls back to the host's own `isUserModified`.
  */
-export const METADATA_VERSION = 4;
+export const METADATA_VERSION = 5;
 
 /**
  * Metadata written on every activity we create.
@@ -74,7 +76,7 @@ export const METADATA_VERSION = 4;
  * - **Provenance** — `v`, `inst`, `parser`, `parserVersion`, `fileHash`,
  *   `runId`. Facts about the import event. The host cannot contradict them
  *   because it never knew them.
- * - **Cache** — `fp`, `wfp`, `kind`, `dir`, `cat`, `merchant`, `tags`, `cuota`,
+ * - **Cache** — `fp`, `wfp`, `kind`, `kc`, `dir`, `cat`, `merchant`, `tags`, `cuota`,
  *   `xfer`. Values derived from the row as it was at import time. Every one of
  *   them can be made false by editing the activity in Wealthfolio, so none may
  *   be used without first asking whether the activity still matches `proj`.
@@ -102,6 +104,8 @@ export interface ChileMetadata {
   runId: string;
   /** Our transaction kind, so a re-read can rebuild the model. */
   kind: TransactionKind;
+  /** Confidence attached to `kind` when the import was approved. */
+  kc?: Confidence;
   /**
    * Direction the row had before it was written, as `'in'` or `'out'`.
    *
@@ -245,6 +249,7 @@ export function toActivityCreate(
     fileHash: transaction.sourceFileHash,
     runId: options.runId,
     kind: transaction.kind,
+    kc: transaction.kindConfidence,
     dir: transaction.direction,
     ...(substituted ? { subst: true as const } : {}),
     ...(transaction.category ? { cat: transaction.category } : {}),
@@ -788,15 +793,20 @@ export function readChileMetadata(
   // amount and no name. The blob is JSON that made a round trip through the
   // host and could have been hand-edited, so the enum is checked rather than
   // trusted — the same reason `dir` is checked before it is believed.
+  const validated = { ...candidate };
   if (
     candidate.fc !== undefined &&
     !FINANCIAL_COST_KINDS.includes(candidate.fc as FinancialCostKind)
   ) {
-    const rest = { ...candidate };
-    delete rest.fc;
-    return rest as ChileMetadata;
+    delete validated.fc;
   }
-  return candidate as ChileMetadata;
+  if (
+    candidate.kc !== undefined &&
+    !Object.values(Confidence).includes(candidate.kc as Confidence)
+  ) {
+    delete validated.kc;
+  }
+  return validated as ChileMetadata;
 }
 
 /** A metadata string the host never wrote is not an error — it is simply not ours. */
@@ -881,7 +891,9 @@ export function activityToTransaction(
     // `suggested` once the host has contradicted us: the row is classified, but
     // by a coarser reading than the one the import made.
     kindConfidence:
-      cacheIsCurrent && kind === metadata.kind ? Confidence.confirmed : Confidence.suggested,
+      cacheIsCurrent && kind === metadata.kind
+        ? (metadata.kc ?? Confidence.suggested)
+        : Confidence.suggested,
     ...(cacheIsCurrent && metadata.cat ? { category: metadata.cat } : {}),
     tags: cacheIsCurrent ? (metadata.tags ?? []) : [],
     ...(cacheIsCurrent && metadata.cuota
@@ -901,7 +913,6 @@ export function activityToTransaction(
           financialCost: {
             kind: metadata.fc,
             confidence: Confidence.confirmed,
-            matchedText: '',
           },
         }
       : {}),
