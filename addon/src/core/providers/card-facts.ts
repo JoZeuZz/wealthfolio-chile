@@ -89,7 +89,28 @@ export interface ReadCardFactsInput {
  * No newline, and short. The bound is what stops a label reaching across a
  * sentence to a number that belongs to something else.
  */
-const GAP = String.raw`[^\d\n($+-]{0,24}`;
+/**
+ * Between a label and its figure: a colon, spaces, filler.
+ *
+ * A run of dots is how a statement lines a label up with its column and can be
+ * far longer than any prose filler, so it is allowed on its own terms.
+ */
+const GAP = String.raw`(?:[^\d\n($+-]{0,24}|[.\s]{0,80})`;
+
+/**
+ * Every label this file knows, for counting rather than for matching.
+ *
+ * `preambleText` joins a row's cells with a space, so a summary row arrives as
+ * `ETIQUETA ETIQUETA valor valor` — and each label found its figure by looking
+ * forward, so the second label took the first value. `MONTO FACTURADO PAGO
+ * MINIMO 150.000 12.500` reported a $12.500 minimum as $150.000.
+ *
+ * Which value belongs to which label in that row is not knowable from the text,
+ * so when more than one label precedes a figure the figure is not read. It is
+ * the same answer this file gives everywhere else it cannot tell.
+ */
+const LABEL_HEAD =
+  /\b(?:PAGO\s+MINIMO|MONTO\s+MINIMO|TOTAL\s+A\s+PAGAR|MONTO\s+(?:TOTAL\s+)?FACTURADO|SALDO\s+ADEUDADO|DEUDA\s+TOTAL|(?:DEUDA|SALDO)\s+(?:NACIONAL|INTERNACIONAL|EN\s+PESOS|(?:EN\s+)?MONEDA\s+EXTRANJERA)|CUPO\s+(?:TOTAL|DISPONIBLE|UTILIZADO)|MONTO\s+DISPONIBLE|LINEA\s+DE\s+CREDITO)\b/gi;
 
 /**
  * What a figure looks like on a statement.
@@ -100,7 +121,7 @@ const GAP = String.raw`[^\d\n($+-]{0,24}`;
  */
 // The minus sits on either side of the currency sign — `-$35.000` and
 // `$-35.000` both occur — and a third convention puts it after the digits.
-const AMOUNT = String.raw`(\(?\s*-?\s*\$?\s*-?\s*\d[\d.,]*)\s*\)?`;
+const AMOUNT = String.raw`(\(?\s*[-+]?\s*\$?\s*[-+]?\s*\d[\d.,]*)\s*\)?`;
 
 /**
  * What must not follow a label for it to still mean the whole thing.
@@ -135,6 +156,16 @@ const IDENTIFIER_LINE = [
   // also refuses a long unseparated run outright.
   /\b(?:N[°º]?\.?\s*|NRO\.?\s*|NUMERO\s+(?:DE\s+)?)?(?:CLIENTE|FOLIO|COMERCIO|SERIE|CONTRATO)\b/i,
 ];
+
+/** How many labels stand between the start of the line and this figure. */
+function labelsBefore(line: string, match: RegExpExecArray): number {
+  const figureAt = match.index + match[0].lastIndexOf(match[1] as string);
+  LABEL_HEAD.lastIndex = 0;
+  return (line.slice(0, figureAt).match(LABEL_HEAD) ?? []).length;
+}
+
+/** A currency marker that belongs to the figure before it, not to the next one. */
+const TRAILING_CURRENCY = /^\s{0,2}(?:US\s*\$|USD|EUR|EUROS?|€|D[OÓ]LARES?)\b(?!\s*[\d(])/i;
 
 /** Currency markers that say a figure is not in the statement's own currency. */
 const FOREIGN_CURRENCY: Array<[RegExp, string]> = [
@@ -250,16 +281,18 @@ const DATE_LABELS: ReadonlyArray<[CardFactKey, RegExp[]]> = [
     'dueDate',
     [
       new RegExp(String.raw`\bPAGAR\s+HASTA\b${GAP}${DATE}`, 'gi'),
+      // The veto covers the whole gap, not the next word: `VENCIMIENTO DE LA
+      // POLIZA` walked straight past a lookahead that only knew `DE`.
       new RegExp(
-        String.raw`\bFECHA\s+(?:DE\s+)?VENCIMIENTO\b(?!\s*(?:DE\s+)?(?:POLIZA|SEGURO|CUOTA))${GAP}${DATE}`,
+        String.raw`\bFECHA\s+(?:DE\s+)?VENCIMIENTO\b(?![^\d\n]{0,24}\b(?:POLIZA|SEGURO|CUOTA|DESGRAVAMEN|CESANTIA)\b)${GAP}${DATE}`,
         'gi',
       ),
     ],
   ],
 ];
 
-/** Lines whose date is one that already happened. */
-const PAST_EVENT = /\b(?:ULTIMO|RECIBIDO|EFECTUADO|PAGADO|ANTERIOR)\b/i;
+/** Lines whose figures or dates belong to a cycle that already closed. */
+const PAST_EVENT = /\b(?:ULTIMO|RECIBIDO|EFECTUADO|PAGADO|ANTERIOR|PASADO|PREVIA|PREVIO|PRECEDENTE)\b/i;
 
 const PERIOD_LABELS: readonly RegExp[] = [
   new RegExp(String.raw`\bPERIODO\s+DE\s+FACTURACION\b${GAP}${DATE}[^\d\n]{1,10}${DATE}`, 'gi'),
@@ -328,6 +361,7 @@ function readAmountFact(
         // recorded: it would be filed under the statement's own, and a US$450
         // debt written down as $450 pesos is addable to the domestic one.
         if (spec.requiresForeignCurrency && currency === input.currency) continue;
+        if (labelsBefore(line, match) > 1) continue;
         const money = parseFigure(match, line, currency, input.numberFormat);
         // A label whose figure will not parse does not send us looking further
         // along the line for a better one: the next number belongs to something
@@ -360,7 +394,14 @@ function matchCurrency(
   match: RegExpExecArray,
   fallback: string,
 ): string | undefined {
-  const window = line.slice(match.index, match.index + match[0].length + 4);
+  // A marker after the figure counts only when nothing else follows it. The
+  // window used to reach a fixed four characters past the match, and since the
+  // match already absorbs its trailing spaces those four landed on the next
+  // cell — which in a summary row is the dollar column, so a peso figure came
+  // back marked USD.
+  const tail = line.slice(match.index + match[0].length);
+  const trailing = TRAILING_CURRENCY.test(tail) ? tail.slice(0, 8) : '';
+  const window = line.slice(match.index, match.index + match[0].length) + trailing;
   const named = FOREIGN_CURRENCY.filter(([pattern]) => pattern.test(window)).map(([, code]) => code);
   if (named.length > 1) return undefined;
   return named[0] ?? fallback;
@@ -382,11 +423,15 @@ function parseFigure(
   const rest = line.slice(match.index + match[0].length);
   if (/^\s*[/\-.]\s*\d/.test(rest)) return undefined;
 
-  // A short bare run is a counter, not money: `EN 12 CUOTAS`, `al 05/10`. With
-  // a thousands separator, a decimal comma or a currency sign it is a figure.
+  // A bare run of digits is not a figure. The threshold used to be four, which
+  // let a year and the last four of a card number through — `TOTAL A PAGAR
+  // OCTUBRE 2026 $150.000` read $2.026, and a card tail was drawn in the wizard
+  // as an amount. A peso figure printed on a statement carries a thousands
+  // separator or a currency sign; an identifier carries neither, whatever its
+  // length.
   const hasSeparator = /[.,]/.test(raw);
   const hasCurrencySign = raw.includes('$');
-  if (digits.length < 4 && !hasSeparator && !hasCurrencySign) return undefined;
+  if (!hasSeparator && !hasCurrencySign) return undefined;
 
   // A long unseparated run is an identifier, not a figure: a peso amount
   // printed on a statement carries thousands separators, and a customer number,
@@ -399,8 +444,13 @@ function parseFigure(
   // outside the capture altogether, so the sign is settled here rather than
   // left to `parseAmount`. Order matters: the date-head check above has already
   // rejected `-10-2026`.
-  const negative = raw.includes('(') || raw.includes('-') || /^-(?![\d.,])/.test(rest);
-  const body = raw.replace(/[($\s-]/g, '');
+  // `1.234-` is the trailing-minus convention; `$150.000.-` is how a statement
+  // closes an amount. The difference is the full stop before the hyphen.
+  const trailingMinus = /^-(?![\d.,])/.test(rest) && !raw.endsWith('.');
+  const negative = raw.includes('(') || raw.includes('-') || trailingMinus;
+  // `$150.000.-` is how a Chilean statement closes an amount. Stripping the
+  // hyphen leaves a trailing full stop that `parseAmount` refuses.
+  const body = raw.replace(/[($\s+-]/g, '').replace(/\.$/, '');
 
   try {
     const parsed = parseAmount(body, {
