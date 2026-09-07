@@ -137,7 +137,7 @@ export async function loadImportedTransactions(
 
       // Wealthfolio compiles only POSTED activities into balances and reports.
       // Keep drafts available to the review queue, but mirror host analytics.
-      if (activity.status !== undefined && activity.status !== 'POSTED') continue;
+      if (activity.status !== 'POSTED') continue;
       transactions.push(transaction);
       scoped.push({ accountId: activity.accountId, transaction });
     }

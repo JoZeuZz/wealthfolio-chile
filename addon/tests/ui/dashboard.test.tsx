@@ -272,7 +272,7 @@ describe('comparación con el mes anterior', () => {
       ],
     });
 
-    await screen.findByText('Flujo de caja');
+    await screen.findByText('Ingresos menos gasto');
     expect(
       screen.getByText(`-$40.000 en ${PREVIOUS_LABEL}`),
     ).toBeInTheDocument();
@@ -640,7 +640,7 @@ describe('cada tarjeta dice de qué moneda habla', () => {
 
     // The card, not its title: walk up until the element holds the figures too.
     let block = (await screen.findByText('Movimientos en USD')) as HTMLElement;
-    while (block.parentElement && !block.textContent?.includes('Flujo de caja')) {
+    while (block.parentElement && !block.textContent?.includes('Ingresos menos gasto')) {
       block = block.parentElement;
     }
     expect(block.textContent).toContain('Movimientos en USD');
@@ -720,6 +720,8 @@ describe('la tarjeta de costos financieros', () => {
     expect(within(card).getByText('$18.300')).toBeInTheDocument();
     expect(within(card).getByText('$200.000')).toBeInTheDocument();
     expect(screen.getByText('Gasto neto').parentElement?.textContent).toContain('$63.300');
+    expect(screen.getByText('Ingresos menos gasto')).toBeInTheDocument();
+    expect(screen.queryByText('Flujo de caja')).not.toBeInTheDocument();
   });
 
   it('separa lo que costó deber de lo que cuesta tener la tarjeta', async () => {
@@ -777,7 +779,7 @@ describe('la tarjeta de costos financieros', () => {
       ],
     });
 
-    await screen.findByText('Flujo de caja');
+    await screen.findByText('Ingresos menos gasto');
     expect(screen.queryByText('Costos financieros')).not.toBeInTheDocument();
   });
 });
@@ -997,7 +999,7 @@ describe('la cola de revisión', () => {
       ],
     });
 
-    await screen.findByText('Flujo de caja');
+    await screen.findByText('Ingresos menos gasto');
     expect(screen.queryByText('Movimientos que necesitan revisión')).not.toBeInTheDocument();
   });
 });

@@ -271,6 +271,15 @@ describe('loadImportedTransactions', () => {
           needsReview: true,
           metadata: ourMetadata('draft', TransactionKind.unknown),
         }),
+        {
+          ...activityStub({
+            activityType: 'WITHDRAWAL',
+            amount: '5000',
+            date: '2026-03-15',
+            metadata: ourMetadata('missing-status', TransactionKind.expense),
+          }),
+          status: undefined,
+        },
       ],
     });
 

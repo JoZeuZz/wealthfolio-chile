@@ -171,7 +171,7 @@ export function DashboardPage() {
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold">Chile</h1>
           <p className="text-muted-foreground text-sm">
-            Flujo de caja, categorías y cuotas a partir de tus cartolas importadas.
+            Ingresos, gastos, financiamiento y cuotas a partir de tus cartolas importadas.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -371,7 +371,7 @@ export function DashboardPage() {
               }
             />
             <Stat
-              label="Flujo de caja"
+              label="Ingresos menos gasto"
               value={view.summary.netCashFlow}
               tone={view.summary.netCashFlow.minor < 0 ? 'negative' : 'positive'}
               hint={
@@ -433,7 +433,7 @@ export function DashboardPage() {
                     }
                   />
                   <Stat
-                    label="Flujo de caja"
+                    label="Ingresos menos gasto"
                     value={other.summary.netCashFlow}
                     tone={other.summary.netCashFlow.minor < 0 ? 'negative' : 'positive'}
                     hint={

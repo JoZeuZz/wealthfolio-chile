@@ -318,7 +318,7 @@ export function activityStub(input: ActivityStubInput): ActivityDetails {
     fee: null,
     currency: input.currency ?? 'CLP',
     needsReview: input.needsReview ?? false,
-    ...(input.status ? { status: input.status } : {}),
+    status: input.status ?? 'POSTED',
     comment: input.comment ?? '',
     createdAt: new Date(`${input.date}T00:00:00Z`),
     updatedAt: new Date(`${input.date}T00:00:00Z`),
