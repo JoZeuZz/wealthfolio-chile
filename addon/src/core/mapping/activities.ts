@@ -805,8 +805,11 @@ function parseMetadataJson(metadata: string): Record<string, unknown> | undefine
 /** A stored activity, as much of it as the inverse mapping reads. */
 export interface HostActivity extends HostActivityAmount {
   id?: string;
+  accountId?: string;
   date: Date | string;
   comment?: string | null;
+  /** Host fallback for activities written before metadata projection existed. */
+  isUserModified?: boolean;
 }
 
 /**
@@ -823,7 +826,10 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
   const amount = activityDetailsToSignedMoney(activity);
   const direction = resolveActivityDirection(activity) ?? directionOfAmount(amount);
   const description = activity.comment ?? '';
-  const kind = reconcileKind(activity, metadata, direction);
+  const cacheIsCurrent = metadataCacheIsCurrent(activity, metadata);
+  const kind = cacheIsCurrent
+    ? reconcileKind(activity, metadata, direction)
+    : kindFromActivityType(activity.activityType, activity.subtype);
 
   // Recomputed, not read back. The glosa is in `comment`, so the attribution is
   // derivable, and deriving it means a correction to the processor catalogue
@@ -849,7 +855,7 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
     // Stored merchant first: it is what the import decided, including anything
     // a user rule set with `set_merchant`. Only when there is none does the
     // freshly derived candidate stand in.
-    ...(metadata.merchant
+    ...(cacheIsCurrent && metadata.merchant
       ? { merchant: metadata.merchant }
       : attribution.merchant
         ? { merchant: attribution.merchant.name }
@@ -860,10 +866,11 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
     kind,
     // `suggested` once the host has contradicted us: the row is classified, but
     // by a coarser reading than the one the import made.
-    kindConfidence: kind === metadata.kind ? Confidence.confirmed : Confidence.suggested,
-    ...(metadata.cat ? { category: metadata.cat } : {}),
-    tags: metadata.tags ?? [],
-    ...(metadata.cuota
+    kindConfidence:
+      cacheIsCurrent && kind === metadata.kind ? Confidence.confirmed : Confidence.suggested,
+    ...(cacheIsCurrent && metadata.cat ? { category: metadata.cat } : {}),
+    tags: cacheIsCurrent ? (metadata.tags ?? []) : [],
+    ...(cacheIsCurrent && metadata.cuota
       ? {
           installment: {
             current: metadata.cuota.n,
@@ -875,7 +882,7 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
       : {}),
     // The evidence text is not stored: it was a slice of the glosa, and the
     // glosa is in `comment`. What has to survive is which cost it was.
-    ...(metadata.fc
+    ...(cacheIsCurrent && metadata.fc
       ? {
           financialCost: {
             kind: metadata.fc,
@@ -887,6 +894,12 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
     warnings: [],
     rawMetadata: {},
   };
+}
+
+/** Whether cached classifications still describe the activity stored by the host. */
+function metadataCacheIsCurrent(activity: HostActivity, metadata: ChileMetadata): boolean {
+  if (metadata.proj) return activityProjection(activity) === metadata.proj;
+  return activity.isUserModified !== true;
 }
 
 /** Drop the marker `buildComment` appends, leaving the glosa the bank printed. */

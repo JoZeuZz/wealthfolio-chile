@@ -181,6 +181,7 @@ describe('releer un costo financiero desde el host', () => {
 
     const reread = activityToTransaction({
       id: 'a1',
+      accountId: 'acct-cmr',
       activityType: activity.activityType,
       amount: activity.amount,
       currency: activity.currency ?? 'CLP',
@@ -199,6 +200,7 @@ describe('releer un costo financiero desde el host', () => {
 
     const reread = activityToTransaction({
       id: 'a2',
+      accountId: 'acct-cmr',
       activityType: activity.activityType,
       amount: activity.amount,
       currency: activity.currency ?? 'CLP',

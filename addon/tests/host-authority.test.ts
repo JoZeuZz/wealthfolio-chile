@@ -8,6 +8,7 @@ import {
   toActivityCreate,
 } from '../src/core/mapping/activities';
 import { Direction, TransactionKind } from '../src/core/model/kinds';
+import { FinancialCostKind } from '../src/core/model/financial-cost';
 import { loadDuplicateIndexResult } from '../src/services/activity-index';
 import { makeTransaction } from './fixtures';
 import { activityStub, fakeHost } from './host';
@@ -266,5 +267,70 @@ describe('el tipo de la actividad gana a la clasificación cacheada', () => {
     );
 
     expect(transaction?.kind).toBe(TransactionKind.unknown);
+  });
+});
+
+describe('una edición invalida refinamientos cacheados aunque conserve el tipo', () => {
+  it('deja de atribuir un costo financiero cuyo monto cambió en el host', () => {
+    const original = makeTransaction({
+      amount: -5_900,
+      date: '2026-09-30',
+      description: 'COMISION DE MANTENCION',
+      kind: TransactionKind.fee,
+      financialCost: {
+        kind: FinancialCostKind.maintenance,
+        confidence: 'confirmed',
+        matchedText: 'COMISION DE MANTENCION',
+      },
+    });
+    const create = toActivityCreate(original, { accountId: ACCOUNT, runId: 'run-fc' });
+
+    const edited = activityToTransaction(
+      ourActivity({
+        activityType: 'FEE',
+        amount: '9900',
+        date: '2026-09-30',
+        comment: create.comment as string,
+        metadata: readChileMetadata(create.metadata as string),
+      }),
+    );
+
+    expect(edited?.kind).toBe(TransactionKind.fee);
+    expect(edited?.financialCost).toBeUndefined();
+  });
+
+  it('no conserva semántica de avance ni otros caches tras editar la glosa', () => {
+    const original = makeTransaction({
+      amount: -200_000,
+      date: '2026-09-03',
+      description: 'AVANCE EN EFECTIVO CUOTA 2 DE 12',
+      kind: TransactionKind.cash_advance,
+      merchant: 'Cajero',
+      category: 'efectivo',
+      tags: ['avance'],
+      installment: {
+        current: 2,
+        total: 12,
+        confidence: 'confirmed',
+        matchedText: 'CUOTA 2 DE 12',
+      },
+    });
+    const create = toActivityCreate(original, { accountId: ACCOUNT, runId: 'run-advance' });
+
+    const edited = activityToTransaction(
+      ourActivity({
+        activityType: 'WITHDRAWAL',
+        amount: '200000',
+        date: '2026-09-03',
+        comment: 'SUPERMERCADO GENERICO',
+        metadata: readChileMetadata(create.metadata as string),
+      }),
+    );
+
+    expect(edited?.kind).toBe(TransactionKind.expense);
+    expect(edited?.merchant).toBe('Supermercado Generico');
+    expect(edited?.category).toBeUndefined();
+    expect(edited?.installment).toBeUndefined();
+    expect(edited?.tags).toEqual([]);
   });
 });

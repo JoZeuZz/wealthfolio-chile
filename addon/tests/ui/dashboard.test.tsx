@@ -71,7 +71,7 @@ function activity(input: {
   return activityStub({
     accountId: input.accountId,
     activityType: input.type,
-    ...(input.kind === TransactionKind.refund ? { subtype: 'REFUND' } : {}),
+    ...(create.subtype ? { subtype: create.subtype } : {}),
     amount: String(Math.abs(input.amount)),
     currency: input.currency ?? 'CLP',
     date: input.date,
