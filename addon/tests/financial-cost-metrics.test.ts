@@ -43,6 +43,40 @@ const MONTH = [
  * superara el gasto bruto del mes, el panel estaría contando algo dos veces.
  */
 describe('el desglose de costos financieros del mes', () => {
+  it('mide consumo por las filas que son compras, no restando otros totales', () => {
+    const summary = summarizeMonth('2026-09', MONTH, { currency: 'CLP' });
+    expect(summary.consumptionSpending.minor).toBe(45_000);
+    expect(summary.grossSpending.minor).toBe(45_000 + 12_400 + 8_000 + 5_900 + 1_200 + 200_000);
+  });
+
+  it('consumo, costos y principal no se cuentan dos veces en un mes completamente clasificado', () => {
+    const summary = summarizeMonth('2026-09', MONTH, { currency: 'CLP' });
+    const costs = financialCostBreakdown(MONTH, { currency: 'CLP' });
+    expect(summary.consumptionSpending.minor + costs.total.minor + costs.cashAdvances.minor).toBe(
+      summary.grossSpending.minor,
+    );
+    expect(costs.items.reduce((sum, item) => sum + item.amount.minor, 0)).toBe(
+      costs.total.minor,
+    );
+  });
+
+  it('una comisión sugerida no se convierte en consumo por seguir bajo tipo compra', () => {
+    const ambiguousCommission = makeTransaction({
+      amount: -9_000,
+      date: '2026-09-21',
+      description: 'COMISION',
+      kind: TransactionKind.credit_card_purchase,
+      kindConfidence: Confidence.suggested,
+      financialCost: {
+        kind: FinancialCostKind.other,
+        confidence: Confidence.suggested,
+        matchedText: 'COMISION',
+      },
+    });
+    const summary = summarizeMonth('2026-09', [ambiguousCommission], { currency: 'CLP' });
+    expect(summary.consumptionSpending.minor).toBe(0);
+  });
+
   it('nunca supera el gasto bruto del mes', () => {
     const { grossSpending } = summarizeMonth('2026-09', MONTH, { currency: 'CLP' });
     const breakdown = financialCostBreakdown(MONTH, { currency: 'CLP' });

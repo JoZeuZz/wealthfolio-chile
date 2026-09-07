@@ -52,9 +52,11 @@ export interface MonthlySummary {
   cashOutflows: Money;
   netCashFlow: Money;
 
-  // ── Spending view: what was consumed ──────────────────────────────
-  /** Purchases, fees and taxes, before anything came back. */
+  // ── Spending view: classified outgoings and its consumption subset ─
+  /** Purchases, fees, taxes and cash advances, before anything came back. */
   grossSpending: Money;
+  /** Purchases and services only, before refunds; excludes financing and instrument costs. */
+  consumptionSpending: Money;
   /** Money returned from an earlier purchase. Not income. */
   refunds: Money;
   /** `grossSpending - refunds`. Can exceed cash outflows in a refund-heavy month. */
@@ -215,6 +217,7 @@ export function summarizeMonth(
   let income = zero(currency);
   let refunds = zero(currency);
   let grossSpending = zero(currency);
+  let consumptionSpending = zero(currency);
   let fixedExpenses = zero(currency);
   let variableExpenses = zero(currency);
   let internalTransfers = zero(currency);
@@ -253,6 +256,9 @@ export function summarizeMonth(
 
     if (isSpending(transaction.kind, transaction.direction)) {
       grossSpending = add(grossSpending, magnitude);
+      if (isConsumption(transaction)) {
+        consumptionSpending = add(consumptionSpending, magnitude);
+      }
       if (categoryGroup(transaction.category) === CategoryGroup.fixed) {
         fixedExpenses = add(fixedExpenses, magnitude);
       } else {
@@ -271,6 +277,7 @@ export function summarizeMonth(
     cashOutflows: grossSpending,
     netCashFlow: subtract(cashInflows, grossSpending),
     grossSpending,
+    consumptionSpending,
     refunds,
     netSpending,
     income,
@@ -283,6 +290,17 @@ export function summarizeMonth(
     cardPayments,
     transactionCount: transactions.length,
   };
+}
+
+/** Outgoing purchases and services, excluding financing principal and costs. */
+function isConsumption(transaction: NormalizedTransaction): boolean {
+  if (transaction.direction !== Direction.out || transaction.financialCost !== undefined) {
+    return false;
+  }
+  return (
+    transaction.kind === TransactionKind.expense ||
+    transaction.kind === TransactionKind.credit_card_purchase
+  );
 }
 
 /** Money coming back from a purchase the user already made. */

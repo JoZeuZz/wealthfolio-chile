@@ -56,6 +56,8 @@ describe('summarizeByCurrency', () => {
     const [clpSummary, usdSummary] = summarizeByCurrency('2026-02', rows);
     expect(clpSummary?.summary.grossSpending).toEqual(money(50000, 0, 'CLP'));
     expect(usdSummary?.summary.grossSpending).toEqual(money(1000, 2, 'USD'));
+    expect(clpSummary?.summary.consumptionSpending).toEqual(money(50000, 0, 'CLP'));
+    expect(usdSummary?.summary.consumptionSpending).toEqual(money(1000, 2, 'USD'));
   });
 
   it('ordena por cantidad de movimientos, de mayor a menor', () => {
@@ -80,6 +82,7 @@ describe('summarizeByCurrency', () => {
     const summaries = summarizeByCurrency('2026-02', rows);
     for (const entry of summaries) {
       expect(entry.summary.grossSpending.currency).toBe(entry.currency);
+      expect(entry.summary.consumptionSpending.currency).toBe(entry.currency);
       expect(entry.summary.income.currency).toBe(entry.currency);
     }
   });
