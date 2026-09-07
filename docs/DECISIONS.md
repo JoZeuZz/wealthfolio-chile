@@ -331,8 +331,117 @@ sobre `TRASPASO`. En una cartola de tarjeta chilena `TRASPASO A 12 CUOTAS` y
 que existe para sacar un movimiento del total de gasto lo estaba metiendo. La
 condición `product` del motor de reglas separa ahora ambos documentos.
 
-**Pendiente de evidencia.** Si una cartola real muestra que un avance en
-efectivo hacia una cuenta propia es frecuente, hará falta decidir si el avance
-es gasto o giro de préstamo. Hoy queda como `credit_card_purchase` con la
-etiqueta `efectivo`, que es lo que el archivo dice y nada más.
-`BLOCKED: real-bank-sample`.
+**Pendiente de evidencia — resuelto en parte, ver D20.** Un avance en efectivo
+ya no queda como `credit_card_purchase`: tiene tipo propio. Lo que sigue
+pendiente es el caso de un avance abonado a una cuenta propia que el usuario
+también importa, donde el efectivo reaparece como entrada. Ese ingreso se deja
+sin resolver en vez de leerse como ingreso, y el par lo propone la pantalla de
+conciliación, no un clasificador. `BLOCKED: real-bank-sample`.
+
+## D20 — Lo que cuesta el crédito se nombra; el emisor no es un comercio
+
+**Fecha.** 2026-09-07 · `0.2.0-rc.3`
+
+Un estado de cuenta chileno trae líneas que no son compras, y el modelo tenía
+tres palabras para todas: `fee`, `interest`, `tax`. Mantienen los totales
+correctos y no responden nada. Una comisión de mantención y una comisión por
+avance son ambas `fee`, llegan el mismo mes y significan lo contrario: una es
+el precio de tener la tarjeta, la otra el de haber pedido efectivo con ella.
+
+**Por qué se pudo modelar sin cartola real.** La NCG 537 de la CMF tuvo que
+enumerar estos costos para definir el Monto No Financiable del pago mínimo, y
+el glosario del reglamento de información al consumidor define cada uno. El
+vocabulario lo publica el regulador, no lo observamos en un archivo.
+
+**Tres decisiones.**
+
+1. **Una dimensión que refina, no reemplaza.** `financialCostKind` tiene nueve
+   valores y cada uno mapea a un tipo que Wealthfolio ya expresa, así que nada
+   exige un `ActivityType` inexistente. Viaja en la metadata del addon, esquema
+   4, y sólo cuando la glosa nombró el costo específico: la presencia del campo
+   es la confianza.
+2. **Un avance en efectivo no es una compra.** El reglamento lo define como el
+   emisor otorgando "un préstamo o mutuo de dinero" contra el cupo. Se mantiene
+   como un movimiento —partirlo en dos inventaría la contraparte que ningún
+   banco reportó— con tipo propio, y sigue contando como gasto por la misma
+   razón que un giro de cajero: el efectivo salió del alcance de la
+   herramienta.
+3. **Un cobro del emisor no tiene comercio.** Visto en un host real:
+   `INTERES POR MORA` y `GASTOS DE COBRANZA` competían en «Comercios
+   principales» con el supermercado, porque el nombre se lee del texto de la
+   glosa y la glosa de un cargo del banco también tiene texto. Salen del
+   ranking y se informan aparte; el dinero no desaparece del panel.
+
+**Lo que deliberadamente no está.** Los seguros: el reglamento define la prima
+cargada a una tarjeta como una obligación que el consumidor contrae
+*voluntariamente* por un producto propio. La NCG 537 la cuenta dentro del Monto
+No Financiable porque ésa es una regla sobre cuánto hay que pagar este mes, no
+una afirmación de que sea un costo del crédito. Y el «súper avance»: buscado en
+cada texto legal revisado, encontrado en ninguno — es terminología comercial.
+
+**Lo que sigue sin saberse.** Si una cuota lleva interés o no es el único dato
+de cuotas con peso regulatorio, y exige que la cartola lo declare línea por
+línea. No se lee ni se infiere. `BLOCKED: real-bank-sample`.
+
+## D21 — El procesador de pago no es el comercio al que le pagaste
+
+**Fecha.** 2026-09-07 · `0.2.0-rc.3`
+
+La extracción de comercio pelaba la glosa hasta dejar un nombre, y no tenía
+forma de decir *nada*: lo que sobreviviera al pelado era el comercio. En
+cartolas chilenas eso producía comercios llamados «4 Tcom» —el sufijo de ruteo
+de Mercado Pago—, «Online» —el comodín que un banco imprime para un comercio
+que no tiene registrado— y «Cajero Automatico», que es una máquina.
+
+**La pregunta que faltaba, y que se puede responder.** ¿Este procesador deja
+ver el comercio? Es una propiedad del procesador y está documentada. El centro
+de ayuda de Flow dice que un cargo `FLOW` significa "un pago para alguno de los
+comercios adheridos" y no dirá cuál. Banco Falabella publica un glosario donde
+le explica a sus propios clientes que `MERCADO PAGO` "puede ser cualquier
+comercio que acepte Mercado Pago" — el banco tampoco puede resolverlo. Google,
+en cambio, documenta `GOOGLE *{Company}`.
+
+**Lo que no se construyó: una gramática basada en el asterisco.** El mismo
+documento de Falabella muestra `GOOGLE GARENA` y `GOOGLE *GARENA` para lo que
+parece el mismo cargo: el separador no sobrevive de forma confiable el camino
+desde la red de tarjetas hasta la cartola. Se usa donde un procesador lo
+documenta y no se asume en ninguna otra parte.
+
+**Consecuencia.** Cuando el procesador oculta el comercio, la respuesta es
+«desconocido» con el procesador nombrado, nunca el procesador ascendido a
+comercio. Un comercio equivocado es una categoría equivocada, una recurrencia
+equivocada y un ranking equivocado, y los tres parecen correctos.
+
+## D22 — Un hecho del estado de cuenta sólo existe si el documento lo dijo
+
+**Fecha.** 2026-09-07 · `0.2.0-rc.3`
+
+Qué campos tiene un estado de cuenta de tarjeta está establecido: la CMF
+enumera trece elementos y el artículo 26 del reglamento que entra en vigencia
+el 2028-02-06 los detalla, hasta la redacción de cada etiqueta. Dónde está cada
+uno en una cartola que un banco chileno emite hoy no está documentado en
+ninguna fuente pública.
+
+**Por eso la extracción es por etiqueta y nunca por posición.** La etiqueta
+viene de la norma; la posición tendría que venir de una cartola real, y no hay
+ninguna. Un perfil que no encuentra nada no está roto: es un perfil cuyas
+etiquetas no se han comparado con un archivo real, y eso es exactamente lo que
+informa `pnpm calibrate`, campo por campo, sin decir jamás una cifra.
+
+**La regla que gobierna el extractor.** Estas cifras son las que una persona
+usa para decidir, así que el intercambio se hace explícito y siempre en la
+misma dirección:
+
+> falta un hecho **<** hecho equivocado
+
+Un pago mínimo ausente cuesta una línea de la vista previa. Un pago mínimo
+leído del RUT del titular cuesta una decisión.
+
+**Ausente no es cero.** `minimumPayment: 0` afirmaría que este mes no hay nada
+que pagar. Y el pago mínimo se lee, jamás se calcula: la fórmula de la NCG 537
+tiene cinco etapas hasta 2028-06-04, admite excepciones discrecionales del
+emisor y exige saber por línea si cada cuota lleva interés.
+
+**Estado.** Arquitectura lista y probada contra fixtures sintéticos construidos
+con la redacción del reglamento. Ninguna cartola real de ningún banco ha pasado
+por esto. `BLOCKED: real-bank-sample`.
