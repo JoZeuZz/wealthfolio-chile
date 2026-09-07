@@ -104,6 +104,13 @@ describe('leer el costo que la glosa nombra', () => {
     expect(read('COMISION DE ADMINISTRACION TARJETA')?.kind).toBe(FinancialCostKind.maintenance);
   });
 
+  it('una comisión de mantención de edificio no es costo de la tarjeta', () => {
+    expect(read('COMISION DE MANTENCION EDIFICIO')).toMatchObject({
+      kind: FinancialCostKind.other,
+      confidence: Confidence.suggested,
+    });
+  });
+
   it('reconoce la comisión por compra internacional', () => {
     expect(read('COMISION COMPRA INTERNACIONAL')?.kind).toBe(
       FinancialCostKind.international_purchase,

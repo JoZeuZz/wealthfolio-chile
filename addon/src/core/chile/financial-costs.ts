@@ -127,7 +127,9 @@ const PATTERNS: readonly Pattern[] = [
   },
   {
     kind: FinancialCostKind.maintenance,
-    pattern: phrase('COMISION(?:ES)?', '(?:(?:DE|POR)' + S + ')?(?:MANTENCION|MANTENIMIENTO)'),
+    pattern: new RegExp(
+      String.raw`\bCOMISION(?:ES)?${S}(?:(?:DE|POR)${S})?(?:MANTENCION|MANTENIMIENTO)(?:${S}(?:DE${S})?(?:TARJETA|CUENTA|LINEA${S}DE${S}CREDITO))?\b$`,
+    ),
     confidence: Confidence.confirmed,
   },
   {
