@@ -560,6 +560,11 @@ function DetectionStep({
                 ? `${formatIsoDate(statement.period.from)} → ${formatIsoDate(statement.period.to)}`
                 : '—'
             }
+            // The range the file covers, which can come from the movements or
+            // from a label in the preamble — the model does not tell the two
+            // apart today, so the hint says the one thing true either way. The
+            // billing cycle below is a different question and says so.
+            hint="Rango que cubre el archivo."
           />
           <Field
             label="Movimientos"
@@ -985,7 +990,9 @@ function cardFactFields(
 
   for (const key of ['statementDate', 'dueDate'] as const) {
     const fact = facts[key];
-    if (fact) out.push({ label: cardFactLabel(key), value: formatIsoDate(fact.value) });
+    if (fact) {
+      out.push({ label: cardFactLabel(key), value: formatIsoDate(fact.value), hint: source(fact) });
+    }
   }
 
   for (const key of [
@@ -998,10 +1005,26 @@ function cardFactFields(
     'availableCredit',
   ] as const) {
     const fact = facts[key];
-    if (fact) out.push({ label: cardFactLabel(key), value: formatCLP(fact.value) });
+    if (fact) {
+      out.push({ label: cardFactLabel(key), value: formatCLP(fact.value), hint: source(fact) });
+    }
   }
 
   return out;
+}
+
+/**
+ * Where a fact came from, said out loud.
+ *
+ * Today every card fact is `declared` — nothing derives one — and the label
+ * still shows it, because the day something does derive a billed amount the two
+ * must not look alike. That confusion is the whole reason the provenance is in
+ * the type rather than in a comment.
+ */
+function source(fact: { source: 'declared' | 'derived' }): string {
+  return fact.source === 'declared'
+    ? 'Declarado por el emisor en la cartola.'
+    : 'Derivado de los movimientos, no impreso por el emisor.';
 }
 
 const KIND_LABELS: Record<string, string> = {

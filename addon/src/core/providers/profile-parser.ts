@@ -255,6 +255,10 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
           preamble: preambleText(sheet, header.headerRow),
           currency,
           ...(profile.numberFormat ? { numberFormat: profile.numberFormat } : {}),
+          // The profile's own order, the same one `readPeriod` uses. Without it
+          // the facts fell back to DMY while the period beside them followed the
+          // profile — two readings of the same file by different rules.
+          dateOrder: profile.dateOrder,
         })
       : undefined;
 

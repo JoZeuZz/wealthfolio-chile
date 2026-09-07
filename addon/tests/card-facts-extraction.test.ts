@@ -62,18 +62,21 @@ describe('leer lo que el estado de cuenta declara', () => {
   });
 
   /**
-   * Un pago mínimo o un cupo son magnitudes: su significado no depende del
-   * signo impreso, a diferencia de un `SALDO ANTERIOR $450.000` en una tarjeta,
-   * que puede ser deuda o saldo a favor y que por eso el parser se niega a
-   * leer. La magnitud es lo que se guarda.
+   * El pago mínimo y el cupo total son magnitudes: significan lo mismo con
+   * cualquier signo, igual que un `SALDO ANTERIOR $450.000` de tarjeta —que
+   * puede ser deuda o saldo a favor y que por eso el parser se niega a leer.
+   *
+   * El cupo disponible no: en negativo es un cupo excedido, y guardarlo como
+   * magnitud informaba holgura donde había sobregiro. Ver
+   * `card-facts-review.test.ts`.
    */
-  it('un monto entre paréntesis o con signo sigue siendo una magnitud', () => {
+  it('el pago mínimo es una magnitud; el cupo disponible conserva su signo', () => {
     const found = readCardFacts({
       preamble: 'Pago Minimo: $-35.000\nCupo Disponible: ($1.087.100)',
       currency: 'CLP',
     });
     expect(found.minimumPayment?.value.minor).toBe(35_000);
-    expect(found.availableCredit?.value.minor).toBe(1_087_100);
+    expect(found.availableCredit?.value.minor).toBe(-1_087_100);
   });
 });
 
@@ -121,13 +124,19 @@ describe('etiquetas que se parecen entre sí', () => {
     expect(found.minimumPayment?.value.minor).toBe(35_000);
   });
 
+  /**
+   * La deuda extranjera sólo se registra si la línea dice en qué moneda está:
+   * anotada en la moneda del estado de cuenta quedaba sumable con la nacional
+   * sin ningún tipo de cambio.
+   */
   it('separa la deuda nacional de la que está en moneda extranjera', () => {
     const found = readCardFacts({
-      preamble: 'Deuda Nacional: $300.000\nDeuda en Moneda Extranjera: $112.900',
+      preamble: 'Deuda Nacional: $300.000\nDeuda en Moneda Extranjera: US$ 1.129,00',
       currency: 'CLP',
     });
     expect(found.domesticDebt?.value.minor).toBe(300_000);
-    expect(found.foreignDebt?.value.minor).toBe(112_900);
+    expect(found.domesticDebt?.value.currency).toBe('CLP');
+    expect(found.foreignDebt?.value.currency).toBe('USD');
   });
 });
 

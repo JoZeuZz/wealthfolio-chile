@@ -520,3 +520,48 @@ describe('los hechos del estado de cuenta en la vista previa', () => {
     expect(screen.queryByText('Cupo disponible')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * De dónde viene cada fecha.
+ *
+ * El wizard muestra dos períodos juntos: el que se dedujo de los movimientos y
+ * el ciclo que el emisor imprimió. Se ven iguales y no lo son — uno es lo que
+ * el archivo contiene, el otro es lo que la tarjeta factura — y la distinción
+ * entre declarado y derivado es justamente lo que el modelo de hechos existe
+ * para no perder.
+ */
+describe('el origen de lo que muestra la vista previa', () => {
+  const CARD = [
+    'Banco Generico - Estado de Cuenta Tarjeta de Credito',
+    'Periodo de Facturacion: 16/08/2026 - 15/09/2026',
+    'PAGAR HASTA: 05/10/2026',
+    'El Pago Minimo es de $35.000',
+    '',
+    'Fecha;Descripcion;Monto;Cuotas;Rubro',
+    '02/09/2026;COMPRA GENERICA;45.000;;Otros',
+  ].join('\n');
+
+  it('dice que los hechos de la tarjeta los declaró el emisor', async () => {
+    await openWizardWith(CARD);
+
+    const label = await screen.findByText('Pago mínimo');
+    const field = label.closest('div');
+    expect(field?.textContent).toMatch(/declarad/i);
+  });
+
+  /**
+   * `Período` es el rango que cubre el archivo y puede venir de los movimientos
+   * o de una etiqueta del preámbulo; el modelo no distingue las dos hoy, así
+   * que el rótulo dice lo único que es cierto en ambos casos. El ciclo, en
+   * cambio, es siempre lo que el emisor factura.
+   */
+  it('distingue el rango del archivo del ciclo que factura la tarjeta', async () => {
+    await openWizardWith(CARD);
+
+    await screen.findByText('Pago mínimo');
+    expect(screen.getByText('Período').closest('div')?.textContent).toMatch(/archivo/i);
+    expect(
+      screen.getByText('Período de facturación').closest('div')?.textContent,
+    ).toMatch(/factura/i);
+  });
+});
