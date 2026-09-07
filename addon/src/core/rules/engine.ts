@@ -131,6 +131,7 @@ export function applyRules(
   context: RuleContext,
 ): RuleOutcome {
   const attribution = attributePayment(transaction.description);
+  const builtinMayChangeKind = transaction.kindConfidence !== Confidence.confirmed;
 
   let current: EnrichedTransaction = {
     ...transaction,
@@ -159,6 +160,11 @@ export function applyRules(
           break;
         case 'set_kind':
           if (action.value && isTransactionKind(action.value)) {
+            // Builtins refine product defaults; they do not overrule a semantic
+            // kind already confirmed from direction and statement wording.
+            if (rule.origin === 'builtin' && !builtinMayChangeKind) {
+              break;
+            }
             current = {
               ...current,
               kind: action.value,

@@ -37,15 +37,6 @@ describe('tipos permitidos en una cuenta de tarjeta', () => {
   it('ningún tipo de movimiento nuestro produce algo que el host rechace', () => {
     for (const kind of TRANSACTION_KINDS) {
       for (const direction of [Direction.in, Direction.out]) {
-        if (
-          direction === Direction.in &&
-          (kind === TransactionKind.fee || kind === TransactionKind.tax)
-        ) {
-          expect(() =>
-            resolveActivityType({ kind, direction }, { accountType: 'CREDIT_CARD' }),
-          ).toThrow(/direction/i);
-          continue;
-        }
         const { activityType } = resolveActivityType(
           { kind, direction },
           { accountType: 'CREDIT_CARD' },
@@ -93,6 +84,18 @@ describe('tipos permitidos en una cuenta de tarjeta', () => {
       ),
     ).toMatchObject({ activityType: 'FEE', substituted: true });
   });
+
+  it.each([TransactionKind.fee, TransactionKind.tax, TransactionKind.cash_advance])(
+    'un %s entrante conserva dirección como crédito genérico',
+    (kind) => {
+      expect(
+        resolveActivityType(
+          { kind, direction: Direction.in },
+          { accountType: 'CREDIT_CARD' },
+        ),
+      ).toEqual({ activityType: 'CREDIT', substituted: true });
+    },
+  );
 
   it('una salida de la tarjeta que no es compra se guarda como cargo', () => {
     expect(

@@ -39,6 +39,7 @@ const STATEMENT = [
   '30/09/2026;MANTENCION ASCENSORES;18.000;;Servicios',
   '30/09/2026;TIMBRES Y GOMAS SPA;12.000;;Comercio',
   '30/09/2026;LIBRERIA EL INTERES;9.000;;Comercio',
+  '30/09/2026;DEVOLUCION COMPRA LIDER;-8.000;;Comercio',
 ].join('\n');
 
 function prepared() {
@@ -108,6 +109,12 @@ describe('un estado de cuenta con costos financieros, de punta a punta', () => {
     expect(row.direction).toBe('in');
     expect(row.amount.minor).toBeGreaterThan(0);
     expect(row.financialCost).toBeUndefined();
+  });
+
+  it('una devolución confirmada todavía recibe su categoría de comercio', () => {
+    const row = find('DEVOLUCION COMPRA LIDER');
+    expect(row.kind).toBe(TransactionKind.refund);
+    expect(row.category).toBe('alimentacion.supermercado');
   });
 
   it('un pago de tarjeta confirmado gana a palabras de costo financiero', () => {

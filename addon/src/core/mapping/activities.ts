@@ -213,13 +213,6 @@ export interface MapToActivityOptions {
   accountType?: HostAccountType;
 }
 
-export class ActivityMappingError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ActivityMappingError';
-  }
-}
-
 /**
  * Convert one canonical transaction into a Wealthfolio activity.
  *
@@ -416,11 +409,11 @@ export function resolveActivityType(
 ): ResolvedType {
   if (
     transaction.direction === Direction.in &&
-    (transaction.kind === TransactionKind.fee || transaction.kind === TransactionKind.tax)
+    (transaction.kind === TransactionKind.fee ||
+      transaction.kind === TransactionKind.tax ||
+      transaction.kind === TransactionKind.cash_advance)
   ) {
-    throw new ActivityMappingError(
-      `${transaction.kind} cannot preserve incoming direction in Wealthfolio`,
-    );
+    return { activityType: 'CREDIT', substituted: true };
   }
 
   const natural = naturalActivityType(transaction);

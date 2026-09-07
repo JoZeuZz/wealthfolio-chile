@@ -89,8 +89,8 @@ describe('activity flow sign', () => {
 });
 
 describe('invalid fixed-direction financial kinds', () => {
-  it.each([TransactionKind.fee, TransactionKind.tax])(
-    'refuses to turn incoming %s into a host outflow',
+  it.each([TransactionKind.fee, TransactionKind.tax, TransactionKind.cash_advance])(
+    'preserves incoming %s as a reviewable generic credit',
     (kind) => {
       const incoming = makeTransaction({
         date: '2026-03-01',
@@ -100,9 +100,10 @@ describe('invalid fixed-direction financial kinds', () => {
         direction: Direction.in,
       });
 
-      expect(() => toActivityCreate(incoming, { accountId: ACCOUNT, runId: RUN })).toThrow(
-        /direction/i,
-      );
+      const create = toActivityCreate(incoming, { accountId: ACCOUNT, runId: RUN });
+      expect(create.activityType).toBe('CREDIT');
+      expect(create.needsReview).toBe(true);
+      expect(readChileMetadata(create.metadata)?.kind).toBe(kind);
     },
   );
 });
