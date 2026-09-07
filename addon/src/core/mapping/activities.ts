@@ -647,6 +647,7 @@ export function reviewReason(
 function kindFromActivityType(
   activityType: string,
   subtype?: string | null,
+  accountType?: HostAccountType,
 ): TransactionKind {
   switch (activityType) {
     case 'DEPOSIT':
@@ -657,6 +658,7 @@ function kindFromActivityType(
     case 'TRANSFER_OUT':
       return TransactionKind.internal_transfer;
     case 'CREDIT': {
+      if (accountType === 'CREDIT_CARD') return TransactionKind.refund;
       const creditSubtype = subtype?.toUpperCase();
       if (creditSubtype === 'BONUS') return TransactionKind.income;
       if (
@@ -813,6 +815,7 @@ export interface HostActivity extends HostActivityAmount {
   accountId?: string;
   date: Date | string;
   comment?: string | null;
+  status?: 'POSTED' | 'PENDING' | 'DRAFT' | 'VOID';
   /** Host fallback for activities written before metadata projection existed. */
   isUserModified?: boolean;
 }
@@ -824,7 +827,10 @@ export interface HostActivity extends HostActivityAmount {
  * metadata there is no kind, no category and no fingerprint, and inventing them
  * from a comment string would put guesses into the user's reports.
  */
-export function activityToTransaction(activity: HostActivity): NormalizedTransaction | undefined {
+export function activityToTransaction(
+  activity: HostActivity,
+  options: { accountType?: HostAccountType } = {},
+): NormalizedTransaction | undefined {
   const metadata = readChileMetadata(activity.metadata);
   if (!metadata) return undefined;
 
@@ -833,8 +839,8 @@ export function activityToTransaction(activity: HostActivity): NormalizedTransac
   const description = activity.comment ?? '';
   const cacheIsCurrent = metadataCacheIsCurrent(activity, metadata);
   const kind = cacheIsCurrent
-    ? reconcileKind(activity, metadata, direction)
-    : kindFromActivityType(activity.activityType, activity.subtype);
+    ? reconcileKind(activity, metadata, direction, options.accountType)
+    : kindFromActivityType(activity.activityType, activity.subtype, options.accountType);
 
   // Recomputed, not read back. The glosa is in `comment`, so the attribution is
   // derivable, and deriving it means a correction to the processor catalogue
@@ -934,6 +940,7 @@ function reconcileKind(
   activity: HostActivity,
   metadata: ChileMetadata,
   direction: Direction,
+  accountType?: HostAccountType,
 ): TransactionKind {
   const cached = (metadata.kind ?? TransactionKind.unknown) as TransactionKind;
   const implied = resolveActivityType({ kind: cached, direction });
@@ -958,7 +965,7 @@ function reconcileKind(
     if (forAccount.activityType === activity.activityType) return cached;
   }
 
-  return kindFromActivityType(activity.activityType, activity.subtype);
+  return kindFromActivityType(activity.activityType, activity.subtype, accountType);
 }
 
 function directionOfAmount(amount: Money): Direction {

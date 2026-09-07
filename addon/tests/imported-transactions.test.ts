@@ -5,7 +5,7 @@ import { money } from '../src/core/money';
 import { Direction, TransactionKind } from '../src/core/model/kinds';
 import { loadImportedTransactions } from '../src/services/imported-transactions';
 import { reconcileScoped, reconcileWindow } from '../src/services/reconciliation';
-import { activityStub, fakeHost } from './host';
+import { accountStub, activityStub, fakeHost } from './host';
 
 /**
  * Reading our own movements back out of Wealthfolio.
@@ -218,6 +218,65 @@ describe('loadImportedTransactions', () => {
 
     const loaded = await loadImportedTransactions(host.ctx);
     expect(loaded.scoped[0]?.accountId).toBe('acc-9');
+  });
+
+  it('usa el tipo de cuenta para interpretar CREDIT como lo hace el host', async () => {
+    const host = fakeHost({
+      accounts: [accountStub({ id: 'card-1', accountType: 'CREDIT_CARD' })],
+      activities: [
+        activityStub({
+          accountId: 'card-1',
+          activityType: 'CREDIT',
+          amount: '15000',
+          date: '2026-03-15',
+          comment: 'CREDITO GENERICO',
+          metadata: ourMetadata('credit-card', TransactionKind.expense),
+        }),
+      ],
+    });
+
+    const loaded = await loadImportedTransactions(host.ctx);
+    expect(loaded.transactions[0]?.kind).toBe(TransactionKind.refund);
+  });
+
+  it('deja fuera de analytics lo que el host no tiene POSTED', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '1000',
+          date: '2026-03-15',
+          status: 'POSTED',
+          metadata: ourMetadata('posted', TransactionKind.expense),
+        }),
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '2000',
+          date: '2026-03-15',
+          status: 'VOID',
+          metadata: ourMetadata('void', TransactionKind.expense),
+        }),
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '3000',
+          date: '2026-03-15',
+          status: 'PENDING',
+          metadata: ourMetadata('pending', TransactionKind.expense),
+        }),
+        activityStub({
+          activityType: 'UNKNOWN',
+          amount: '4000',
+          date: '2026-03-15',
+          status: 'DRAFT',
+          needsReview: true,
+          metadata: ourMetadata('draft', TransactionKind.unknown),
+        }),
+      ],
+    });
+
+    const loaded = await loadImportedTransactions(host.ctx);
+    expect(loaded.transactions.map((transaction) => transaction.fingerprint)).toEqual(['posted']);
+    expect(loaded.review.map((item) => item.activityId)).toHaveLength(1);
   });
 });
 

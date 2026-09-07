@@ -300,6 +300,35 @@ describe('el tipo de la actividad gana a la clasificación cacheada', () => {
     expect(transaction?.kind).toBe(expectedKind);
     expect(transaction?.direction).toBe(Direction.in);
   });
+
+  it.each(['REFUND', 'REBATE', 'BONUS', undefined] as const)(
+    'en tarjeta CREDIT/%s reduce gasto como ordena el host',
+    (subtype) => {
+      const transaction = activityToTransaction(
+        ourActivity({
+          activityType: 'CREDIT',
+          ...(subtype ? { subtype } : {}),
+          amount: '15000',
+          date: '2026-02-05',
+          comment: 'CREDITO EDITADO',
+          metadata: {
+            v: 3,
+            fp: 'fp-card-credit',
+            inst: 'x',
+            parser: 'p',
+            parserVersion: '1',
+            fileHash: 'h',
+            runId: 'r',
+            kind: TransactionKind.expense,
+            dir: Direction.out,
+          },
+        }),
+        { accountType: 'CREDIT_CARD' },
+      );
+
+      expect(transaction?.kind).toBe(TransactionKind.refund);
+    },
+  );
 });
 
 describe('una edición invalida refinamientos cacheados aunque conserve el tipo', () => {

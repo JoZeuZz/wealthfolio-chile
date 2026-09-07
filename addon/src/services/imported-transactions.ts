@@ -89,6 +89,9 @@ export async function loadImportedTransactions(
   ctx: AddonContext,
   window: TransactionWindow = {},
 ): Promise<ImportedTransactions> {
+  const accountTypes = new Map(
+    (await ctx.api.accounts.getAll()).map((account) => [account.id, account.accountType] as const),
+  );
   const transactions: NormalizedTransaction[] = [];
   const scoped: ScopedTransaction[] = [];
   const review: ReviewItem[] = [];
@@ -112,10 +115,12 @@ export async function loadImportedTransactions(
       // timezone-shifted bounds; the exact window is re-imposed here.
       if (!withinWindow(activity.date, window)) continue;
       scanned += 1;
-      const transaction = activityToTransaction(activity);
+      const accountType = accountTypes.get(activity.accountId);
+      const transaction = activityToTransaction(
+        activity,
+        accountType !== undefined ? { accountType } : {},
+      );
       if (!transaction) continue;
-      transactions.push(transaction);
-      scoped.push({ accountId: activity.accountId, transaction });
 
       const reason = reviewReason(activity);
       if (reason) {
@@ -129,6 +134,12 @@ export async function loadImportedTransactions(
           draft: activity.status === 'DRAFT',
         });
       }
+
+      // Wealthfolio compiles only POSTED activities into balances and reports.
+      // Keep drafts available to the review queue, but mirror host analytics.
+      if (activity.status !== undefined && activity.status !== 'POSTED') continue;
+      transactions.push(transaction);
+      scoped.push({ accountId: activity.accountId, transaction });
     }
 
     const seen = (page + 1) * PAGE_SIZE;
