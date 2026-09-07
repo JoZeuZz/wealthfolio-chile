@@ -72,14 +72,17 @@ const HISTORY_MONTHS = 13;
 function reviewCounts(review: readonly ReviewItem[]): {
   unresolved: number;
   substituted: number;
+  drafts: number;
 } {
   let unresolved = 0;
   let substituted = 0;
+  let drafts = 0;
   for (const item of review) {
     if (item.reason === 'unresolved') unresolved += 1;
     else substituted += 1;
+    if (item.draft) drafts += 1;
   }
-  return { unresolved, substituted };
+  return { unresolved, substituted, drafts };
 }
 
 interface DashboardData {
@@ -267,6 +270,21 @@ export function DashboardPage() {
             <span className="text-muted-foreground text-xs">
               Contados sobre los últimos {HISTORY_MONTHS} meses de movimientos importados.
             </span>
+            {/* Verified against Wealthfolio 3.7.0: this route opens the host's
+                Activities page with its "Pending Review" filter applied, and
+                shows the draft row and not the substituted one — that filter
+                searches by status. So the button is offered only when there is
+                a draft to find, and says which half it leads to. */}
+            {reviewCounts(data.review).drafts > 0 ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-1 self-start"
+                onClick={() => void ctx.api.navigation.navigate('/activities?needsReview=true')}
+              >
+                Ver en Wealthfolio los {reviewCounts(data.review).drafts} en borrador
+              </Button>
+            ) : null}
           </AlertDescription>
         </Alert>
       ) : null}

@@ -969,3 +969,86 @@ describe('la cola de revisión', () => {
     expect(screen.queryByText('Movimientos que necesitan revisión')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * El puente hacia la página del host.
+ *
+ * Verificado contra Wealthfolio 3.7.0: `/activities?needsReview=true` abre la
+ * página de Actividades con el filtro «Pending Review» puesto, y muestra la
+ * fila en borrador y no la del tipo prestado — porque ese filtro busca por
+ * estado. El botón dice exactamente eso: lleva a las que el host sabe filtrar,
+ * que son una parte de las que este panel cuenta.
+ */
+describe('el enlace a la página de Actividades', () => {
+  const draftOnly = () => [
+    activityStub({
+      id: 'act-1',
+      accountId: 'acc-clp',
+      activityType: 'UNKNOWN',
+      amount: '45000',
+      date: DAY(0),
+      comment: 'ABONO NO IDENTIFICADO',
+      needsReview: true,
+      status: 'DRAFT',
+      metadata: {
+        v: 4,
+        fp: 'fp-1',
+        inst: 'banco-chile',
+        parser: 'p',
+        parserVersion: '1',
+        fileHash: 'h',
+        runId: 'r',
+        kind: TransactionKind.unknown,
+        dir: 'out',
+      },
+    }),
+  ];
+
+  it('lleva a la página del host ya filtrada', async () => {
+    const harness = renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: draftOnly(),
+    });
+
+    const button = await screen.findByRole('button', { name: /ver en wealthfolio/i });
+    await harness.user.click(button);
+
+    expect(harness.host.navigatedTo).toContain('/activities?needsReview=true');
+  });
+
+  /**
+   * Sin filas en borrador el botón no aparece: llevaría a una página filtrada
+   * que no muestra ninguna de las filas que este panel está contando.
+   */
+  it('no aparece cuando ninguna está en borrador', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP],
+      activities: [
+        activityStub({
+          id: 'act-2',
+          accountId: 'acc-clp',
+          activityType: 'FEE',
+          amount: '1200',
+          date: DAY(0),
+          comment: 'IMPUESTO AL CREDITO',
+          needsReview: true,
+          metadata: {
+            v: 4,
+            fp: 'fp-2',
+            inst: 'banco-chile',
+            parser: 'p',
+            parserVersion: '1',
+            fileHash: 'h',
+            runId: 'r',
+            kind: TransactionKind.tax,
+            dir: 'out',
+            subst: true,
+          },
+        }),
+      ],
+    });
+
+    await screen.findByText('Movimientos que necesitan revisión');
+    expect(screen.queryByRole('button', { name: /ver en wealthfolio/i })).not.toBeInTheDocument();
+  });
+});
