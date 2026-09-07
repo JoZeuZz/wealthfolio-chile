@@ -72,7 +72,7 @@ function activity(input: {
     accountId: input.accountId,
     activityType: input.type,
     ...(create.subtype ? { subtype: create.subtype } : {}),
-    amount: String(Math.abs(input.amount)),
+    amount: String(create.amount),
     currency: input.currency ?? 'CLP',
     date: input.date,
     comment: create.comment as string,
@@ -173,6 +173,67 @@ describe('dos monedas en el mismo mes', () => {
 
     await screen.findByText(/Este mes tiene movimientos en 2 monedas/);
     expect(screen.getByText(/tipo de cambio del día de cada movimiento/)).toBeInTheDocument();
+  });
+
+  it('muestra costos y principal también en la moneda secundaria', async () => {
+    renderPage(<DashboardPage />, {
+      accounts: [CLP, USD],
+      activities: [
+        activity({
+          accountId: 'acc-clp',
+          amount: -50_000,
+          date: DAY(0),
+          description: 'COMPRA CLP UNO',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+        activity({
+          accountId: 'acc-clp',
+          amount: -30_000,
+          date: DAY(1),
+          description: 'COMPRA CLP DOS',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+        activity({
+          accountId: 'acc-clp',
+          amount: -20_000,
+          date: DAY(2),
+          description: 'COMPRA CLP TRES',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+        activity({
+          accountId: 'acc-usd',
+          amount: -1_200,
+          date: DAY(0),
+          description: 'INTERES POR MORA',
+          kind: TransactionKind.interest,
+          type: 'FEE',
+          currency: 'USD',
+          scale: 2,
+          financialCost: FinancialCostKind.late_interest,
+        }),
+        activity({
+          accountId: 'acc-usd',
+          amount: -20_000,
+          date: DAY(1),
+          description: 'AVANCE EN EFECTIVO',
+          kind: TransactionKind.cash_advance,
+          type: 'WITHDRAWAL',
+          currency: 'USD',
+          scale: 2,
+        }),
+      ],
+    });
+
+    let card = (await screen.findByText('Movimientos en USD')) as HTMLElement;
+    while (card.parentElement && !card.textContent?.includes('Comprometido en cuotas')) {
+      card = card.parentElement;
+    }
+    expect(card.textContent).toContain('Consumo y financiamiento');
+    expect(card.textContent).toContain('Interés por mora');
+    expect(card.textContent).toContain('Avance en efectivo');
   });
 });
 

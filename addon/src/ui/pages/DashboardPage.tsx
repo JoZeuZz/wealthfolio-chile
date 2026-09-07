@@ -459,6 +459,40 @@ export function DashboardPage() {
                     }
                   />
                 </dl>
+                {other.financialCosts.items.length > 0 ||
+                other.financialCosts.cashAdvanceCount > 0 ? (
+                  <div className="mt-4 flex flex-col gap-2 text-sm">
+                    <Separator />
+                    <p className="font-medium">Consumo y financiamiento</p>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span>Consumo</span>
+                      <Amount value={other.summary.consumptionSpending} />
+                    </div>
+                    {other.financialCosts.items.length > 0 ? (
+                      <>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span>Costos financieros</span>
+                          <Amount value={other.financialCosts.total} />
+                        </div>
+                        {other.financialCosts.items.map((item) => (
+                          <div
+                            key={item.kind}
+                            className="flex items-baseline justify-between gap-2 text-muted-foreground"
+                          >
+                            <span>{financialCostLabel(item.kind)}</span>
+                            <Amount value={item.amount} />
+                          </div>
+                        ))}
+                      </>
+                    ) : null}
+                    {other.financialCosts.cashAdvanceCount > 0 ? (
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span>Avance en efectivo</span>
+                        <Amount value={other.financialCosts.cashAdvances} />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           ))}
