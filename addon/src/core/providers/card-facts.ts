@@ -89,7 +89,7 @@ export interface ReadCardFactsInput {
  * No newline, and short. The bound is what stops a label reaching across a
  * sentence to a number that belongs to something else.
  */
-const GAP = String.raw`[^\d\n(+-]{0,24}`;
+const GAP = String.raw`[^\d\n($+-]{0,24}`;
 
 /**
  * What a figure looks like on a statement.
@@ -98,7 +98,18 @@ const GAP = String.raw`[^\d\n(+-]{0,24}`;
  * `5` or `12` beside a label is the day of a date or a count of cuotas far more
  * often than it is money.
  */
-const AMOUNT = String.raw`(\(?\s*-?\s*\$?\s*\d[\d.,]*)\s*\)?`;
+// The minus sits on either side of the currency sign — `-$35.000` and
+// `$-35.000` both occur — and a third convention puts it after the digits.
+const AMOUNT = String.raw`(\(?\s*-?\s*\$?\s*-?\s*\d[\d.,]*)\s*\)?`;
+
+/**
+ * What must not follow a label for it to still mean the whole thing.
+ *
+ * The patterns are prefixes, so without this each label took the figure of its
+ * own sub-concept: `CUPO TOTAL UTILIZADO` reported the opposite number as the
+ * cupo total, and `TOTAL A PAGAR NACIONAL` filed a subtotal as the whole bill.
+ */
+const QUALIFIER = String.raw`(?!\s*(?:UTILIZADO|USADO|OCUPADO|NACIONAL|INTERNACIONAL|EN\s+CUOTAS|EN\s+MONEDA|EN\s+DOLARES|PARA\s+AVANCES?|PARA\s+COMPRAS?|DE\s+AVANCES?))`;
 const DATE = String.raw`(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})`;
 
 /**
@@ -118,6 +129,11 @@ const IDENTIFIER_LINE = [
   // Account number and phone.
   /\bCUENTA\s+N|\bN[°º]?\s*(?:DE\s+)?CUENTA\b/i,
   /\b\+?56\s?9\s?\d{4}\s?\d{4}\b/,
+  // Customer number, folio, Transbank merchant code, cédula serial. With cells
+  // joined by a space these sit in the column next to a label, which is how the
+  // RUT got in. The list will always be missing one, which is why `parseFigure`
+  // also refuses a long unseparated run outright.
+  /\b(?:N[°º]?\.?\s*|NRO\.?\s*|NUMERO\s+(?:DE\s+)?)?(?:CLIENTE|FOLIO|COMERCIO|SERIE|CONTRATO)\b/i,
 ];
 
 /** Currency markers that say a figure is not in the statement's own currency. */
@@ -157,23 +173,25 @@ const AMOUNT_LABELS: readonly AmountSpec[] = [
     key: 'minimumPayment',
     magnitude: true,
     patterns: [
-      // `PAGO MINIMO PERIODO ANTERIOR` is last month's, a standard line.
-      new RegExp(String.raw`\bPAGO\s+MINIMO\b(?!\s+(?:PERIODO|ANTERIOR))${GAP}${AMOUNT}`, 'gi'),
-      new RegExp(String.raw`\bMONTO\s+MINIMO(?:\s+A\s+PAGAR)?\b${GAP}${AMOUNT}`, 'gi'),
+      // `PAGO MINIMO PERIODO ANTERIOR` is last month's, a standard line on a
+      // Chilean statement. It is excluded by `PAST_EVENT`, which covers every
+      // label rather than one word after one of them.
+      new RegExp(String.raw`\bPAGO\s+MINIMO\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
+      new RegExp(String.raw`\bMONTO\s+MINIMO(?:\s+A\s+PAGAR)?\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
     ],
   },
   {
     key: 'billedAmount',
     patterns: [
-      new RegExp(String.raw`\bTOTAL\s+A\s+PAGAR\b${GAP}${AMOUNT}`, 'gi'),
-      new RegExp(String.raw`\bMONTO\s+(?:TOTAL\s+)?FACTURADO\b${GAP}${AMOUNT}`, 'gi'),
+      new RegExp(String.raw`\bTOTAL\s+A\s+PAGAR\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
+      new RegExp(String.raw`\bMONTO\s+(?:TOTAL\s+)?FACTURADO\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
     ],
   },
   {
     key: 'totalDebt',
     patterns: [
-      new RegExp(String.raw`\bSALDO\s+ADEUDADO\b${GAP}${AMOUNT}`, 'gi'),
-      new RegExp(String.raw`\bDEUDA\s+TOTAL\b${GAP}${AMOUNT}`, 'gi'),
+      new RegExp(String.raw`\bSALDO\s+ADEUDADO\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
+      new RegExp(String.raw`\bDEUDA\s+TOTAL\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
     ],
   },
   {
@@ -198,15 +216,15 @@ const AMOUNT_LABELS: readonly AmountSpec[] = [
     key: 'creditLimit',
     magnitude: true,
     patterns: [
-      new RegExp(String.raw`\bCUPO\s+TOTAL\b${GAP}${AMOUNT}`, 'gi'),
-      new RegExp(String.raw`\bLINEA\s+DE\s+CREDITO\s+AUTORIZADA\b${GAP}${AMOUNT}`, 'gi'),
+      new RegExp(String.raw`\bCUPO\s+TOTAL\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
+      new RegExp(String.raw`\bLINEA\s+DE\s+CREDITO\s+AUTORIZADA\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
     ],
   },
   {
     key: 'availableCredit',
     patterns: [
-      new RegExp(String.raw`\bCUPO\s+DISPONIBLE\b${GAP}${AMOUNT}`, 'gi'),
-      new RegExp(String.raw`\bMONTO\s+DISPONIBLE\b${GAP}${AMOUNT}`, 'gi'),
+      new RegExp(String.raw`\bCUPO\s+DISPONIBLE\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
+      new RegExp(String.raw`\bMONTO\s+DISPONIBLE\b${QUALIFIER}${GAP}${AMOUNT}`, 'gi'),
     ],
   },
 ];
@@ -291,16 +309,25 @@ function readAmountFact(
 
   for (const line of lines) {
     if (IDENTIFIER_LINE.some((pattern) => pattern.test(line))) continue;
-
-    const currency = lineCurrency(line, input.currency);
-    // A foreign-currency debt whose line names no currency is not recorded: it
-    // would be filed under the statement's own, and a US$450 debt written down
-    // as $450 pesos is addable to the domestic one without any rate at all.
-    if (spec.requiresForeignCurrency && currency === input.currency) continue;
+    // `PAGO MINIMO MES ANTERIOR` is a standard line, and so is the previous
+    // cycle's total. Applied to every label rather than to one word after one
+    // of them, which is what the old lookahead did.
+    if (PAST_EVENT.test(line)) continue;
 
     for (const pattern of spec.patterns) {
       pattern.lastIndex = 0;
       for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
+        // The currency comes from the label's own window, not from the whole
+        // line: with cells joined by a space, a summary row carries the
+        // national and the international column together, and reading the line
+        // as one put both in dollars — including `domesticDebt`, which exists
+        // precisely so it cannot be added to `foreignDebt` without a rate.
+        const currency = matchCurrency(line, match, input.currency);
+        if (currency === undefined) continue;
+        // A foreign-currency debt whose window names no currency is not
+        // recorded: it would be filed under the statement's own, and a US$450
+        // debt written down as $450 pesos is addable to the domestic one.
+        if (spec.requiresForeignCurrency && currency === input.currency) continue;
         const money = parseFigure(match, line, currency, input.numberFormat);
         // A label whose figure will not parse does not send us looking further
         // along the line for a better one: the next number belongs to something
@@ -312,17 +339,31 @@ function readAmountFact(
 
   const first = found[0];
   if (!first) return undefined;
-  return found.every((m) => m.minor === first.minor && m.currency === first.currency)
+  // `scale` too: `$150.000` and `US$1.500,00` are both `minor` 150000, so two
+  // readings a hundred times apart passed the agreement check that existed to
+  // catch exactly that pair.
+  return found.every(
+    (m) => m.minor === first.minor && m.scale === first.scale && m.currency === first.currency,
+  )
     ? first
     : undefined;
 }
 
-/** The currency a line names, when it names one other than the statement's. */
-function lineCurrency(line: string, fallback: string): string {
-  for (const [pattern, code] of FOREIGN_CURRENCY) {
-    if (pattern.test(line)) return code;
-  }
-  return fallback;
+/**
+ * The currency of one figure: the label, the gap and the figure itself.
+ *
+ * `undefined` when that window names more than one, which is the same answer
+ * this file gives everywhere else it cannot tell — better than picking.
+ */
+function matchCurrency(
+  line: string,
+  match: RegExpExecArray,
+  fallback: string,
+): string | undefined {
+  const window = line.slice(match.index, match.index + match[0].length + 4);
+  const named = FOREIGN_CURRENCY.filter(([pattern]) => pattern.test(window)).map(([, code]) => code);
+  if (named.length > 1) return undefined;
+  return named[0] ?? fallback;
 }
 
 function parseFigure(
@@ -347,9 +388,18 @@ function parseFigure(
   const hasCurrencySign = raw.includes('$');
   if (digits.length < 4 && !hasSeparator && !hasCurrencySign) return undefined;
 
-  // The pattern captures the opening parenthesis but not the closing one, so
-  // the accounting negative is applied here rather than left to `parseAmount`.
-  const negative = raw.includes('(') || raw.includes('-');
+  // A long unseparated run is an identifier, not a figure: a peso amount
+  // printed on a statement carries thousands separators, and a customer number,
+  // a folio and a Transbank merchant code do not. This is the defence that does
+  // not depend on having named every identifier.
+  if (digits.length >= 7 && !/[.,]/.test(raw)) return undefined;
+
+  // The pattern captures the opening parenthesis but not the closing one, and
+  // the trailing-minus convention some Chilean exports use — `1.234-` — falls
+  // outside the capture altogether, so the sign is settled here rather than
+  // left to `parseAmount`. Order matters: the date-head check above has already
+  // rejected `-10-2026`.
+  const negative = raw.includes('(') || raw.includes('-') || /^-(?![\d.,])/.test(rest);
   const body = raw.replace(/[($\s-]/g, '');
 
   try {
@@ -388,23 +438,38 @@ function readDateFact(
   return found.every((date) => date === first) ? first : undefined;
 }
 
+/**
+ * The billing cycle, under the same rules as every other fact.
+ *
+ * It used to return the first line that matched: no agreement check, no past
+ * events skipped, no identifier lines skipped — the only fact in the file that
+ * skipped its own safeguards, so `PERIODO DE FACTURACION ANTERIOR` came back as
+ * this statement's cycle.
+ */
 function readPeriodFact(
   lines: readonly string[],
   order: DateFieldOrder | undefined,
 ): BillingPeriod | undefined {
+  const found: BillingPeriod[] = [];
+
   for (const line of lines) {
+    if (PAST_EVENT.test(line) || IDENTIFIER_LINE.some((pattern) => pattern.test(line))) continue;
     for (const pattern of PERIOD_LABELS) {
       pattern.lastIndex = 0;
-      const match = pattern.exec(line);
-      if (!match?.[1] || !match[2]) continue;
-      const from = readDate(match[1], order);
-      const to = readDate(match[2], order);
-      // Both halves or neither: a period with one end is not a period, and
-      // deriving the other from a cycle length would be inventing the cycle.
-      if (from && to && from <= to) return { from, to };
+      for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
+        if (!match[1] || !match[2]) continue;
+        const from = readDate(match[1], order);
+        const to = readDate(match[2], order);
+        // Both halves or neither: a period with one end is not a period, and
+        // deriving the other from a cycle length would be inventing the cycle.
+        if (from && to && from <= to) found.push({ from, to });
+      }
     }
   }
-  return undefined;
+
+  const first = found[0];
+  if (!first) return undefined;
+  return found.every((p) => p.from === first.from && p.to === first.to) ? first : undefined;
 }
 
 function readDate(raw: string, order: DateFieldOrder | undefined): IsoDate | undefined {
