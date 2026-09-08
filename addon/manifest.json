@@ -1,7 +1,7 @@
 {
   "id": "wealthfolio-chile",
   "name": "Wealthfolio Chile",
-  "version": "0.2.0-rc.3",
+  "version": "0.2.0-rc.4",
   "description": "Importación de cartolas bancarias chilenas (Banco de Chile, BancoEstado, Falabella/CMR), conciliación de transferencias, detección de cuotas e insights de gasto.",
   "author": "Jose Rodriguez",
   "main": "dist/addon.js",
