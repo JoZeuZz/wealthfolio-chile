@@ -460,6 +460,12 @@ describe('gastos que se repiten', () => {
  * la misma pantalla.
  */
 describe('el panel y lo que dice de sí mismo', () => {
+  it('permite que las acciones del encabezado bajen de línea en pantalla estrecha', async () => {
+    renderPage(<DashboardPage />, { accounts: [CLP], activities: [] });
+    const settings = await screen.findByRole('button', { name: 'Configuración' });
+    expect(settings.parentElement?.className).toContain('flex-wrap');
+  });
+
   const RUN = {
     id: 'run-vieja',
     timestamp: '2026-03-01T12:00:00.000Z',

@@ -174,7 +174,7 @@ export function DashboardPage() {
             Ingresos, gastos, financiamiento y cuotas a partir de tus cartolas importadas.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
