@@ -204,9 +204,27 @@ describe('dos monedas en el mismo mes', () => {
           type: 'WITHDRAWAL',
         }),
         activity({
+          accountId: 'acc-clp',
+          amount: -10_000,
+          date: DAY(3),
+          description: 'COMPRA CLP CUATRO',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+        }),
+        activity({
+          accountId: 'acc-usd',
+          amount: -5_000,
+          date: DAY(0),
+          description: 'COMPRA USD',
+          kind: TransactionKind.expense,
+          type: 'WITHDRAWAL',
+          currency: 'USD',
+          scale: 2,
+        }),
+        activity({
           accountId: 'acc-usd',
           amount: -1_200,
-          date: DAY(0),
+          date: DAY(1),
           description: 'INTERES POR MORA',
           kind: TransactionKind.interest,
           type: 'FEE',
@@ -216,8 +234,19 @@ describe('dos monedas en el mismo mes', () => {
         }),
         activity({
           accountId: 'acc-usd',
+          amount: -800,
+          date: DAY(2),
+          description: 'COMISION DE MANTENCION',
+          kind: TransactionKind.fee,
+          type: 'FEE',
+          currency: 'USD',
+          scale: 2,
+          financialCost: FinancialCostKind.maintenance,
+        }),
+        activity({
+          accountId: 'acc-usd',
           amount: -20_000,
-          date: DAY(1),
+          date: DAY(3),
           description: 'AVANCE EN EFECTIVO',
           kind: TransactionKind.cash_advance,
           type: 'WITHDRAWAL',
@@ -231,9 +260,18 @@ describe('dos monedas en el mismo mes', () => {
     while (card.parentElement && !card.textContent?.includes('Comprometido en cuotas')) {
       card = card.parentElement;
     }
-    expect(card.textContent).toContain('Consumo y financiamiento');
-    expect(card.textContent).toContain('Interés por mora');
-    expect(card.textContent).toContain('Avance en efectivo');
+    expect(within(card).getByRole('heading', { name: 'Consumo y financiamiento' })).toBeInTheDocument();
+    expect(within(card).getByText('Consumo').parentElement?.textContent).toContain('USD 50');
+    expect(within(card).getByText('Costos financieros').parentElement?.textContent).toContain(
+      'USD 20',
+    );
+    expect(within(card).getByText('Interés por mora').parentElement?.textContent).toContain('USD 12');
+    expect(within(card).getByText('Comisión de mantención').parentElement?.textContent).toContain(
+      'USD 8',
+    );
+    expect(
+      within(card).getByText('Principal de avances en efectivo').parentElement?.textContent,
+    ).toContain('USD 200');
   });
 });
 

@@ -463,34 +463,36 @@ export function DashboardPage() {
                 other.financialCosts.cashAdvanceCount > 0 ? (
                   <div className="mt-4 flex flex-col gap-2 text-sm">
                     <Separator />
-                    <p className="font-medium">Consumo y financiamiento</p>
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span>Consumo</span>
-                      <Amount value={other.summary.consumptionSpending} />
-                    </div>
-                    {other.financialCosts.items.length > 0 ? (
-                      <>
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span>Costos financieros</span>
-                          <Amount value={other.financialCosts.total} />
-                        </div>
-                        {other.financialCosts.items.map((item) => (
-                          <div
-                            key={item.kind}
-                            className="flex items-baseline justify-between gap-2 text-muted-foreground"
-                          >
-                            <span>{financialCostLabel(item.kind)}</span>
-                            <Amount value={item.amount} />
-                          </div>
-                        ))}
-                      </>
-                    ) : null}
-                    {other.financialCosts.cashAdvanceCount > 0 ? (
+                    <h3 className="font-medium">Consumo y financiamiento</h3>
+                    <dl className="flex flex-col gap-2">
                       <div className="flex items-baseline justify-between gap-2">
-                        <span>Avance en efectivo</span>
-                        <Amount value={other.financialCosts.cashAdvances} />
+                        <dt>Consumo</dt>
+                        <dd><Amount value={other.summary.consumptionSpending} /></dd>
                       </div>
-                    ) : null}
+                      {other.financialCosts.items.length > 0 ? (
+                        <>
+                          <div className="flex items-baseline justify-between gap-2">
+                            <dt>Costos financieros</dt>
+                            <dd><Amount value={other.financialCosts.total} /></dd>
+                          </div>
+                          {other.financialCosts.items.map((item) => (
+                            <div
+                              key={item.kind}
+                              className="flex items-baseline justify-between gap-2 text-muted-foreground"
+                            >
+                              <dt>{financialCostLabel(item.kind)}</dt>
+                              <dd><Amount value={item.amount} /></dd>
+                            </div>
+                          ))}
+                        </>
+                      ) : null}
+                      {other.financialCosts.cashAdvanceCount > 0 ? (
+                        <div className="flex items-baseline justify-between gap-2">
+                          <dt>Principal de avances en efectivo</dt>
+                          <dd><Amount value={other.financialCosts.cashAdvances} /></dd>
+                        </div>
+                      ) : null}
+                    </dl>
                   </div>
                 ) : null}
               </CardContent>
