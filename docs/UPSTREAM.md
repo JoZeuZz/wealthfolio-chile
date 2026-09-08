@@ -4,8 +4,10 @@ Qué versión de Wealthfolio usamos, qué nos ofrece su SDK de addons y cómo
 actualizamos.
 
 Investigado el **2026-08-05** contra el código real del repositorio, no contra
-documentación de terceros. Actualizado a **v3.7.0** el 2026-09-03, verificando
-cada afirmación contra el checkout en el tag `v3.7.0` y contra un host real.
+documentación de terceros. Referencia actual **v3.7.0**, verificada el
+2026-09-03 contra checkout y host real. El 2026-09-07 apareció v3.8.0; se
+registra abajo, pero no se migra ni se le atribuye compatibilidad sin revisión
+separada.
 
 ---
 
@@ -14,7 +16,8 @@ cada afirmación contra el checkout en el tag `v3.7.0` y contra un host real.
 | Dato | Valor |
 | --- | --- |
 | Repositorio | `wealthfolio/wealthfolio` |
-| Release estable | **v3.7.0** (2026-08-19) |
+| Release estable más reciente | **v3.8.0** (2026-09-07) |
+| Release de referencia validada | **v3.7.0** (2026-08-19) |
 | Licencia del core | **AGPL-3.0** |
 | Licencia de `@wealthfolio/addon-sdk` | **MIT** |
 | Licencia de `@wealthfolio/ui` | **MIT** |
@@ -23,6 +26,18 @@ cada afirmación contra el checkout en el tag `v3.7.0` y contra un host real.
 | Gestor de paquetes | `pnpm@10.33.4` |
 | Imagen Docker | `wealthfolio/wealthfolio:3.7.0` (multi-arch amd64/arm64) — **sin la `v`**: upstream etiqueta en git con `v3.7.0` y publica en Docker Hub como `3.7.0` |
 | Checkout local | `.upstream/wealthfolio` (ignorado por Git) |
+
+### v3.8.0 detectada, no migrada
+
+GitHub publicó `v3.8.0` el 2026-09-07 y npm reportó
+`@wealthfolio/addon-sdk@3.8.0` el mismo día. El addon conserva SDK,
+`minWealthfolioVersion`, imagen Docker y checkout de referencia en 3.7.0. Las
+correcciones de Financial Costs se validaron sólo contra ese host. Evaluar el
+diff 3.7→3.8, migrar dependencias y ejecutar smoke en 3.8 es un bloque futuro,
+no parte del release candidate actual.
+
+Fuentes: https://github.com/wealthfolio/wealthfolio/releases/tag/v3.8.0 y
+registro npm de `@wealthfolio/addon-sdk` consultado con `pnpm view`.
 
 Wealthfolio es Tauri + React + Rust. El backend vive en `crates/`, el frontend
 en `apps/frontend`, el servidor web en `apps/server` y los paquetes públicos en
