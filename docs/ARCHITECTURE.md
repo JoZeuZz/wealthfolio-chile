@@ -212,6 +212,12 @@ y hacía que la tasa de ahorro saliera −400 %. `MonthlySummary` lleva las dos
 vistas con nombres que no se pueden confundir. Ver
 [ADR 0006](adr/0006-caja-y-gasto.md).
 
+El consumo es un subconjunto directo: compras y servicios. Intereses,
+comisiones e impuestos pueden seguir formando parte del gasto, pero no del
+consumo. El principal de un avance en efectivo no pertenece a ninguno de los
+dos: crea deuda y entrega liquidez, y se muestra como financiamiento separado
+sin inventar una cuenta destino ni otra Activity.
+
 ### 7. Nada infla ingresos ni gastos
 
 `internal_transfer` y `credit_card_payment` están excluidos por construcción de

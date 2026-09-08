@@ -276,7 +276,7 @@ positiva (el tipo lleva la dirección) y nuestra metadata bajo la clave
 
 ```json
 {
-  "v": 2,
+  "v": 5,
   "fp": "<huella>",
   "wfp": "<huella débil>",
   "inst": "banco-chile",
@@ -285,12 +285,21 @@ positiva (el tipo lleva la dirección) y nuestra metadata bajo la clave
   "fileHash": "<sha256 del archivo>",
   "runId": "run-…",
   "kind": "expense",
+  "kc": "confirmed",
   "dir": "out",
   "cat": "alimentacion.supermercado",
   "merchant": "Lider",
-  "cuota": { "n": 2, "of": 6 }
+  "cuota": { "n": 2, "of": 6 },
+  "fc": "maintenance",
+  "proj": "<proyección de la Activity escrita>"
 }
 ```
+
+`kc` evita que una clasificación sugerida vuelva como confirmada. `fc` sólo se
+escribe cuando la glosa confirmó un costo financiero específico. `proj`
+invalida ambos, junto con comercio, categoría, tags y cuota, si el usuario edita
+la Activity en Wealthfolio: el host manda y las reglas actuales no se ejecutan
+retroactivamente sobre el histórico.
 
 Se escribe con `activities.saveMany({ creates })` en lotes de 100. Un lote que
 falla se reporta, **no se reintenta**: reintentar una escritura parcialmente

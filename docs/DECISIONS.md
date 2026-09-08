@@ -353,24 +353,28 @@ enumerar estos costos para definir el Monto No Financiable del pago mínimo, y
 el glosario del reglamento de información al consumidor define cada uno. El
 vocabulario lo publica el regulador, no lo observamos en un archivo.
 
-**Tres decisiones.**
+**Cuatro decisiones.**
 
-1. **Una dimensión que refina, no reemplaza.** `financialCostKind` tiene nueve
+1. **Una dimensión que refina, no reemplaza.** `financialCostKind` tiene diez
    valores y cada uno mapea a un tipo que Wealthfolio ya expresa, así que nada
    exige un `ActivityType` inexistente. Viaja en la metadata del addon, esquema
-   4, y sólo cuando la glosa nombró el costo específico: la presencia del campo
+   5, y sólo cuando la glosa nombró el costo específico: la presencia del campo
    es la confianza.
 2. **Un avance en efectivo no es una compra.** El reglamento lo define como el
    emisor otorgando "un préstamo o mutuo de dinero" contra el cupo. Se mantiene
    como un movimiento —partirlo en dos inventaría la contraparte que ningún
-   banco reportó— con tipo propio, y sigue contando como gasto por la misma
-   razón que un giro de cajero: el efectivo salió del alcance de la
-   herramienta.
+   banco reportó— con tipo propio. El principal queda fuera de consumo, gasto,
+   costos financieros, comercios y planes de compra; se informa como
+   financiamiento. Comisión, interés e impuesto son movimientos separados.
 3. **Un cobro del emisor no tiene comercio.** Visto en un host real:
    `INTERES POR MORA` y `GASTOS DE COBRANZA` competían en «Comercios
    principales» con el supermercado, porque el nombre se lee del texto de la
    glosa y la glosa de un cargo del banco también tiene texto. Salen del
    ranking y se informan aparte; el dinero no desaparece del panel.
+4. **Consumo se suma por inclusión.** Son compras y servicios salientes sin
+   dimensión de costo financiero. No se calcula restando costos y avances al
+   gasto total: una comisión ambigua, una devolución o un movimiento sin
+   clasificar no puede quedar convertido en consumo por diferencia.
 
 **Lo que deliberadamente no está.** Los seguros: el reglamento define la prima
 cargada a una tarjeta como una obligación que el consumidor contrae
