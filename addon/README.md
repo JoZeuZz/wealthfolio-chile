@@ -9,7 +9,7 @@ Documentación completa en la [raíz del repositorio](../README.md).
 
 ```bash
 pnpm install
-pnpm test          # 318 tests
+pnpm test          # 1301 tests
 pnpm typecheck
 pnpm lint
 pnpm build         # dist/addon.js
@@ -22,7 +22,7 @@ pnpm dev:server    # servidor de desarrollo (localhost:3001)
 
 ```
 src/
-├── addon.tsx     punto de entrada: registra las tres rutas
+├── addon.tsx     punto de entrada: registra las cinco rutas
 ├── core/         motor determinista — TS puro, sin SDK ni DOM
 ├── services/     lo único que habla con ctx.api
 └── ui/           páginas React
@@ -48,6 +48,6 @@ sandbox. Tampoco `network`: el addon no hace ninguna petición.
 
 ## Compatibilidad
 
-- Wealthfolio ≥ 3.6.2
-- SDK 3.6.2
+- Wealthfolio ≥ 3.7.0 (validado también contra 3.8.0)
+- SDK 3.8.0 (tipos de build; sin uso de APIs 3.8-only)
 - Node 20.19+ (24 recomendado)

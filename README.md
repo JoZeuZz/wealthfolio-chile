@@ -4,14 +4,15 @@ Addon de [Wealthfolio](https://wealthfolio.app) para gestión financiera persona
 en Chile: importa cartolas de bancos chilenos, concilia transferencias entre tus
 cuentas, detecta compras en cuotas y responde en qué se te va el sueldo.
 
-> **Estado: 0.2.0-rc.3 — validado contra un Wealthfolio v3.7.0 real, todavía sin
-> cartolas reales.** 987 tests cubren el motor, la capa de servicios y la
-> interfaz sobre un DOM. El addon se ha ejecutado dentro de un Wealthfolio
-> corriendo en varias sesiones de validación —3.6.2 primero, 3.7.0 después— y
-> todas encontraron errores que ningún test unitario podía ver, porque estaban
-> en la frontera con el host: entre ellos, que la clave de idempotencia del host
-> no coincidía con la nuestra y rechazaba lotes enteros. Todos corregidos y
-> reverificados.
+> **Estado: 0.2.0-rc.5 — validado contra Wealthfolio v3.7.0 y v3.8.0 reales,
+> todavía sin cartolas reales.** 1301 tests cubren el motor, la capa de
+> servicios y la interfaz sobre un DOM. El addon se ha ejecutado dentro de un
+> Wealthfolio corriendo en varias sesiones de validación —3.6.2, 3.7.0 y
+> 3.8.0— y todas encontraron errores que ningún test unitario podía ver,
+> porque estaban en la frontera con el host: entre ellos, que la clave de
+> idempotencia del host no coincidía con la nuestra y rechazaba lotes enteros,
+> y que un `INTEREST` crudo en una cuenta de tarjeta se leía siempre como
+> ingreso sin importar la versión del host. Todos corregidos y reverificados.
 >
 > Sigue siendo un *release candidate* por una razón concreta: los adaptadores de
 > Banco de Chile, BancoEstado y Falabella/CMR están construidos sobre
@@ -29,7 +30,7 @@ Cuatro niveles, y no se mezclan:
 | --- | --- |
 | **implementado** | El código existe y sus tests unitarios pasan |
 | **integrado** | Está enganchado al flujo real del addon, no sólo disponible |
-| **validado en host** | Se ejecutó contra un Wealthfolio v3.7.0 corriendo |
+| **validado en host** | Se ejecutó contra un Wealthfolio v3.7.0/v3.8.0 corriendo |
 | **validado con banco real** | Se ejecutó contra una cartola real de ese banco |
 
 Hoy el proyecto llega a **validado en host**. Ningún banco llega a
@@ -229,8 +230,9 @@ Detalle completo en [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Relación con Wealthfolio
 
-Este proyecto es un **addon**, no un fork. Se construye sobre el Addon SDK
-3.7.0 y solo usa APIs soportadas. Nunca escribe SQLite directamente.
+Este proyecto es un **addon**, no un fork. Se construye sobre el Addon SDK 3.8
+(mínimo de host soportado: 3.7.0) y solo usa APIs soportadas. Nunca escribe
+SQLite directamente.
 
 `.upstream/wealthfolio` es un checkout de referencia, ignorado por Git: no
 vendorizamos código de upstream.
