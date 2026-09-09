@@ -17,7 +17,7 @@ import {
   loadDuplicateIndexResult,
 } from '../src/services/activity-index';
 import { makeTransaction } from './fixtures';
-import { activityStub, fakeHost } from './host';
+import { accountStub, activityStub, fakeHost } from './host';
 
 /**
  * The duplicate index, read back from a live host.
@@ -124,6 +124,39 @@ describe('loadDuplicateIndex', () => {
     expect(index.byFingerprint.get('in')?.amount).toEqual(money(1000000, 0, 'CLP'));
     expect(index.byFingerprint.get('xfer-out')?.amount).toEqual(money(-200000, 0, 'CLP'));
     expect(index.byFingerprint.get('xfer-in')?.amount).toEqual(money(200000, 0, 'CLP'));
+  });
+
+  /**
+   * `activityDetailsToSignedMoney` lee un `INTEREST` crudo en cuenta tarjeta
+   * como cargo (`activityFlowSign`, `core/mapping/activities.ts`). Este índice
+   * tiene que leer esa misma fila con el mismo signo — si no, un interés
+   * cobrado que alguien editó a mano en una tarjeta entra al índice como
+   * `+15000` mientras `imported-transactions.ts` (y el propio import) lo lee
+   * como `-15000`: la reimportación de la misma cartola no lo encuentra y
+   * escribe una segunda copia.
+   */
+  it('firma un INTEREST crudo en tarjeta con el mismo signo que el resto del pipeline', async () => {
+    const host = fakeHost({
+      accounts: [accountStub({ id: ACCOUNT, accountType: 'CREDIT_CARD' })],
+      activities: [
+        activityStub({
+          accountId: ACCOUNT,
+          activityType: 'INTEREST',
+          amount: '15000',
+          date: '2026-03-06',
+          comment: 'INTERES TARJETA',
+          // Sin metadata nuestra: editado a mano en Wealthfolio o escrito por
+          // otra vía, exactamente el caso que dispara el bug.
+          metadata: undefined,
+        }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+
+    expect(index.byWeakFingerprint.size).toBe(1);
+    const [entry] = [...index.byWeakFingerprint.values()].flat();
+    expect(entry?.amount).toEqual(money(-15000, 0, 'CLP'));
   });
 
   it('reads a null amount as zero instead of failing the whole scan', async () => {

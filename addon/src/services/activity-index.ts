@@ -6,6 +6,7 @@ import {
   activityDetailsToSignedMoney,
   activityProjection,
   readChileMetadata,
+  type HostAccountType,
 } from '../core/mapping/activities';
 
 /**
@@ -71,6 +72,17 @@ export async function loadDuplicateIndexResult(
   let totalRowCount = 0;
   let truncated = false;
 
+  // Same account, every row of this scan: one lookup, not one per activity.
+  // Without it, `activityDetailsToSignedMoney` falls back to its
+  // no-`accountType` reading, which disagrees with `imported-transactions.ts`
+  // on the sign of a raw `INTEREST` row on a credit-card account — and two
+  // readers of the same activity disagreeing on its sign is exactly what lets
+  // a duplicate slip past this index.
+  const accounts = await ctx.api.accounts.getAll();
+  const accountType: HostAccountType | undefined = accounts.find(
+    (account) => account.id === options.accountId,
+  )?.accountType;
+
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const response = await ctx.api.activities.search(
       page,
@@ -87,7 +99,9 @@ export async function loadDuplicateIndexResult(
       const metadata = readChileMetadata(activity.metadata);
       const modified = wasModifiedAfterImport(activity, metadata?.proj);
       const date = toIsoDate(activity.date);
-      const amount = activityDetailsToSignedMoney(activity);
+      const amount = activityDetailsToSignedMoney(activity, accountType, {
+        metadataCacheIsCurrent: !modified,
+      });
       movements.push({
         ...(metadata?.fp ? { fingerprint: metadata.fp } : {}),
         // Derived here rather than read from `metadata.wfp`, which only exists

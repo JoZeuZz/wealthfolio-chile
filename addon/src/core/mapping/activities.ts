@@ -109,10 +109,13 @@ export interface ChileMetadata {
   /**
    * Direction the row had before it was written, as `'in'` or `'out'`.
    *
-   * Only consulted for activity types Wealthfolio gives no direction of its own
-   * (`UNKNOWN`, `ADJUSTMENT`, `SPLIT`, anything upstream adds later). For every
-   * type with documented semantics the `activityType` wins, so stale or
-   * hand-edited metadata can never turn a `WITHDRAWAL` into an inflow.
+   * Consulted for activity types Wealthfolio gives no direction of its own
+   * (`UNKNOWN`, `ADJUSTMENT`, `SPLIT`, anything upstream adds later), and for
+   * one type with a direction that is this addon's own default rather than a
+   * host-enforced meaning: a bare `INTEREST` on `CREDIT_CARD` (see
+   * `resolveActivityDirection`). For every other type the `activityType` wins
+   * outright, so stale or hand-edited metadata can never turn a `WITHDRAWAL`
+   * into an inflow.
    */
   dir?: Direction;
   /** Category id, if assigned. */
@@ -154,52 +157,38 @@ export interface ChileMetadata {
 }
 
 /**
- * An `ActivityCreate` plus the review flag the SDK type has not caught up to.
+ * An `ActivityCreate` plus the idempotency key the SDK type has not caught up to,
+ * with `status` narrowed to the one value this addon ever writes.
  *
- * `NewActivity.needs_review` is `Option<bool>` in the v3.7.0 backend and the
- * bulk endpoint persists whatever is sent, but `ActivityCreate` in
- * `@wealthfolio/addon-sdk@3.7.0` does not declare the field. The host's addon
- * bridge forwards the request object without filtering its keys
- * (`apps/frontend/src/addons/type-bridge.ts`: `saveMany` calls
- * `internalAPI.saveActivities(input)` unchanged), so the flag survives the trip
- * through the sandbox. Verified against a real 3.7.0 container: a create
- * carrying `needsReview: true` comes back with `needsReview: true`.
+ * `needsReview`/`status` were undeclared on `ActivityCreate` through SDK
+ * 3.7.0 (verified against a real 3.7.0 container: both round-trip anyway,
+ * since `apps/frontend/src/addons/type-bridge.ts` forwards the request object
+ * without filtering its keys) and are typed as of `@wealthfolio/addon-sdk@3.8.0`
+ * (`status?: ActivityStatus; needsReview?: boolean;`), so this alias no longer
+ * needs to declare `needsReview` itself. `status` still needs overriding,
+ * though: the SDK's `ActivityStatus` is `POSTED | PENDING | DRAFT | VOID`, and
+ * accepting the whole union here would let a future call site write
+ * `'POSTED'`/`'VOID'` with no type error — silently changing whether the row
+ * counts in balance/valuation/performance. This addon only ever means `'DRAFT'`.
  *
- * Declared here rather than cast at the call site so a future SDK that adds the
- * field makes this alias redundant instead of silently disagreeing with it.
+ * `status: 'DRAFT'` is reserved for a row with no reading at all — never for a
+ * substituted type. Wealthfolio's "needs review" filter reads `status = 'DRAFT'`,
+ * not `needs_review` (`storage-sqlite/src/activities/repository.rs`), and
+ * `DefaultActivityCompiler::compile` returns `vec![]` for anything `!is_posted()`
+ * (`crates/core/src/activities/compiler.rs`, unchanged through v3.8.0), so a
+ * draft row contributes to no balance, no valuation and no performance figure.
+ * That is the right answer for a movement nobody could read — it is what
+ * `UNKNOWN` already means on a cash account — and the wrong answer for a
+ * movement the addon classified confidently and had to store under a type the
+ * account happens to accept. Every `tax` on a credit card is such a row.
+ *
+ * `idempotencyKey` remains undeclared on `ActivityCreate` in 3.8.0 too, and is
+ * still honoured: set by `import-runner` so the addon's identity and
+ * Wealthfolio's are the same function. See `withIdempotencyKeys` for what
+ * happens when they are not.
  */
-export type ReviewableActivityCreate = ActivityCreate & {
-  needsReview?: boolean;
-  /**
-   * Companion to `needsReview` — but only for a row with no reading at all.
-   *
-   * Wealthfolio's "needs review" filter does not read `needs_review`: it
-   * filters on `status = 'DRAFT'`
-   * (`storage-sqlite/src/activities/repository.rs`, where the parameter is
-   * literally commented "maps to DRAFT status"). Verified against a real 3.7.0
-   * container — an activity created with `needsReview: true` and no status is
-   * stored flagged, shows the amber badge, and `needsReviewFilter: true`
-   * returns nothing.
-   *
-   * `DRAFT` is not free, though, and an earlier version of this comment claimed
-   * it was. `DefaultActivityCompiler::compile` returns `vec![]` for anything
-   * `!is_posted()` (`crates/core/src/activities/compiler.rs`, v3.7.0), so a
-   * draft row contributes to no balance, no valuation and no performance
-   * figure. That is the right answer for a movement nobody could read — it is
-   * what `UNKNOWN` already means on a cash account — and the wrong answer for a
-   * movement the addon classified confidently and had to store under a type the
-   * account happens to accept. Every `tax` on a credit card is such a row.
-   *
-   * So: `DRAFT` follows the unresolved kind, never the substitution.
-   */
+export type ReviewableActivityCreate = Omit<ActivityCreate, 'status'> & {
   status?: 'DRAFT';
-  /**
-   * The host's own duplicate key, which it derives itself when absent.
-   *
-   * Set by `import-runner` so the addon's identity and Wealthfolio's are the
-   * same function. See `withIdempotencyKeys` for what happens when they are
-   * not. Also undeclared on `ActivityCreate` in 3.7.0, and also honoured.
-   */
   idempotencyKey?: string;
 };
 
@@ -382,8 +371,21 @@ const CREDIT_CARD_ALLOWED: ReadonlySet<string> = new Set([
  * substitution erasing what *was* known, so `metadata.kind` keeps the real
  * classification and `metadata.subst` records that the type was chosen for the
  * account rather than for the movement.
+ *
+ * `INTEREST` is in `CREDIT_CARD_ALLOWED`, but only for the direction that type
+ * actually means on a card: `activityFlowSign` reads a bare `INTEREST` on
+ * `CREDIT_CARD` as `-1` (a charge), so writing one with `direction === in`
+ * (interest earned, or a reversal of a previous charge — `kind: interest`
+ * reaches here with either direction) would read back inverted the moment it
+ * round-trips. Route that combination through `CREDIT` instead, same as any
+ * other card credit this addon cannot express natively: `activityFlowSign`
+ * gives `CREDIT` `+1` unconditionally, so the row reads back the direction it
+ * was written with.
  */
 function substituteForCreditCard(natural: ResolvedType, direction: Direction): ResolvedType {
+  if (natural.activityType === 'INTEREST' && direction === Direction.in) {
+    return { activityType: 'CREDIT', substituted: true };
+  }
   if (CREDIT_CARD_ALLOWED.has(natural.activityType)) return natural;
   // A tax charged to a card is a charge, not a purchase: `FEE` is allowed and
   // says more than `WITHDRAWAL` would.
@@ -532,8 +534,31 @@ export interface HostActivityAmount {
  * `SPLIT`, `ADJUSTMENT` and `UNKNOWN` have no automatic cash impact, so they
  * get `0`: guessing a direction for a row Wealthfolio itself refuses to
  * classify would put an invented number into the user's totals.
+ *
+ * `INTEREST` is `+1` in general — earned interest is income — except on a
+ * `CREDIT_CARD` account, where a bare `INTEREST` row defaults to a charge,
+ * never income, regardless of host version. `toActivityCreate` never writes
+ * this combination any more — `substituteForCreditCard` routes an incoming
+ * `kind: interest` through `CREDIT` instead, precisely so this default cannot
+ * invert a row the addon itself knows is income — but the type is not this
+ * addon's to enforce: manual editing in Wealthfolio, a foreign import, or a
+ * row written by 0.2.0-rc.4 or earlier (before that substitution existed) can
+ * all still produce it. This is therefore only the **default** for a row
+ * nothing else identifies; `resolveActivityDirection` checks the addon's own
+ * recorded direction first, exactly as it already does for `UNKNOWN` and
+ * every other type the host itself gives no direction to. Wealthfolio 3.8
+ * agrees with the default at the host's own balance level
+ * (`ActivityEconomicsResolver::resolve_cash_with_account_context`,
+ * `crates/core/src/portfolio/economic_events.rs`); 3.7 does not make this
+ * distinction internally, but the economic reality — and this addon's own
+ * reading of it — does not depend on which host version is running.
  */
-export function activityFlowSign(activityType: string): ActivityFlowSign {
+export function activityFlowSign(
+  activityType: string,
+  accountType?: HostAccountType,
+): ActivityFlowSign {
+  if (activityType === 'INTEREST' && accountType === 'CREDIT_CARD') return -1;
+
   switch (activityType) {
     // `CREDIT` covers refunds, rebates and bonuses; all of them increase cash.
     case 'DEPOSIT':
@@ -608,10 +633,15 @@ function canonicalAmountText(amount: string | number | null | undefined, currenc
  *
  * The inverse of the `needsReview` decision made when writing, and it has to be
  * a separate surface for one reason: only one of the two cases also carries
- * `status: DRAFT`, and the host's own "needs review" filter searches by status.
- * So the filter finds the rows nothing could be read from, and does not find
- * the rows written under a type the account would accept instead of the one
- * they deserved — which are exactly the ones nobody would otherwise find.
+ * `status: DRAFT`. Wealthfolio's own "needs review" filter reads `status =
+ * 'DRAFT'` through 3.7.0 (`storage-sqlite/src/activities/repository.rs`) and
+ * switches to reading `needs_review` directly in 3.8.0 — verified against both
+ * tags. Under 3.7 the filter finds only the rows nothing could be read from,
+ * and misses the rows written under a type the account would accept instead of
+ * the one they deserved; under 3.8 it finds both. This addon always sets both
+ * fields together for the first case and only `needsReview` for the second, so
+ * neither host version ever hides a row this addon meant to flag — 3.8 simply
+ * surfaces the second case too, in the host's own queue and not only here.
  *
  * The host has the casting vote on *whether*: if the person cleared the flag,
  * the row is done, whatever this addon's metadata still says. The addon only
@@ -684,9 +714,21 @@ function kindFromActivityType(
   }
 }
 
-/** `Direction` implied by an activity type, or `undefined` when it implies none. */
-export function activityDirection(activityType: string): Direction | undefined {
-  const flow = activityFlowSign(activityType);
+/**
+ * `Direction` implied by an activity type, or `undefined` when it implies none.
+ *
+ * For reading a *stored* activity, prefer `resolveActivityDirection` instead of
+ * this function directly: for a bare `INTEREST` on `CREDIT_CARD` this always
+ * returns the addon's charge default (`out`), with no way to defer to a
+ * legacy row's recorded `dir` or to notice the metadata cache is stale.
+ * `resolveActivityDirection` is what applies both of those; this one is the
+ * pure, metadata-free building block it and `activityFlowSign` share.
+ */
+export function activityDirection(
+  activityType: string,
+  accountType?: HostAccountType,
+): Direction | undefined {
+  const flow = activityFlowSign(activityType, accountType);
   if (flow === 0) return undefined;
   return flow < 0 ? Direction.out : Direction.in;
 }
@@ -715,11 +757,42 @@ function recordedDirection(
  * has nothing to say — `UNKNOWN`, `ADJUSTMENT`, `SPLIT`, and whatever upstream
  * adds next.
  *
+ * A bare `INTEREST` on `CREDIT_CARD` belongs in that second group, not the
+ * first, even though `activityFlowSign` gives it a non-zero sign: the host
+ * does not enforce that sign on the type (nothing stops a person from typing
+ * a positive `INTEREST` row on a card meaning income), it is this addon's own
+ * default for a row nobody identified. So it is checked here, ahead of the
+ * default, the same way `UNKNOWN` is — otherwise a row this addon itself wrote
+ * as income before `substituteForCreditCard` existed (0.2.0-rc.4 and earlier,
+ * via a user rule with no direction filter) reads back inverted purely because
+ * the default changed, contradicting the direction recorded when it was
+ * written.
+ *
+ * That trust has one condition: `cacheIsCurrent`. A substituted `CREDIT` row
+ * this addon writes today can itself be retyped back to `INTEREST` by a person
+ * in Wealthfolio who means "no, this was a charge" — at that point `metadata`
+ * describes a row that is no longer there, exactly the situation
+ * `metadataCacheIsCurrent`/`reconcileKind` already exist to detect for `kind`.
+ * Direction has to fail the same way: an edit the host recorded must be able to
+ * overrule a note this addon wrote before the edit happened. Callers that
+ * cannot tell (a bare `HostActivityAmount`, with no date/comment to hash) get
+ * the same default `wasModifiedAfterImport` uses elsewhere — "not modified" —
+ * which is what every caller of this function assumed before this parameter
+ * existed.
+ *
  * `undefined` means neither source knows: an `UNKNOWN` written by 0.1.0/0.1.1,
  * or an activity some other addon created.
  */
-export function resolveActivityDirection(activity: HostActivityAmount): Direction | undefined {
-  return activityDirection(activity.activityType) ?? recordedDirection(activity.metadata);
+export function resolveActivityDirection(
+  activity: HostActivityAmount,
+  accountType?: HostAccountType,
+  options: { metadataCacheIsCurrent?: boolean } = {},
+): Direction | undefined {
+  if (activity.activityType === 'INTEREST' && accountType === 'CREDIT_CARD') {
+    const trustMetadata = options.metadataCacheIsCurrent !== false;
+    return (trustMetadata ? recordedDirection(activity.metadata) : undefined) ?? Direction.out;
+  }
+  return activityDirection(activity.activityType, accountType) ?? recordedDirection(activity.metadata);
 }
 
 /**
@@ -753,16 +826,25 @@ export function parseHostAmount(amount: string | number | null | undefined, curr
  *
  * Three cases, in order:
  *
- * 1. The type has a direction — it wins, always.
- * 2. It does not, but we wrote the row and recorded `dir` — the sign we
- *    originally had is restored. Without this an `UNKNOWN` outflow comes back
- *    as an inflow, because `toActivityCreate()` writes the magnitude.
- * 3. Neither — the stored sign is preserved untouched, because inventing one
- *    would be worse than reporting what the host holds.
+ * 1. The type has a host-enforced direction — it wins, always. (The one
+ *    exception is a bare `INTEREST` on `CREDIT_CARD`, whose direction is this
+ *    addon's own default rather than the host's; see `resolveActivityDirection`
+ *    for why it is handled with case 2 instead of here.)
+ * 2. It does not, but we wrote the row, the cache is still current, and we
+ *    recorded `dir` — the sign we originally had is restored. Without this an
+ *    `UNKNOWN` outflow comes back as an inflow, because `toActivityCreate()`
+ *    writes the magnitude.
+ * 3. Neither — the stored sign is preserved untouched (or, for `INTEREST` on
+ *    `CREDIT_CARD`, the charge default applies), because inventing one would
+ *    be worse than reporting what the host holds.
  */
-export function activityDetailsToSignedMoney(activity: HostActivityAmount): Money {
+export function activityDetailsToSignedMoney(
+  activity: HostActivityAmount,
+  accountType?: HostAccountType,
+  options: { metadataCacheIsCurrent?: boolean } = {},
+): Money {
   const parsed = parseHostAmount(activity.amount, activity.currency);
-  const direction = resolveActivityDirection(activity);
+  const direction = resolveActivityDirection(activity, accountType, options);
   if (!direction) return parsed;
   const magnitude = abs(parsed);
   return direction === Direction.out ? negate(magnitude) : magnitude;
@@ -842,10 +924,17 @@ export function activityToTransaction(
   const metadata = readChileMetadata(activity.metadata);
   if (!metadata) return undefined;
 
-  const amount = activityDetailsToSignedMoney(activity);
-  const direction = resolveActivityDirection(activity) ?? directionOfAmount(amount);
-  const description = activity.comment ?? '';
+  // Computed before amount/direction, not just before `kind`: a person who
+  // retypes a substituted CREDIT interest row back to a raw INTEREST is
+  // editing the direction, not only the kind, and `resolveActivityDirection`
+  // needs to know the cache is stale for the exact same reason `reconcileKind`
+  // does.
   const cacheIsCurrent = metadataCacheIsCurrent(activity, metadata);
+  const directionOptions = { metadataCacheIsCurrent: cacheIsCurrent };
+  const amount = activityDetailsToSignedMoney(activity, options.accountType, directionOptions);
+  const direction =
+    resolveActivityDirection(activity, options.accountType, directionOptions) ?? directionOfAmount(amount);
+  const description = activity.comment ?? '';
   const kind = cacheIsCurrent
     ? reconcileKind(activity, metadata, direction, options.accountType)
     : kindFromActivityType(activity.activityType, activity.subtype, options.accountType);

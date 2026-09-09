@@ -86,6 +86,138 @@ describe('activity flow sign', () => {
     const stored = activityStub({ activityType: 'UNKNOWN', amount: '-4500', date: '2026-03-01' });
     expect(activityDetailsToSignedMoney(stored)).toEqual(money(-4500, 0, 'CLP'));
   });
+
+  it('reads INTEREST as earned income on a cash account, same as always', () => {
+    expect(activityFlowSign('INTEREST', 'CASH')).toBe(1);
+    expect(activityFlowSign('INTEREST')).toBe(1);
+    expect(activityDirection('INTEREST', 'CASH')).toBe(Direction.in);
+  });
+
+  it('reads a bare INTEREST activity on a credit-card account as a charge, not income', () => {
+    // Wealthfolio 3.8 agrees internally for its own balance math
+    // (ActivityEconomicsResolver::resolve_cash_with_account_context trata
+    // INTEREST en CREDIT_CARD como cargo), pero esto ya era correcto antes de
+    // 3.8: un interés que aparece directo en una cartola de tarjeta es un costo
+    // financiero, nunca un ingreso, sin importar la versión del host. La vía de
+    // escritura normal del addon nunca produce esta combinación: un cargo
+    // (`builtin.intereses`, `withFinancialCost`) siempre pasa por
+    // FEE/INTEREST_CHARGE, y un `kind: interest` entrante en tarjeta se sustituye
+    // a CREDIT antes de llegar a INTEREST (ver `substituteForCreditCard` y el
+    // test siguiente). Esto cubre una fila INTEREST cruda que llegó por otra vía:
+    // edición manual en Wealthfolio, otra herramienta, o una regla de usuario sin
+    // filtro de dirección apuntando directo al tipo INTEREST.
+    expect(activityFlowSign('INTEREST', 'CREDIT_CARD')).toBe(-1);
+    expect(activityDirection('INTEREST', 'CREDIT_CARD')).toBe(Direction.out);
+
+    const stored = activityStub({ activityType: 'INTEREST', amount: '15000', date: '2026-03-01' });
+    expect(activityDetailsToSignedMoney(stored, 'CREDIT_CARD')).toEqual(money(-15000, 0, 'CLP'));
+    expect(resolveActivityDirection(stored, 'CREDIT_CARD')).toBe(Direction.out);
+
+    // Sin accountType (llamador que no lo conoce) el comportamiento histórico
+    // se conserva: mejor no inventar un cargo que no se puede confirmar.
+    expect(activityDetailsToSignedMoney(stored)).toEqual(money(15000, 0, 'CLP'));
+  });
+
+  it('never writes a raw INTEREST for an incoming interest on a credit card, so the read-side charge rule cannot invert it', () => {
+    // Regression: `activityFlowSign` reading INTEREST as a charge on
+    // CREDIT_CARD is only safe if the write path agrees — otherwise a real
+    // `kind: interest, direction: in` row (interest earned, or a reversal a
+    // user rule routed here with no direction filter) gets written as
+    // INTEREST and reads back inverted, flipping income into an invented
+    // expense. `resolveActivityType`/`substituteForCreditCard` must route it
+    // through CREDIT instead, flagged for review like any other card credit
+    // this addon cannot express natively.
+    const transaction = makeTransaction({
+      date: '2026-03-01',
+      amount: 15_000,
+      description: 'ABONO INTERES TARJETA',
+      kind: TransactionKind.interest,
+      direction: Direction.in,
+    });
+
+    const create = toActivityCreate(transaction, { accountId: ACCOUNT, runId: RUN, accountType: 'CREDIT_CARD' });
+
+    expect(create.activityType).toBe('CREDIT');
+    expect(create.needsReview).toBe(true);
+
+    const stored = activityStub({
+      accountId: ACCOUNT,
+      activityType: create.activityType,
+      amount: String(create.amount),
+      currency: create.currency ?? 'CLP',
+      date: String(create.activityDate),
+      comment: create.comment ?? '',
+      metadata: readChileMetadata(create.metadata) as ChileMetadata,
+    });
+
+    expect(resolveActivityDirection(stored, 'CREDIT_CARD')).toBe(Direction.in);
+    expect(activityDetailsToSignedMoney(stored, 'CREDIT_CARD')).toEqual(money(15000, 0, 'CLP'));
+
+    const reconstructed = activityToTransaction(stored, { accountType: 'CREDIT_CARD' });
+    expect(reconstructed?.direction).toBe(Direction.in);
+    expect(reconstructed?.amount).toEqual(money(15000, 0, 'CLP'));
+  });
+
+  it('keeps the direction a legacy row recorded, instead of overriding it with the CREDIT_CARD charge default', () => {
+    // Integridad histórica: antes de que `substituteForCreditCard` existiera
+    // (0.2.0-rc.4 y anteriores), una regla de usuario sin filtro de dirección
+    // podía producir `kind: interest, direction: in` y el addon lo escribía
+    // como INTEREST crudo, con `metadata.dir: 'in'`. Esa fila ya vive en la
+    // base de datos de quien haya usado una regla así. El supuesto nuevo de
+    // "INTEREST en tarjeta es siempre cargo" es el default correcto para una
+    // fila AJENA (edición manual, otra herramienta) — pero para una fila que
+    // el propio addon escribió y registró como ingreso, la dirección grabada
+    // manda, igual que ya pasa con UNKNOWN/ADJUSTMENT/SPLIT.
+    const legacyStored = activityStub({
+      activityType: 'INTEREST',
+      amount: '15000',
+      date: '2026-03-01',
+      metadata: { fp: 'legacy-fp', inst: 'banco-chile', parser: 'x', parserVersion: '1', fileHash: 'h', runId: 'r', kind: TransactionKind.interest, dir: Direction.in },
+    });
+
+    expect(resolveActivityDirection(legacyStored, 'CREDIT_CARD')).toBe(Direction.in);
+    expect(activityDetailsToSignedMoney(legacyStored, 'CREDIT_CARD')).toEqual(money(15000, 0, 'CLP'));
+
+    // Sin nuestra metadata (fila ajena o editada), el default de cargo sigue
+    // aplicando — este es el caso que el fix original cubre.
+    const foreignStored = activityStub({ activityType: 'INTEREST', amount: '15000', date: '2026-03-01' });
+    expect(resolveActivityDirection(foreignStored, 'CREDIT_CARD')).toBe(Direction.out);
+    expect(activityDetailsToSignedMoney(foreignStored, 'CREDIT_CARD')).toEqual(money(-15000, 0, 'CLP'));
+  });
+
+  it('drops the recorded direction once the projection says the row was retyped', () => {
+    // El addon escribe hoy un interés entrante en tarjeta como CREDIT
+    // sustituido (ver test anterior). Si la persona lo retipea a INTEREST en
+    // Wealthfolio queriendo decir «esto era un cargo», `metadata.dir` sigue
+    // diciendo `in`, pero `proj` — hasheado sobre CREDIT — ya no describe la
+    // fila. El host tiene el voto decisivo sobre una edición suya, igual que
+    // ya pasa con `kind` vía `reconcileKind`: la dirección tiene que caer al
+    // default de cuenta, no al valor que ya no es cierto.
+    const transaction = makeTransaction({
+      date: '2026-03-01',
+      amount: 15_000,
+      description: 'ABONO INTERES TARJETA',
+      kind: TransactionKind.interest,
+      direction: Direction.in,
+    });
+    const create = toActivityCreate(transaction, { accountId: ACCOUNT, runId: RUN, accountType: 'CREDIT_CARD' });
+    expect(create.activityType).toBe('CREDIT');
+
+    const retyped = activityStub({
+      accountId: ACCOUNT,
+      activityType: 'INTEREST', // el host manda: la fila ya no es CREDIT
+      amount: String(create.amount),
+      currency: create.currency ?? 'CLP',
+      date: String(create.activityDate),
+      comment: create.comment ?? '',
+      metadata: readChileMetadata(create.metadata) as ChileMetadata, // proj sigue siendo el de CREDIT
+    });
+
+    expect(activityToTransaction(retyped, { accountType: 'CREDIT_CARD' })).toMatchObject({
+      direction: Direction.out,
+      amount: money(-15000, 0, 'CLP'),
+    });
+  });
 });
 
 describe('invalid fixed-direction financial kinds', () => {
@@ -122,6 +254,43 @@ describe('invalid fixed-direction financial kinds', () => {
     const create = toActivityCreate(transaction, { accountId: ACCOUNT, runId: RUN });
     expect(create.activityType).toBe(activityType);
     expect(create.needsReview).toBe(true);
+  });
+});
+
+/**
+ * Wealthfolio 3.8 changed how the host derives the gross amount when an
+ * activity carries `fee`/`tax`: it now treats the stored `amount` as the net
+ * final cash figure and adds `fee + tax` back to get the gross, instead of
+ * subtracting them from a gross `amount` (3.7). That reversal only matters for
+ * an activity that actually sets those fields — this addon never does, because
+ * every commission, tax or bank-charged interest is its own separate
+ * `FEE`/`TAX` activity, never a field on top of a purchase or withdrawal. This
+ * pins that invariant so a future change cannot start setting them without a
+ * test failing here first.
+ */
+describe('fee y tax nunca se escriben en una actividad', () => {
+  it.each([
+    TransactionKind.expense,
+    TransactionKind.income,
+    TransactionKind.fee,
+    TransactionKind.tax,
+    TransactionKind.interest,
+    TransactionKind.refund,
+    TransactionKind.internal_transfer,
+    TransactionKind.credit_card_payment,
+    TransactionKind.cash_advance,
+    TransactionKind.unknown,
+  ])('%s no lleva fee ni tax en el ActivityCreate', (kind) => {
+    const transaction = makeTransaction({
+      date: '2026-03-01',
+      amount: kind === TransactionKind.income ? 45_000 : -45_000,
+      description: 'MOVIMIENTO DE PRUEBA',
+      kind,
+      direction: kind === TransactionKind.income ? Direction.in : Direction.out,
+    });
+    const create = toActivityCreate(transaction, { accountId: ACCOUNT, runId: RUN });
+    expect(create).not.toHaveProperty('fee');
+    expect(create).not.toHaveProperty('tax');
   });
 });
 
