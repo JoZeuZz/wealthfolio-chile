@@ -1,6 +1,6 @@
 {
   "name": "wealthfolio-chile-addon",
-  "version": "0.2.0-rc.4",
+  "version": "0.2.0-rc.5",
   "description": "Wealthfolio Chile — importación de cartolas bancarias chilenas, conciliación, cuotas e insights de gasto",
   "type": "module",
   "main": "dist/addon.js",
