@@ -5,9 +5,8 @@ actualizamos.
 
 Investigado el **2026-08-05** contra el código real del repositorio, no contra
 documentación de terceros. Referencia actual **v3.7.0**, verificada el
-2026-09-03 contra checkout y host real. El 2026-09-07 apareció v3.8.0; se
-registra abajo, pero no se migra ni se le atribuye compatibilidad sin revisión
-separada.
+2026-09-03 contra checkout y host real. El 2026-09-07 apareció v3.8.0; el delta
+3.7.0→3.8.0 se investigó y se migró el tooling el 2026-09-09 (ver más abajo).
 
 ---
 
@@ -17,27 +16,219 @@ separada.
 | --- | --- |
 | Repositorio | `wealthfolio/wealthfolio` |
 | Release estable más reciente | **v3.8.0** (2026-09-07) |
-| Release de referencia validada | **v3.7.0** (2026-08-19) |
+| Release de referencia validada | **v3.7.0** (2026-08-19) — sigue siendo el mínimo host soportado |
 | Licencia del core | **AGPL-3.0** |
 | Licencia de `@wealthfolio/addon-sdk` | **MIT** |
 | Licencia de `@wealthfolio/ui` | **MIT** |
-| SDK usado | `@wealthfolio/addon-sdk@3.7.0` |
+| SDK usado para build | `@wealthfolio/addon-sdk@3.8.0` (tipos; `minWealthfolioVersion` se mantiene en `3.7.0`) |
 | Node de upstream | 24 (`.node-version`) |
 | Gestor de paquetes | `pnpm@10.33.4` |
-| Imagen Docker | `wealthfolio/wealthfolio:3.7.0` (multi-arch amd64/arm64) — **sin la `v`**: upstream etiqueta en git con `v3.7.0` y publica en Docker Hub como `3.7.0` |
+| Imagen Docker de referencia | `wealthfolio/wealthfolio:3.7.0` (multi-arch amd64/arm64) — **sin la `v`**: upstream etiqueta en git con `v3.7.0` y publica en Docker Hub como `3.7.0` |
 | Checkout local | `.upstream/wealthfolio` (ignorado por Git) |
 
-### v3.8.0 detectada, no migrada
+### v3.8.0 — migración de tooling controlada (2026-09-09)
 
-GitHub publicó `v3.8.0` el 2026-09-07 y npm reportó
-`@wealthfolio/addon-sdk@3.8.0` el mismo día. El addon conserva SDK,
-`minWealthfolioVersion`, imagen Docker y checkout de referencia en 3.7.0. Las
-correcciones de Financial Costs se validaron sólo contra ese host. Evaluar el
-diff 3.7→3.8, migrar dependencias y ejecutar smoke en 3.8 es un bloque futuro,
-no parte del release candidate actual.
+GitHub publicó `v3.8.0` el 2026-09-07 y npm reportó `@wealthfolio/addon-sdk@3.8.0`,
+`@wealthfolio/ui@3.8.0` y `@wealthfolio/addon-dev-tools@3.8.0` el mismo día.
 
-Fuentes: https://github.com/wealthfolio/wealthfolio/releases/tag/v3.8.0 y
-registro npm de `@wealthfolio/addon-sdk` consultado con `pnpm view`.
+Tras leer el diff real `v3.7.0..v3.8.0` de `packages/addon-sdk`, `packages/ui`,
+`packages/addon-dev-tools` y de `crates/core/src/activities` +
+`crates/core/src/portfolio` (ver tabla de delta abajo), se determinó que
+ninguna API 3.8-only es necesaria hoy para el comportamiento actual del addon.
+Se migró entonces sólo el **tooling de build**:
+
+| Qué | Antes | Ahora |
+| --- | --- | --- |
+| `@wealthfolio/addon-sdk` (dev+peer) | `^3.7.0` | `^3.8.0` |
+| `@wealthfolio/ui` (dev+peer) | `^3.7.0` | `^3.8.0` |
+| `@wealthfolio/addon-dev-tools` (dev) | `^3.7.0` | `^3.8.0` |
+| `manifest.json: sdkVersion` | `3.7.0` | `3.8.0` |
+| `manifest.json: minWealthfolioVersion` | `3.7.0` | **`3.7.0` (sin cambio)** |
+| `manifest.json: hostDependencies` (addon-sdk/ui) | `^3.7.0` | `^3.8.0` (test `manifest-contract.test.ts` exige que sea igual a `peerDependencies`) |
+
+Esto es deliberado: `sdkVersion` es lo que se usó para *construir* el addon
+(sólo produce un warning si difiere, `validateAddonCompatibility` en
+`apps/frontend/src/addons/addons-core.ts`); `minWealthfolioVersion` es el único
+gate duro (`enforce_min_wealthfolio_version`,
+`crates/core/src/addons/service.rs`) y expresa el mínimo *real* que el addon
+necesita — que sigue siendo 3.7.0 porque no se usa ninguna superficie 3.8-only.
+El propio test de contrato (`addon/tests/manifest-contract.test.ts`) ya
+verificaba `minWealthfolioVersion <= sdkVersion`, así que esta combinación
+—build con SDK 3.8, mínimo de host 3.7— es exactamente el patrón que el
+proyecto anticipaba.
+
+Consecuencia práctica de que `ActivityCreate.status`/`.needsReview` pasaran de
+undeclared (3.7) a tipados oficialmente en 3.8: el tipo local
+`ReviewableActivityCreate` (`addon/src/core/mapping/activities.ts`) dejó de
+declarar `needsReview` (ahora lo hereda del SDK) y sigue restringiendo `status`
+a `'DRAFT'` únicamente — el SDK 3.8 lo tipa como `POSTED | PENDING | DRAFT |
+VOID`, y aceptar la unión completa habría permitido escribir `'POSTED'`/`'VOID'`
+sin error de tipo, perdiendo la barrera de compilación sobre una decisión
+financiera real (si la fila cuenta en balance/valuación/performance). Revisado
+por `wf-code-reviewer` y corregido antes de cerrar esta fase.
+
+**Validado contra un contenedor Wealthfolio 3.8.0 real** (efímero, sin auth,
+datos 100% sintéticos, destruido al terminar — ver
+[HOST_VALIDATION.md](HOST_VALIDATION.md)): el addon carga, el manifest se
+acepta, `accounts.getAll`, `activities.search`, `activities.saveMany` y
+`ctx.api.storage` funcionan igual que en 3.7.0. Import sintético de Banco de
+Chile (cuenta + tarjeta), dedupe en reimportación, refund, comisión, interés
+por mora, pago de tarjeta y cuotas se comportaron exactamente igual que bajo
+3.7.0 — cifras del dashboard verificadas a mano.
+
+Fuentes: https://github.com/wealthfolio/wealthfolio/releases/tag/v3.8.0,
+`pnpm view @wealthfolio/addon-sdk versions` / `@wealthfolio/ui` /
+`@wealthfolio/addon-dev-tools`, y diff real de `.upstream/wealthfolio` entre
+los tags `v3.7.0` y `v3.8.0`.
+
+---
+
+## Qué cambió de v3.7.0 a v3.8.0
+
+Leído en el diff real (`git -C .upstream/wealthfolio diff v3.7.0 v3.8.0`) de
+`packages/addon-sdk`, `packages/ui`, `packages/addon-dev-tools`,
+`crates/core/src/activities` y `crates/core/src/portfolio`. Sólo lo relevante
+para un addon; se omiten cambios internos del host sin superficie pública.
+
+### SDK del addon (`packages/addon-sdk`)
+
+| Cambio | Nos afecta |
+| --- | --- |
+| `ActivityCreate`/`ActivityUpdate` tipan oficialmente `status?: ActivityStatus` y `needsReview?: boolean` | Sí — dejamos de necesitar el cast local para esos dos campos (`idempotencyKey` sigue undeclared) |
+| Nueva `ExchangeRatesAPI.getRatesForDates(pairs)`: tasas históricas reales por `(fromCurrency, toCurrency, date)`, nunca rechaza (cada resultado trae `rate: number \| null` + `error: string \| null`) | Ver veredicto FX abajo — **DEFER** |
+| Nueva `SpendingAPI` (`isEnabled`, `getCategories`, `getRules`, `saveRule`, `deleteRule`, `rerunRules`) tras permiso `spending` | Ver veredicto Spending abajo — **DEFER** |
+| Nueva API de traducciones (`registerTranslations`, `useAddonTranslation`) | **NOT RELEVANT** — el addon ya está en español fijo, sin necesidad de i18n multi-idioma |
+| `ActivityImport.isExternal?: boolean` (frontera de flujo externo) | No usamos `activities.import()`, usamos `saveMany`; sin impacto |
+| Límite de `storage` por valor: de ~1 MiB a ~250 KB (`MAX_ADDON_STORAGE_SYNC_PAYLOAD_LEN`) | Sin impacto: nuestro propio límite (`MAX_VALUE_BYTES`, `addon/src/services/storage.ts:12`) ya es 200 000 bytes, por debajo de ambos umbrales |
+| `ActivitySearchFilters` publicado sigue sin `dateFrom`/`dateTo` | Sin cambio — seguimos necesitando el cast en `activityDateFilters` |
+| `ActivitiesAPI` sigue sin `link`/`unlink`/`transfer-pair` | Sin cambio — [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md) sigue vigente |
+
+### `@wealthfolio/ui` y `@wealthfolio/addon-dev-tools`
+
+Sin cambios breaking. `@wealthfolio/ui` suma `TickerAvatar` con props de
+mercado (`exchangeMic`, `instrumentType`) y helpers de logos por ticker,
+`onEscapeKeyDown` en `DialogContent`, un segundo parámetro opcional en
+`MoneyInput.onValueChange` — el addon no importa componentes de
+`@wealthfolio/ui` hoy, así que ninguno aplica. Peer dependency de React sin
+cambio (`^19.2.4`). `addon-dev-tools` sólo actualizó plantillas de versión, sin
+cambios de CLI/validación. Build target del host (`chrome107, edge107,
+firefox104, safari16`) sin cambio.
+
+### Semántica financiera del host (`crates/core`)
+
+**"Authoritative final cash semantics"** (commit `f69936821` y
+`crates/core/src/activities/activity_cash_migration.rs`, nuevo en 3.8): cuando
+una actividad tiene `fee`/`tax`, el host ahora trata el `amount` guardado como
+el **neto final** y deriva el bruto sumando `fee+tax` de vuelta
+(`resolve_cash_inputs()`, `crates/core/src/portfolio/economic_events.rs`) — en
+3.7 era al revés (`cash effect = amount - fee - tax`, ver
+`holdings_calculator/handlers/cash_flows.rs`).
+
+**No afecta a Wealthfolio Chile**: `toActivityCreate`
+(`addon/src/core/mapping/activities.ts`) nunca escribe `fee` ni `tax` en el
+`ActivityCreate` — cada comisión, impuesto o interés bancario es su **propia
+actividad** (`FEE`/`TAX`), nunca un campo adicional sobre una compra o retiro.
+Con `fee`/`tax` ausentes, la fórmula de 3.8 se reduce a `gross = final_amount`,
+idéntica a 3.7. Confirmado en código (revisión financiera independiente,
+2026-09-09) y en runtime contra un host 3.8.0 real: las columnas `Fee`/`Tax` de
+`Activities` muestran `CLP 0` en todas las filas creadas por el addon.
+
+Tipos permitidos por cuenta `CREDIT_CARD`
+(`account_activity_validation_message`) y comportamiento de subtipos `CREDIT`
+(`REFUND`/`REBATE`/`BONUS`) respecto a `contributions`: **sin cambios**,
+verificado línea a línea contra ambos tags.
+
+**Hipótesis descartada por la revisión financiera independiente**: se investigó
+si la migración one-time de datos legacy (`activity_cash_migration.rs`,
+`is_legacy_draft`) promueve `status: DRAFT` a `POSTED` al actualizar un host a
+3.8 — lo que habría hecho que filas `unknown` del addon, excluidas a propósito
+de todo cálculo, empezaran a contar. **No lo hace**: el propio módulo lo
+documenta ("the migration never changes lifecycle `status`",
+`activity_cash_migration.rs:9-11`), `ActivityFinalCashMigrationUpdate` no tiene
+campo `status` (`activities_model.rs`), y el `UPDATE` real
+(`storage-sqlite/src/activities/repository.rs`) sólo toca `amount`,
+`needs_review`, `metadata`. `is_legacy_draft` alimenta únicamente
+`needs_review`. Las filas `unknown` del addon ya llevan `needsReview: true`
+además de `status: DRAFT`, así que ni siquiera entran a la rama que la
+migración backfillea. No hay nada que corregir aquí.
+
+**Hallazgo real, corregido en esta fase**: `INTEREST` en una cuenta
+`CREDIT_CARD` cambia de signo entre 3.7 y 3.8 en la contabilidad *interna* del
+host (`ActivityEconomicsResolver::resolve_cash_with_account_context`, nuevo en
+`crates/core/src/portfolio/economic_events.rs`, trata un `INTEREST` en tarjeta
+como cargo; 3.7 no distingue por tipo de cuenta). Investigando esto se encontró
+que la lectura propia del addon (`activityFlowSign`/`activityDetailsToSignedMoney`
+en `core/mapping/activities.ts`) tenía el mismo problema **de forma
+independiente de la versión del host**: un `INTEREST` crudo en una tarjeta
+siempre se leía como ingreso, nunca como costo financiero, aunque
+`kindFromActivityType` ya considera `accountType` para el caso análogo de
+`CREDIT`. Corregido con TDD en tres rondas, cada una verificada por
+`wf-financial-reviewer` de forma independiente antes de la siguiente:
+
+1. **Lectura.** `activityFlowSign`/`activityDirection`/`resolveActivityDirection`/
+   `activityDetailsToSignedMoney` aceptan `accountType` opcional; `INTEREST` en
+   `CREDIT_CARD` se lee como costo financiero (`direction: out`) por defecto,
+   tanto bajo 3.7 como bajo 3.8 — el default no depende de la versión del host.
+2. **Escritura.** La primera ronda dejaba un hueco: `naturalActivityType`
+   puede producir `kind: interest, direction: in` (una regla de usuario sin
+   filtro de dirección) también en una cuenta `CREDIT_CARD`, y el nuevo default
+   de lectura invertía esa fila — un interés que el propio addon escribió como
+   ingreso volvía como gasto. `substituteForCreditCard` ahora enruta esa
+   combinación a `CREDIT` (sustituido, `needsReview: true`), igual que ya hace
+   con un crédito de tipo desconocido, así que la escritura nunca vuelve a
+   producir un `INTEREST` crudo entrante en tarjeta. `services/activity-index.ts`
+   (el índice de duplicados) tampoco propagaba `accountType`; ahora lo resuelve
+   una vez por cuenta vía `ctx.api.accounts.getAll()`.
+3. **Integridad histórica.** El default de lectura de la ronda 1 es correcto
+   para una fila *ajena* (editada a mano, importada por otra vía), pero
+   reinterpretaba de forma retroactiva una fila que el propio addon **ya**
+   había escrito como ingreso antes de que la sustitución de la ronda 2
+   existiera (0.2.0-rc.4 y anteriores) — esas filas llevan `metadata.dir: 'in'`
+   grabado, y el nuevo default las invertía sin mirarlo.
+   `resolveActivityDirection` ahora consulta `metadata.dir` primero para este
+   caso, igual que ya hace para `UNKNOWN`/`ADJUSTMENT`/`SPLIT`, y sólo cae al
+   default de cargo cuando no hay metadata propia o la caché quedó obsoleta
+   (`metadataCacheIsCurrent`, la misma señal que ya usa `reconcileKind` para
+   `kind`) — una persona que retipea la fila en Wealthfolio sigue teniendo
+   la última palabra.
+
+Tests en `tests/activity-mapping.test.ts` (`activity flow sign`) y
+`tests/activity-index.test.ts`.
+
+Validado además contra la instancia **3.7.0 autenticada** (login real, no el
+smoke 3.8 sin auth): import de `banco-chile-tarjeta.csv` a una cuenta
+`CREDIT_CARD`, 7/7 creados incluido el `INTEREST` de mora, leído como gasto en
+el panel. Detalle en [HOST_VALIDATION.md](HOST_VALIDATION.md) § *Sesión 5*.
+
+**Límite conocido, no cerrado en esta fase**: para una fila legacy real (poco
+probable hoy — exige una regla de usuario ya configurada con `set_kind` sin
+filtro de dirección, y este proyecto no tiene todavía ninguna cartola real
+importada por ningún usuario), el paso 3 hace que el addon y un host **3.8**
+disientan sobre el signo: 3.8 la lee como cargo en su propia contabilidad
+(`resolve_cash_with_account_context`) mientras el addon, con `metadata.dir`
+válido, la sigue leyendo como ingreso. Bajo 3.7 no hay disenso (el host no
+distingue por tipo de cuenta). Ninguna regla de lectura puede satisfacer ambos
+hosts a la vez para esa fila — lo que la resolvería es una migración de datos
+que reescriba esas filas a `CREDIT` (lo que la escritura ya hace hoy para
+casos nuevos), no otra regla de lectura. Pendiente para el bloque de migración
+a 3.8, junto con un gate que detecte `activityType: INTEREST` +
+`metadata.dir: 'in'` en cuentas `CREDIT_CARD` antes de subir
+`minWealthfolioVersion`.
+
+Migraciones SQL reales entre 3.7.0 y 3.8.0: sólo dos, ninguna toca
+`activities`/`accounts`/balances — `2026-08-09-000001_rule_amount_condition`
+(agrega condiciones de monto a `spending_categorization_rules`) y
+`2026-09-02-000001_asset_logos` (logos de assets). Sin relación con este addon.
+
+### Veredicto de APIs nuevas de 3.8
+
+| API | Veredicto | Razón |
+| --- | --- | --- |
+| `ExchangeRatesAPI.getRatesForDates` | **DEFER** | Es real y resuelve exactamente lo que bloqueaba la conversión histórica (tasa por fecha exacta, nunca rechaza, `rate: null` explícito cuando no hay dato). Pero adoptarla implica diseñar conversión multi-moneda en el panel — pantallas, invariantes de redondeo, decisión de qué hacer con `error`/`rate: null` — que es un cambio de producto, no un ajuste de tooling. Además exigiría subir `minWealthfolioVersion` a 3.8.0. Se documenta el hallazgo; el diseño queda para una fase propia, no se implementa aquí para no ampliar el alcance de una migración de baseline. |
+| `SpendingAPI` (`getCategories`/`getRules`/`saveRule`/`deleteRule`/`rerunRules`) | **DEFER** | Es una primitiva *genérica* de categorización — nuestro motor (`core/rules`, `core/categories`, `services/rules`) codifica **glosas bancarias chilenas concretas** (Transbank, CMR, Redcompra, avances en efectivo) que `SpendingAPI` no conoce ni podría sin que se las enseñemos igual. No hay ganancia arquitectónica migrando reglas que ya funcionan y están probadas (96 % líneas en `core/rules`) a una API genérica que exigiría el mismo trabajo de mapeo. Reevaluar sólo si upstream publica taxonomías o reglas específicas de LatAm/Chile. |
+| Traducciones (`registerTranslations`/`useAddonTranslation`) | **NOT RELEVANT** | El addon es monolingüe en español por diseño (cartolas, glosas y usuario objetivo son chilenos). No hay necesidad de i18n multi-idioma hoy. |
+| Transfer pairing (`link`/`unlink`/`transfer-pair`) | **NOT RELEVANT (sigue sin existir)** | Ni el paquete publicado ni el puente del sandbox lo exponen en 3.8. [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md) sigue vigente sin cambios; no hay nada que adoptar. |
+| `status`/`needsReview` tipados en `ActivityCreate` | **ADOPT NOW** | Ya se hizo: simplifica `ReviewableActivityCreate` sin cambiar comportamiento, cero riesgo, sin subir `minWealthfolioVersion`. |
 
 Wealthfolio es Tauri + React + Rust. El backend vive en `crates/`, el frontend
 en `apps/frontend`, el servidor web en `apps/server` y los paquetes públicos en

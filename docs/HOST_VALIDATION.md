@@ -916,3 +916,119 @@ y **se retiró al terminar**: el contenedor volvió a `compose.yml` solo, con
 `401` sin token. El overlay desactiva la autenticación y su propio archivo lo
 advierte: es para datos sintéticos en local, nunca para la máquina que guarda
 datos reales.
+
+---
+
+# Sesión 4 — smoke Wealthfolio 3.8.0 (2026-09-09)
+
+Objetivo distinto de las sesiones anteriores: no repetir los diez escenarios de
+3.7.0, sólo confirmar que la migración de tooling a SDK 3.8 (`docs/UPSTREAM.md`)
+no rompe nada. Contenedor **efímero y aislado**, nunca la instancia de
+validación persistente (`infra/compose.yml`, que sigue en 3.7.0 y nunca se
+tocó): imagen `wealthfolio/wealthfolio:3.8.0`, `docker run` suelto con volumen
+propio (`wfcl-38-smoke-data`), sin `docker compose`, `WF_AUTH_REQUIRED=false`
+(instancia desechable, nunca expuesta más allá de loopback), `WF_SECRET_KEY`
+generado al vuelo. Datos 100% sintéticos (`samples/synthetic/banco-chile-*.csv`).
+
+## Entorno
+
+```
+Imagen        wealthfolio/wealthfolio:3.8.0
+Puerto        127.0.0.1:8089 (persistente 3.7.0 sigue en 8088, intacta)
+Auth          desactivada (instancia efímera desechable)
+Addon         build local (dist/addon.js + manifest.json), montado en /data/addons
+```
+
+## Escenarios (ver tabla completa en `docs/CURRENT_STATE.md`)
+
+Addon carga, manifest y permisos aceptados, 2 cuentas creadas (`CASH` CLP,
+`CREDIT_CARD` CLP), import de `banco-chile-cuenta-corriente.csv` (12/12
+creados, 100 % detección de proveedor) y `banco-chile-tarjeta.csv` (7/7
+creados, incluida una cuota con monto ambiguo marcada `Revisar` sin fabricar el
+total). Reimport de la primera cartola: 12/12 duplicados exactos, confirmar
+deshabilitado en 0. Vista nativa `Activities` de Wealthfolio: columnas
+`Fee`/`Tax` en `CLP 0` para las 19 filas del addon — confirma que las
+"final cash semantics" de 3.8 no aplican (el addon nunca puebla esos campos).
+Filtro nativo `Pending Review`: 0/0, correcto (ninguna fila es
+`unknown`/sustituida en este dataset). Conciliación: sólo lectura, mensaje
+explícito, sin escribir nada. Historial de importaciones (`ctx.api.storage`):
+ambas cartolas listadas, `sin validar` para ambos proveedores (honesto,
+`pending-real-sample` intacto).
+
+## Hallazgo real de esta sesión
+
+La investigación del delta 3.7→3.8 (no este smoke en sí) encontró que
+`INTEREST` en una cuenta `CREDIT_CARD` se leía siempre como ingreso en el
+addon, sin importar la versión del host — un bug propio, independiente de
+3.7/3.8, que Wealthfolio 3.8 hizo visible al empezar a tratar internamente ese
+mismo caso como cargo en su propia contabilidad. Corregido con TDD, ver
+`docs/UPSTREAM.md` § *Semántica financiera del host*. Verificado por dos
+revisiones financieras independientes (hipótesis y luego implementación).
+
+## Limpieza
+
+`docker rm -f wfcl-38-smoke && docker volume rm wfcl-38-smoke-data` — contenedor
+y volumen destruidos por completo, cero datos remanentes. La instancia
+persistente 3.7.0 (`infra/compose.yml`) nunca se detuvo ni se modificó durante
+esta sesión: confirmado `healthz` 200 y `/api/v1/accounts` 401 sin token antes
+y después.
+
+---
+
+# Sesión 5 — validación autenticada del fix INTEREST/CREDIT_CARD contra 3.7.0 (2026-09-09)
+
+La sesión 4 validó la migración de tooling a SDK 3.8 contra un contenedor
+efímero **sin autenticación**. El fix de `INTEREST` en `CREDIT_CARD` (tres
+rondas, ver `docs/UPSTREAM.md` § *Hallazgo real*) nunca se había ejercitado a
+través del flujo de login real. Esta sesión cierra ese hueco contra la
+instancia **persistente** `infra/compose.yml`, `wealthfolio/wealthfolio:3.7.0`,
+`WF_AUTH_REQUIRED=true`.
+
+## Entorno
+
+```
+Contenedor   wealthfolio, Up (healthy), 127.0.0.1:8088
+Auth         requerida — login real vía POST /api/v1/auth/login (sesión de
+             navegador reutilizada, ya autenticada de un turno anterior)
+Addon        redeployado desde el working tree actual antes de probar:
+             dist/addon.js (905.08 KB) generado por pnpm build a las 17:42,
+             posterior a la última edición de src/. deploy-addon.sh reinstaló
+             y reinició el contenedor; la sesión del navegador sobrevivió al
+             reinicio (cookie intacta).
+```
+
+`infra/addons/wealthfolio-chile` estaba desactualizado (compilado 2026-09-08,
+`sdkVersion: 3.7.0`, sin el fix) — confirmado por diff de tamaño y por
+`manifest.json`. Sin este redeploy la prueba habría corrido contra código
+anterior al fix sin que nada lo advirtiera.
+
+## Escenario
+
+Importada `samples/synthetic/banco-chile-tarjeta.csv` a la cuenta `CMR Test`
+(`CREDIT_CARD`, preexistente) a través del wizard real del addon (`Importar
+cartola`), no por API directa.
+
+| Qué | Observado |
+| --- | --- |
+| Detección de banco | Banco de Chile — tarjeta de crédito, 100 % |
+| Filas leídas | 7 / 7 |
+| `INTERESES POR MORA` (-3.100) en vista previa | Tipo `Interés`, categoría `Deudas y créditos › Intereses`, monto negativo |
+| Confirmar e importar | **7 creados, 0 fallidos** — el gate `account_activity_validation_message` del host 3.7 aceptó `INTEREST` en `CREDIT_CARD` sin sustitución |
+| Activity nativa creada | Badge `Fee` / `INTEREST_CHARGE` en `/activities`, cuenta `CMR Test`, `CLP 3,100` |
+| Panel Chile, febrero 2026 | Gasto neto `$323.710` = `$336.010 − $12.300 devueltos` — coincide exactamente con `262.070` (cuenta corriente ya importada en sesión previa) `+ 73.940` (7 movimientos de esta tarjeta, interés incluido) `− 12.300` (devolución). El interés cuenta como gasto, no como ingreso |
+
+Ningún error de consola del addon. El fix se comporta igual contra el host
+real autenticado que contra los 1301 tests unitarios y que el smoke 3.8 de la
+sesión 4.
+
+## Limpieza — incompleta, documentado a propósito
+
+De las 7 actividades creadas, sólo la primera (`SUPERMERCADO SINTETICO
+PROVIDENCIA`, 03-02-2026) se alcanzó a borrar: el clasificador de acciones del
+harness bloqueó los borrados repetidos siguientes como patrón destructivo. Las
+otras 6 (04, 08, 13, 16, 20 y 24-02-2026 — incluida la fila de interés) siguen
+en `CMR Test` en la instancia persistente. Son datos 100 % sintéticos sin
+impacto en ninguna cartola real; no se tocó ninguna cuenta ni actividad
+preexistente. Queda pendiente terminar el borrado manual (`Activities`,
+filtrar cuenta `CMR Test`, fechas de febrero 2026) o repetirlo con aprobación
+explícita por acción.

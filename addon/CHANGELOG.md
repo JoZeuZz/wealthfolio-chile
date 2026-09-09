@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.0-rc.5 — 2026-09-09
+
+### Corregido
+
+- **`INTEREST` crudo en una cuenta de tarjeta se leía siempre como ingreso.**
+  El bug era independiente de la versión del host: `activityFlowSign` no
+  distinguía por tipo de cuenta, así que un interés cobrado que llegó a la
+  tarjeta como `INTEREST` (edición manual en Wealthfolio, u otra vía) contaba
+  como ingreso en vez de costo financiero. Corregido en tres partes: (1) la
+  lectura ahora trata un `INTEREST` en `CREDIT_CARD` como cargo por defecto;
+  (2) la escritura deja de producir esa combinación — un interés entrante
+  clasificado por una regla de usuario en cuenta tarjeta se sustituye a
+  `CREDIT` en vez de escribirse como `INTEREST` crudo, y el índice de
+  duplicados propaga el tipo de cuenta igual que ya lo hacía el resto del
+  pipeline; (3) una fila que el propio addon ya había escrito como ingreso en
+  una versión anterior a este fix conserva esa dirección mientras la caché de
+  metadata siga vigente, en vez de invertirse por el nuevo default. Ver
+  [docs/UPSTREAM.md](../docs/UPSTREAM.md) § *Semántica financiera del host*
+  para el detalle y el límite conocido pendiente para la migración a 3.8.
+
+### Cambiado
+
+- Tooling de build migrado a `@wealthfolio/addon-sdk`/`@wealthfolio/ui`/
+  `@wealthfolio/addon-dev-tools` 3.8.0. `minWealthfolioVersion` se mantiene en
+  3.7.0: ninguna superficie 3.8-only se usa. Ver
+  [docs/UPSTREAM.md](../docs/UPSTREAM.md).
+
 ## 0.1.1 — 2026-08-06
 
 Estabilización de las fronteras con el host. Sin funcionalidad nueva de cara al

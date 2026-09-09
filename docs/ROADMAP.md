@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | F0 | Discovery de upstream | ✅ [UPSTREAM.md](UPSTREAM.md) |
 | F1 | Bootstrap del repositorio | ✅ |
-| F2 | Entorno Docker de Wealthfolio | ✅ ejecutado contra 3.6.2 y 3.7.0 |
+| F2 | Entorno Docker de Wealthfolio | ✅ ejecutado contra 3.6.2, 3.7.0 (referencia) y 3.8.0 (smoke) |
 | F3 | Scaffold del addon | ✅ CLI oficial, 3 rutas, permisos mínimos |
 | F4 | Modelo financiero canónico | ✅ |
 | F5 | Ingesta CSV / TXT / XLSX / XLS | ✅ |
@@ -34,7 +34,7 @@
 | F12 | Conciliación de transferencias internas | ⚠️ motor ✅ (emparejamiento mutuo iterativo, ambigüedad explícita), pantalla de revisión ✅ de sólo lectura. Aplicar requiere una API que el SDK no expone — ADR 0005 |
 | F13 | Conciliación de pagos de tarjeta | ⚠️ motor ✅, visible en la pantalla de revisión |
 | F14 | Normalización de comercios | ✅ |
-| F15 | Categorización y reglas | ⚠️ motor ✅ + 24 reglas aplicadas, falta editor |
+| F15 | Categorización y reglas | ✅ motor + reglas predefinidas + editor de reglas propias (CRUD, vista previa del efecto) en `Configuración`. No recategoriza retroactivamente movimientos ya importados — sólo ajusta lecturas futuras |
 | F16 | Motor de cuotas | ✅ |
 | F17 | Panel Chile | ✅ caja y gasto separados, devoluciones explícitas, una vista por moneda |
 | F18 | Insights | ✅ |
@@ -67,15 +67,15 @@ Lo único que separa el release candidate de un `0.2.0`.
 
 Prioridad: BancoEstado (CuentaRUT) primero — es la cuenta más común.
 
-### 2. Pantalla de ajustes
+### 2. Recategorizar movimientos ya importados
 
-Hay tres opciones que se leen de `storage` y ningún lugar donde editarlas:
-`verboseLogging`, `transferWindowDays` y las reglas predefinidas desactivadas.
+`Configuración` (`SettingsPage`) ya cubre `verboseLogging`, `transferWindowDays`,
+activar/desactivar reglas predefinidas y CRUD de reglas propias con vista previa
+del efecto. Lo único que sigue sin existir: una regla nueva o editada no
+reclasifica los movimientos que Wealthfolio ya tiene guardados — sólo cambia
+cómo se leen las próximas importaciones.
 
-- [ ] CRUD de reglas con vista previa del efecto
-- [ ] Activar/desactivar reglas predefinidas
-- [ ] Editor del árbol de categorías
-- [ ] Recategorizar movimientos ya importados
+- [ ] Recategorizar movimientos ya importados al guardar una regla
 
 ### 3. Aplicar una conciliación
 
@@ -92,7 +92,11 @@ la frontera queda en `services/reconciliation.ts`.
 - [ ] Exportar a CSV
 - [ ] Más bancos: Santander, BCI, Scotiabank, Itaú, Tenpo, Mercado Pago
 - [ ] UF / CLF como moneda de primera clase
-- [ ] Conversión entre monedas, si el SDK publica tipos históricos
+- [ ] Conversión entre monedas — Wealthfolio 3.8 publicó `ExchangeRatesAPI.getRatesForDates`
+      (tasa histórica real, ver [UPSTREAM.md](UPSTREAM.md) § *veredicto de APIs
+      nuevas*); el bloqueo técnico ya no existe, lo que falta es diseñar la
+      conversión en el panel (redondeo, `rate: null`, subir `minWealthfolioVersion`
+      a 3.8.0) — deliberadamente diferido, no bloqueado
 - [ ] Fintoc, si aparecen credenciales
 
 ## Bloqueos conocidos
@@ -102,5 +106,5 @@ la frontera queda en `services/reconciliation.ts`.
 | ~~Sin Docker en esta máquina~~ | Resuelto. F2 ejecutada contra `3.6.2` y después contra `3.7.0` | — |
 | Un addon no puede enlazar transferencias | La atribución de rendimiento del host queda `partial` en cuentas con transferencias importadas | [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md); proponer API upstream |
 | Sin cartolas reales | F8–F10 sin validar con banco real; es lo que mantiene la versión en release candidate | Descargar una de cada banco |
-| El SDK no publica tipos de cambio históricos | El panel no puede convertir entre monedas y muestra un bloque por moneda | Esperar API upstream |
-| Sin API de spending en el SDK | Categorización duplicada | [ADR 0003](adr/0003-categorizacion-propia.md); proponer API upstream |
+| El panel no convierte entre monedas | Muestra un bloque por moneda en vez de un total único | Ya no es un bloqueo de API — 3.8 publicó `ExchangeRatesAPI.getRatesForDates`. Es una decisión de diseño diferida a propósito, ver [UPSTREAM.md](UPSTREAM.md) |
+| `SpendingAPI` del SDK es genérica, no chilena | 3.8 publicó `ctx.api.spending`, pero no conoce Transbank/CMR/Redcompra/avances en efectivo | [ADR 0003](adr/0003-categorizacion-propia.md) sigue vigente — evaluado y diferido, ver [UPSTREAM.md](UPSTREAM.md) |
