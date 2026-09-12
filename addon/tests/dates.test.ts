@@ -80,6 +80,31 @@ describe('parseStatementDate', () => {
       expect(() => parseStatementDate('03/sep')).toThrow(DateParseError);
     });
 
+    /**
+     * Banco de Chile cuenta corriente (calibrado 2026-09): la celda de fecha
+     * es puro numérico, `dd/mm`, también sin año — la misma forma que
+     * BancoEstado con nombre de mes, pero sin letras. Mismo mecanismo de
+     * `yearHint`, ahora también para el par numérico.
+     */
+    it('resuelve un día/mes numérico sin año usando el período declarado (DMY)', () => {
+      const yearHint = { from: '2025-09-01', to: '2025-09-30' };
+      expect(parseStatementDate('03/09', { yearHint }).date).toBe('2025-09-03');
+    });
+
+    it('resuelve un día/mes numérico sin año usando el período declarado (MDY)', () => {
+      const yearHint = { from: '2025-09-01', to: '2025-09-30' };
+      expect(parseStatementDate('09/03', { order: 'MDY', yearHint }).date).toBe('2025-09-03');
+    });
+
+    it('rechaza un día/mes numérico sin año cuando no hay yearHint', () => {
+      expect(() => parseStatementDate('03/09')).toThrow(DateParseError);
+    });
+
+    it('rechaza un día/mes numérico sin año fuera del período declarado', () => {
+      const yearHint = { from: '2025-09-01', to: '2025-09-24' };
+      expect(() => parseStatementDate('30/09', { yearHint })).toThrow(DateParseError);
+    });
+
     it('resolves the year from a same-year period', () => {
       const yearHint = { from: '2025-09-01', to: '2025-09-24' };
       expect(parseStatementDate('03/sep', { yearHint }).date).toBe('2025-09-03');
@@ -125,6 +150,122 @@ describe('parseStatementDate', () => {
       expect(() =>
         parseStatementDate('03/xyz', { yearHint: { to: '2025-09-24' } }),
       ).toThrow(DateParseError);
+    });
+  });
+
+  /**
+   * `DateParseError` no puede citar la celda (ver rows.ts / privacy.test.ts),
+   * pero un calibrador necesita distinguir *por qué* falló sin verla. `kind`
+   * dice cuál de las seis lecturas se rechazó; `shape`, sólo para el caso "no
+   * coincide con ninguna forma conocida", dice si el texto era puro dígito y
+   * de qué largo — la diferencia entre un serial de Excel filtrado como texto
+   * (5-6 dígitos) y una fecha en un idioma o formato que el parser no
+   * contempla. Ninguno de los dos revela el valor.
+   */
+  describe('clasificación del error, sin citar la celda', () => {
+    function kindOf(fn: () => unknown): { kind: string; shape?: string } {
+      try {
+        fn();
+        throw new Error('se esperaba que lanzara DateParseError');
+      } catch (error) {
+        if (!(error instanceof DateParseError)) throw error;
+        return { kind: error.kind, ...(error.shape ? { shape: error.shape } : {}) };
+      }
+    }
+
+    it('un serial de Excel filtrado como texto: forma no reconocida, dígitos medianos', () => {
+      expect(kindOf(() => parseStatementDate('45901'))).toEqual({
+        kind: 'unrecognised-format',
+        shape: 'solo-digitos-mediano',
+      });
+    });
+
+    it('un año suelto de 4 dígitos: forma no reconocida, dígitos cortos', () => {
+      expect(kindOf(() => parseStatementDate('2026'))).toEqual({
+        kind: 'unrecognised-format',
+        shape: 'solo-digitos-corto',
+      });
+    });
+
+    it('una cadena de más de 6 dígitos: forma no reconocida, dígitos largos', () => {
+      expect(kindOf(() => parseStatementDate('20260203'))).toEqual({
+        kind: 'unrecognised-format',
+        shape: 'solo-digitos-largo',
+      });
+    });
+
+    it('texto sin ninguna forma de fecha: forma no reconocida, sin dígitos', () => {
+      expect(kindOf(() => parseStatementDate('no es fecha'))).toEqual({
+        kind: 'unrecognised-format',
+        shape: 'con-letras',
+      });
+    });
+
+    /**
+     * Estas tres formas distinguen por qué el patrón numérico no calzó
+     * cuando el texto sí trae separadores: espacio pegado al separador (fix
+     * trivial y seguro), un número de segmentos que no es 3 (una fecha con
+     * hora pegada por "/" en vez de ":"), o un segmento fuera del rango de
+     * dígitos que un día/mes/año puede tener. Ninguna imprime el valor.
+     */
+    it('separador con espacio alrededor: forma no reconocida, separadores con espacios', () => {
+      expect(kindOf(() => parseStatementDate('03 / 09 / 2025'))).toEqual({
+        kind: 'unrecognised-format',
+        shape: 'separadores-con-espacios',
+      });
+    });
+
+    it('dos segmentos donde el segundo no cabe como mes ni como día: forma no reconocida, dos segmentos', () => {
+      // "03/09" sin año se reconoce como día/mes (ver el describe de más abajo);
+      // esto prueba el caso que sigue sin reconocerse: el segundo segmento no
+      // es un mes de 1-2 dígitos, es un año.
+      expect(kindOf(() => parseStatementDate('03/2025'))).toEqual({
+        kind: 'unrecognised-format',
+        shape: 'dos-segmentos',
+      });
+    });
+
+    it('cuatro segmentos separados: forma no reconocida, cuatro segmentos', () => {
+      expect(kindOf(() => parseStatementDate('03/09/2025/14'))).toEqual({
+        kind: 'unrecognised-format',
+        shape: 'cuatro-segmentos',
+      });
+    });
+
+    it('un segmento con más dígitos de los que un día admite: forma no reconocida, segmento fuera de rango', () => {
+      expect(kindOf(() => parseStatementDate('031/09/2025'))).toEqual({
+        kind: 'unrecognised-format',
+        shape: 'segmento-fuera-de-rango',
+      });
+    });
+
+    it('fecha calendáricamente imposible en ambas lecturas: inválida', () => {
+      expect(kindOf(() => parseStatementDate('31/02/2026'))).toEqual({
+        kind: 'invalid-calendar-date',
+      });
+    });
+
+    it('mes en español no reconocido: nombre de mes desconocido', () => {
+      expect(kindOf(() => parseStatementDate('03/xyz/2026'))).toEqual({
+        kind: 'unknown-month-name',
+      });
+    });
+
+    it('sin año y sin período declarado: falta el año', () => {
+      expect(kindOf(() => parseStatementDate('03/sep'))).toEqual({
+        kind: 'missing-year',
+      });
+    });
+
+    it('fuera del período declarado: fuera de rango', () => {
+      const yearHint = { from: '2025-09-01', to: '2025-09-24' };
+      expect(kindOf(() => parseStatementDate('30/sep', { yearHint }))).toEqual({
+        kind: 'outside-declared-period',
+      });
+    });
+
+    it('cadena vacía: vacía', () => {
+      expect(kindOf(() => parseStatementDate(''))).toEqual({ kind: 'empty' });
     });
   });
 });

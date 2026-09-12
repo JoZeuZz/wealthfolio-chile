@@ -44,6 +44,13 @@ export interface DateOrderEvidence {
 const NUMERIC = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/;
 
 /**
+ * `d/m` or `m/d`, no year — Banco de Chile's cuenta corriente cell shape.
+ * Ambiguous the same way its three-part cousin is; the missing year changes
+ * nothing about which field is the day.
+ */
+const NUMERIC_NO_YEAR = /^(\d{1,2})[-/.](\d{1,2})$/;
+
+/**
  * A clock suffix, dropped the same way `parseStatementDate` drops it.
  *
  * Without this an export that stamps `05/02/2026 10:31` matched nothing here:
@@ -62,7 +69,8 @@ export function resolveDateOrder(
   let ambiguousRows = 0;
 
   for (const raw of rawDates) {
-    const match = NUMERIC.exec(String(raw ?? '').trim().replace(TIME_SUFFIX, '').trim());
+    const cleaned = String(raw ?? '').trim().replace(TIME_SUFFIX, '').trim();
+    const match = NUMERIC.exec(cleaned) ?? NUMERIC_NO_YEAR.exec(cleaned);
     if (!match) continue;
     const a = Number(match[1]);
     const b = Number(match[2]);

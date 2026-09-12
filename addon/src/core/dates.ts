@@ -10,10 +10,70 @@
 /** A calendar date in `YYYY-MM-DD` form. */
 export type IsoDate = string;
 
+/** Which of the six readings rejected the cell — never *what* was in it. */
+export type DateParseErrorKind =
+  | 'empty'
+  | 'unrecognised-format'
+  | 'invalid-calendar-date'
+  | 'unknown-month-name'
+  | 'missing-year'
+  | 'outside-declared-period';
+
+/**
+ * Coarse character shape of an unrecognised date cell — digit-run length
+ * bucketed, never the digits. A calibration report can say "this file's date
+ * column is 5-6 raw digits with no separator", which is what a spreadsheet
+ * date serial read as plain text looks like, without ever printing the serial
+ * or the date it represents.
+ */
+export type DateTextShape =
+  | 'solo-digitos-corto'
+  | 'solo-digitos-mediano'
+  | 'solo-digitos-largo'
+  | 'con-letras'
+  | 'separadores-con-espacios'
+  | 'dos-segmentos'
+  | 'cuatro-segmentos'
+  | 'cinco-o-mas-segmentos'
+  | 'segmento-fuera-de-rango'
+  | 'otro';
+
+const NUMERIC_DATE_SHAPE = /^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}$/;
+
+/**
+ * The segment *count* a date-like cell splits into is a structural fact, not
+ * content — this report already prints row and column counts freely. What it
+ * must not do is echo the digits in any segment, so this stops at "how many"
+ * and "how long", never "what".
+ */
+export function describeDateShape(text: string): DateTextShape {
+  if (/^\d+$/.test(text)) {
+    if (text.length <= 4) return 'solo-digitos-corto';
+    if (text.length <= 6) return 'solo-digitos-mediano';
+    return 'solo-digitos-largo';
+  }
+  if (/[a-zA-Zà-ÿ]/.test(text)) return 'con-letras';
+  if (/[-/.]/.test(text)) {
+    if (NUMERIC_DATE_SHAPE.test(text.replace(/\s+/g, ''))) return 'separadores-con-espacios';
+    const segments = text.split(/[-/.]+/).filter((segment) => segment !== '');
+    if (segments.length === 2) return 'dos-segmentos';
+    if (segments.length === 4) return 'cuatro-segmentos';
+    if (segments.length >= 5) return 'cinco-o-mas-segmentos';
+    return 'segmento-fuera-de-rango';
+  }
+  return 'otro';
+}
+
 export class DateParseError extends Error {
-  constructor(message: string) {
+  readonly kind: DateParseErrorKind;
+  /** Only set for `kind: 'unrecognised-format'`. See {@link DateTextShape}. */
+  readonly shape?: DateTextShape;
+
+  constructor(message: string, kind: DateParseErrorKind, shape?: DateTextShape) {
     super(message);
     this.name = 'DateParseError';
+    this.kind = kind;
+    if (shape !== undefined) this.shape = shape;
   }
 }
 
@@ -108,7 +168,7 @@ export function isValidYmd(year: number, month: number, day: number): boolean {
 
 export function toIsoDate(year: number, month: number, day: number): IsoDate {
   if (!isValidYmd(year, month, day)) {
-    throw new DateParseError(`invalid calendar date ${year}-${month}-${day}`);
+    throw new DateParseError(`invalid calendar date ${year}-${month}-${day}`, 'invalid-calendar-date');
   }
   return `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}`;
 }
@@ -129,7 +189,7 @@ export function isIsoDate(value: string): value is IsoDate {
 export function parseStatementDate(raw: string, options: ParseDateOptions = {}): ParseDateResult {
   const { order = 'DMY', twoDigitYearPivot = 70, yearHint } = options;
   const text = String(raw ?? '').trim();
-  if (text === '') throw new DateParseError('empty date');
+  if (text === '') throw new DateParseError('empty date', 'empty');
 
   // Drop a time-of-day suffix: "03/02/2026 14:35:00" -> "03/02/2026". Matching
   // the clock shape rather than splitting on whitespace keeps written-out dates
@@ -151,7 +211,7 @@ export function parseStatementDate(raw: string, options: ParseDateOptions = {}):
   if (named) {
     const [, d, name, y] = named as unknown as [string, string, string, string];
     const month = MONTHS_ES[stripAccents(name)];
-    if (month === undefined) throw new DateParseError(`unknown month name: ${name}`);
+    if (month === undefined) throw new DateParseError(`unknown month name: ${name}`, 'unknown-month-name');
     return {
       date: toIsoDate(expandYear(Number(y), twoDigitYearPivot), month, Number(d)),
       ambiguous: false,
@@ -168,20 +228,57 @@ export function parseStatementDate(raw: string, options: ParseDateOptions = {}):
   if (namedNoYear) {
     const [, d, name] = namedNoYear as unknown as [string, string, string];
     const month = MONTHS_ES[stripAccents(name)];
-    if (month === undefined) throw new DateParseError(`unknown month name: ${name}`);
+    if (month === undefined) throw new DateParseError(`unknown month name: ${name}`, 'unknown-month-name');
     const year = yearHint && resolveYearForMonth(month, yearHint);
     if (year === undefined) {
-      throw new DateParseError(`date has no year and no period to infer one from: ${text}`);
+      throw new DateParseError(
+        `date has no year and no period to infer one from: ${text}`,
+        'missing-year',
+      );
     }
     const date = toIsoDate(year, month, Number(d));
     if (!yearHint?.from || !yearHint.to || date < yearHint.from || date > yearHint.to) {
-      throw new DateParseError(`date falls outside declared period: ${text}`);
+      throw new DateParseError(`date falls outside declared period: ${text}`, 'outside-declared-period');
+    }
+    return { date, ambiguous: false };
+  }
+
+  // Day + numeric month, no year: the numeric twin of the Spanish-month case
+  // above. Banco de Chile's cuenta corriente export writes "03/09" and, like
+  // BancoEstado's "03/sep", never repeats the year on the row — only the
+  // profile's declared period says which one it is. Checked after the named
+  // no-year case so "03/sep" (which also has two `[\s\-/.]`-joined parts) is
+  // never mistaken for it; checked before the three-part numeric case below so
+  // a genuine `dd/mm/yyyy` never loses its year to this.
+  const numericNoYear = dateOnly.match(/^(\d{1,2})[-/.](\d{1,2})$/);
+  if (numericNoYear) {
+    const [, aStr, bStr] = numericNoYear as unknown as [string, string, string];
+    const { day, month } = splitDayMonth(Number(aStr), Number(bStr), order);
+    if (month < 1 || month > 12) {
+      throw new DateParseError(`invalid date: ${text}`, 'invalid-calendar-date');
+    }
+    const year = yearHint && resolveYearForMonth(month, yearHint);
+    if (year === undefined) {
+      throw new DateParseError(
+        `date has no year and no period to infer one from: ${text}`,
+        'missing-year',
+      );
+    }
+    const date = toIsoDate(year, month, day);
+    if (!yearHint?.from || !yearHint.to || date < yearHint.from || date > yearHint.to) {
+      throw new DateParseError(`date falls outside declared period: ${text}`, 'outside-declared-period');
     }
     return { date, ambiguous: false };
   }
 
   const numeric = dateOnly.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
-  if (!numeric) throw new DateParseError(`unrecognised date format: ${text}`);
+  if (!numeric) {
+    throw new DateParseError(
+      `unrecognised date format: ${text}`,
+      'unrecognised-format',
+      describeDateShape(dateOnly),
+    );
+  }
 
   const [, aStr, bStr, yStr] = numeric as unknown as [string, string, string, string];
   const a = Number(aStr);
@@ -194,7 +291,7 @@ export function parseStatementDate(raw: string, options: ParseDateOptions = {}):
   if (order === 'MDY') {
     if (!monthFirstValid) {
       if (dayFirstValid) return { date: toIsoDate(year, b, a), ambiguous: false };
-      throw new DateParseError(`invalid date: ${text}`);
+      throw new DateParseError(`invalid date: ${text}`, 'invalid-calendar-date');
     }
     return { date: toIsoDate(year, a, b), ambiguous: dayFirstValid && a !== b };
   }
@@ -202,9 +299,21 @@ export function parseStatementDate(raw: string, options: ParseDateOptions = {}):
   // DMY (and YMD, which never reaches here) — the Chilean default.
   if (!dayFirstValid) {
     if (monthFirstValid) return { date: toIsoDate(year, a, b), ambiguous: false };
-    throw new DateParseError(`invalid date: ${text}`);
+    throw new DateParseError(`invalid date: ${text}`, 'invalid-calendar-date');
   }
   return { date: toIsoDate(year, b, a), ambiguous: monthFirstValid && a !== b };
+}
+
+/**
+ * Which of two numeric fields is the day and which is the month, per a
+ * declared field order — the one decision a `dd/mm` cell needs made before it
+ * can even ask for a year. Shared by the no-year branch above and by any
+ * profile-specific period derivation that reads the same shape off a
+ * structural row (see `core/providers/profile-parser.ts`), so the two never
+ * disagree about which field is which.
+ */
+export function splitDayMonth(a: number, b: number, order: DateFieldOrder): { day: number; month: number } {
+  return order === 'MDY' ? { day: b, month: a } : { day: a, month: b };
 }
 
 function expandYear(year: number, pivot: number): number {

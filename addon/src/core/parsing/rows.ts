@@ -356,10 +356,59 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
  * description is a support case with no thread to pull.
  */
 function describeRowFailure(error: unknown): string {
-  if (error instanceof DateParseError) return 'no se pudo leer la fecha.';
+  if (error instanceof DateParseError) return `no se pudo leer la fecha (${describeDateFailure(error)}).`;
   if (error instanceof MoneyError) return 'no se pudo leer el monto.';
   const message = error instanceof Error ? error.message : String(error);
   return redactDescription(message, 80);
+}
+
+/**
+ * Which of the six date readings rejected the cell, in words a calibration
+ * report can carry. `error.kind`/`error.shape` are already a fixed, PII-free
+ * vocabulary (see `core/dates.ts`) — this only spells them out.
+ */
+function describeDateFailure(error: DateParseError): string {
+  switch (error.kind) {
+    case 'empty':
+      return 'la celda vino vacía';
+    case 'unrecognised-format':
+      return `forma no reconocida, ${describeShape(error.shape)}`;
+    case 'invalid-calendar-date':
+      return 'ninguna de las dos lecturas es una fecha válida';
+    case 'unknown-month-name':
+      return 'nombre de mes no reconocido';
+    case 'missing-year':
+      return 'sin año y sin período declarado para inferirlo';
+    case 'outside-declared-period':
+      return 'la fecha inferida cae fuera del período declarado';
+    default:
+      return error.kind;
+  }
+}
+
+function describeShape(shape: DateParseError['shape']): string {
+  switch (shape) {
+    case 'solo-digitos-corto':
+      return 'sólo dígitos (4 o menos)';
+    case 'solo-digitos-mediano':
+      return 'sólo dígitos (5 a 6, rango de un serial de planilla)';
+    case 'solo-digitos-largo':
+      return 'sólo dígitos (7 o más)';
+    case 'con-letras':
+      return 'con letras';
+    case 'separadores-con-espacios':
+      return 'trae separador pero con espacio pegado';
+    case 'dos-segmentos':
+      return 'sólo dos segmentos separados (podría ser día/mes sin año)';
+    case 'cuatro-segmentos':
+      return 'cuatro segmentos separados';
+    case 'cinco-o-mas-segmentos':
+      return 'cinco o más segmentos separados';
+    case 'segmento-fuera-de-rango':
+      return 'un segmento tiene más o menos dígitos de los que un día, mes o año puede tener';
+    default:
+      return 'sin forma reconocible';
+  }
 }
 
 /**

@@ -60,6 +60,16 @@ export interface CalibrationReport {
   cardFacts?: FactPresence[];
   /** Issue codes the parser raised, with how many times each. */
   issues: Array<{ code: string; level: string; count: number }>;
+  /**
+   * `row-parse-failed` counted by *why*, not just that it happened.
+   *
+   * `describeRowFailure` (core/parsing/rows.ts) already reduces every failure
+   * to a fixed, PII-free template — the cell itself never reaches it. Grouping
+   * by that template turns "20 rows failed" into "20 rows had no readable
+   * amount column", which is the difference between a profile bug and a wrong
+   * bank guess.
+   */
+  rowFailureReasons: Array<{ reason: string; count: number }>;
 }
 
 export interface FileFacts {
@@ -212,6 +222,7 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
     classification: classificationFacts(statement.transactions),
     ...(isCardStatement(statement) ? { cardFacts: factPresence(statement.cardFacts ?? {}) } : {}),
     issues: issueFacts(validation),
+    rowFailureReasons: rowFailureReasonFacts(statement),
   };
 }
 
@@ -449,6 +460,21 @@ function issueFacts(validation: ValidationResult): CalibrationReport['issues'] {
     .map(([code, { level, count }]) => ({ code, level, count }));
 }
 
+/** Strips the `Fila N: ` prefix `describeRowFailure` adds, keeping the template. */
+const ROW_LINE_PREFIX = /^Fila \d+: /;
+
+function rowFailureReasonFacts(statement: ParsedStatement): CalibrationReport['rowFailureReasons'] {
+  const counts = new Map<string, number>();
+  for (const issue of statement.issues) {
+    if (issue.code !== 'row-parse-failed') continue;
+    const reason = issue.message.replace(ROW_LINE_PREFIX, '');
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, count]) => ({ reason, count }));
+}
+
 /** The report as plain text, for pasting somewhere. Same content, no more. */
 export function formatReport(report: CalibrationReport): string {
   const lines: string[] = [];
@@ -493,6 +519,9 @@ export function formatReport(report: CalibrationReport): string {
   add('Fallidas', report.rows.failed);
   if (report.rows.failedLines.length > 0) {
     add('Líneas fallidas', report.rows.failedLines.join(', '));
+  }
+  for (const reason of report.rowFailureReasons) {
+    lines.push(`  · ${reason.reason}: ${reason.count}`);
   }
 
   lines.push('', '── Montos ────────────────────────────────────────────────');

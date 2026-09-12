@@ -146,6 +146,30 @@ describe('lo que el informe sí dice', () => {
     const issues = report(CARTOLA).issues;
     expect(issues.every((issue) => typeof issue.code === 'string' && issue.count > 0)).toBe(true);
   });
+
+  /**
+   * `row-parse-failed` es un único código para varias causas distintas
+   * (fecha ilegible, monto ilegible, cargo y abono a la vez, etc.). Sin un
+   * desglose, dos cartolas que fallan al 100% por razones opuestas se ven
+   * idénticas en el informe. El motivo es siempre una plantilla fija — nunca
+   * el texto de la celda — así que agruparlo no cambia lo que el informe
+   * puede decir.
+   */
+  it('desglosa por qué fallaron las filas, sin citar la celda', () => {
+    const withBothColumns = report(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;COMPRA;45.000;;955.000',
+        '04/02/2026;AJUSTE RARO;10.000;5.000;950.000',
+      ].join('\n'),
+    ).rowFailureReasons;
+
+    expect(withBothColumns).toEqual([{ reason: 'la fila tiene cargo y abono simultáneos', count: 1 }]);
+  });
+
+  it('no repite el desglose para filas que sí se mapearon', () => {
+    expect(report(CARTOLA).rowFailureReasons).toEqual([]);
+  });
 });
 
 describe('lo que el informe no puede decir nunca', () => {

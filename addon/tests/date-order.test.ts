@@ -74,6 +74,29 @@ describe('resolveDateOrder', () => {
     });
   });
 
+  /**
+   * Banco de Chile cuenta corriente (calibrado 2026-09): la celda de fecha es
+   * `dd/mm`, sin año — el mismo mecanismo de ambigüedad de arriba, pero sobre
+   * un par de dos campos en vez de tres. Sin esto, cada fila con día ≤ 12
+   * quedaba fuera de la votación entera: nada la prueba y nada advierte que no
+   * está probada.
+   */
+  it('un día/mes sin año también vota si algún campo pasa de 12', () => {
+    expect(resolveDateOrder(['03/09', '25/09'], 'DMY')).toEqual({
+      order: 'DMY',
+      source: 'file',
+      ambiguousRows: 0,
+    });
+  });
+
+  it('un día/mes sin año, ambos campos ≤ 12, cae en el perfil y cuenta la ambigüedad', () => {
+    expect(resolveDateOrder(['03/09', '04/09'], 'DMY')).toEqual({
+      order: 'DMY',
+      source: 'profile',
+      ambiguousRows: 2,
+    });
+  });
+
   it('con evidencia en los dos sentidos se queda con lo que declara el perfil', () => {
     // Si aparecen las dos cosas, alguna fila es ilegible en cualquier lectura y
     // el mapeo de filas ya la reporta como error. Aquí no se inventa un orden.
