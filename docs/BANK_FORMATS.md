@@ -115,20 +115,29 @@ corriente; fixture sintético equivalente en `samples/synthetic/`):
   2-3 filas, no en cada una. El validador real (`checkBalanceWalk`) nunca tuvo
   ese bug; sólo el reporte de calibración lo tenía.
 
-**Hallazgo nuevo, sin explicar todavía — no bloquea, `balanceCheck` sigue
-`advisory`:** el aviso `balance-total-mismatch` (saldo inicial declarado +
-movimientos ≠ saldo final declarado) aparece en las 8 cartolas, a pesar de que
-el recorrido paso a paso cuadra exacto. Probable causa: `readDeclaredBalances`
-lee un saldo declarado del preámbulo con una wording distinta a la fila
-`SALDO INICIAL`/`SALDO FINAL` de la tabla (p. ej. contable vs. disponible, o
-un momento distinto), no confirmado sin ver el preámbulo real.
+**`balance-total-mismatch` explicado y corregido.** El preámbulo trae, además
+de la `Fecha de Emisión`, dos bloques *tabulares* (una fila de etiquetas
+seguida de una fila de valores en las mismas columnas): `Saldo Contable |
+Retenciones 24 Hrs. | Retenciones 48 Hrs.` es uno de ellos. `readDeclaredBalances`
+aplanaba todo el preámbulo a una sola cadena (`row.join(' ')` + `join('\n')`) y
+buscaba "el primer número después de la palabra SALDO CONTABLE" — que resultaba
+ser el `24` de la etiqueta vecina `Retenciones 24 Hrs.`, en la misma fila, antes
+de llegar al valor real de la fila siguiente. Confirmado con un fixture
+sintético que reproduce exactamente esa forma (`tests/banco-chile-balance.test.ts`).
+
+Corregido leyendo el saldo declarado desde las mismas filas ancla que
+`periodFromBalanceRows` ya usa para el año — `SALDO INICIAL`/`SALDO FINAL` son
+filas reales con su propia celda `Saldo (PESOS)`, nunca confundible con una
+etiqueta vecina. `readDeclaredBalances` (el escaneo genérico de preámbulo)
+sigue existiendo sin cambios para bancos sin filas ancla; sólo deja de usarse
+para el lado (inicial/final) que la fila ancla ya resolvió. `balance-total-mismatch`
+desaparece en las 8 cartolas sin que ningún paso deje de reconciliar.
 
 **Lo que falta confirmar con las mismas 8 cartolas antes de `verified`:**
 
 - Clasificación (`kind`) por producto vs. por glosa, y semántica de
   transferencias/pago de tarjeta en este banco específico — no verificable sin
   ver las glosas reales; `pnpm calibrate` no las expone por diseño.
-- El hallazgo de `balance-total-mismatch` de arriba.
 - Separador y layout de una eventual exportación **CSV** de cuenta corriente
   (las 8 muestras reales son XLS).
 

@@ -76,7 +76,7 @@ export const BANCO_CHILE_CHECKING: StatementProfile = {
   balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes:
-    'Calibrado contra 8 cartolas reales (XLS): detección, encabezado, fecha sin año (resuelta vía SALDO INICIAL/FINAL + Fecha de Emisión), escala monetaria (scale 2 = ",00" literal, no un error) y signo de cargo/abono (recorrido de saldo reconcilia sin descuadres en 96 pasos). Falta: clasificación por kind contra glosas reales (no verificable sin verlas), y un aviso balance-total-mismatch sin explicar (ver docs/BANK_FORMATS.md).',
+    'Calibrado contra 8 cartolas reales (XLS): detección, encabezado, fecha sin año (resuelta vía SALDO INICIAL/FINAL + Fecha de Emisión), escala monetaria (scale 2 = ",00" literal, no un error), signo de cargo/abono y saldo declarado (recorrido reconcilia sin descuadres, cero balance-total-mismatch, usando la propia celda Saldo (PESOS) de SALDO INICIAL/FINAL en vez del preámbulo). Falta: clasificación por kind contra glosas reales, no verificable sin verlas.',
 };
 
 export const BANCO_CHILE_CARD: StatementProfile = {

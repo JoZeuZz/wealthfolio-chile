@@ -271,8 +271,10 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
   const period = derivePeriod(mapped.transactions.map((t) => t.date), declaredPeriod);
   const balances = readBalances({
     sheet,
+    map,
     profile,
     headerRow: header.headerRow,
+    firstDataRow: header.firstDataRow,
     currency,
     transactions: mapped.transactions,
     stats: mapped.stats,
@@ -350,15 +352,42 @@ interface StatementBalances {
  */
 function readBalances(input: {
   sheet: Sheet;
+  map: ColumnMap;
   profile: StatementProfile;
   headerRow: number;
+  firstDataRow: number;
   currency: string;
   transactions: readonly NormalizedTransaction[];
   stats: RowStats;
   issues: StatementIssue[];
 }): StatementBalances {
   const derived = deriveBalances(input.transactions, input.stats, input.currency);
-  const declared = readDeclaredBalances(input.sheet, input.profile, input.headerRow, input.currency);
+
+  // The anchor rows are trustworthy whenever the layout has them — a real row
+  // with a real balance cell, never a label the preamble scan below could
+  // confuse for one. But not every file that reaches this profile has them
+  // (a file with no `SALDO INICIAL`/`SALDO FINAL` row at all still deserves
+  // whatever the preamble states), so a side the anchors do not find falls
+  // back to the generic scan rather than losing the balance outright.
+  const fromAnchors = input.profile.periodFromBalanceRows
+    ? readDeclaredBalancesFromAnchorRows(
+        input.sheet,
+        input.map,
+        input.firstDataRow,
+        input.profile.periodFromBalanceRows,
+        input.currency,
+        input.profile.numberFormat,
+      )
+    : {};
+  const fromPreamble = readDeclaredBalances(input.sheet, input.profile, input.headerRow, input.currency);
+  const declared: StatementBalances = {
+    ...(fromAnchors.opening ?? fromPreamble.opening
+      ? { opening: fromAnchors.opening ?? (fromPreamble.opening as StatementBalance) }
+      : {}),
+    ...(fromAnchors.closing ?? fromPreamble.closing
+      ? { closing: fromAnchors.closing ?? (fromPreamble.closing as StatementBalance) }
+      : {}),
+  };
 
   reportDisagreement('inicial', derived.opening, declared.opening, input.issues);
   reportDisagreement('final', derived.closing, declared.closing, input.issues);
@@ -788,8 +817,8 @@ function derivePeriodFromBalanceRows(
   const emission = findLabeledDate(preambleText, anchors.emissionDateLabel, dateOrder);
   if (!emission) return {};
 
-  const openingRaw = findAnchorRowDate(sheet, map, firstDataRow, anchors.openingLabel);
-  const closingRaw = findAnchorRowDate(sheet, map, firstDataRow, anchors.closingLabel);
+  const openingRaw = findAnchorRowCell(sheet, map, firstDataRow, anchors.openingLabel, ColumnRole.date);
+  const closingRaw = findAnchorRowCell(sheet, map, firstDataRow, anchors.closingLabel, ColumnRole.date);
   if (!openingRaw || !closingRaw) return {};
 
   const opening = parseDayMonthCell(openingRaw, dateOrder);
@@ -835,19 +864,71 @@ function findLabeledDate(
   }
 }
 
-/** The `dd/mm` cell of the first data row whose text matches `label`, anywhere in the row. */
-function findAnchorRowDate(
+/**
+ * One cell of the first data row whose text matches `label`, anywhere in the
+ * row — the row itself, not a preamble scan. `SALDO INICIAL`/`SALDO FINAL`
+ * are real rows with a real `Saldo (PESOS)` cell in the same column every
+ * movement uses; reading *that* cell is what a declared balance should mean
+ * for a layout whose preamble has no comparable single figure — see
+ * `readDeclaredBalancesFromAnchorRows`.
+ */
+function findAnchorRowCell(
   sheet: Sheet,
   map: ColumnMap,
   firstDataRow: number,
   label: RegExp,
+  role: ColumnRole,
 ): string | undefined {
   for (const row of sheet.rows.slice(firstDataRow) as string[][]) {
     if (!row.some((raw) => label.test(raw.trim()))) continue;
-    const raw = cell(row, map, ColumnRole.date);
+    const raw = cell(row, map, role);
     if (raw !== '') return raw;
   }
   return undefined;
+}
+
+/**
+ * `SALDO INICIAL`/`SALDO FINAL`'s own `Saldo (PESOS)` cell, as the declared
+ * opening/closing balance — instead of `readDeclaredBalances`'s preamble
+ * text scan.
+ *
+ * That scan flattens the whole preamble with `row.join(' ')` and looks for
+ * "the first number after the word SALDO", which is fine for a preamble that
+ * is prose but wrong for one that is itself tabular: Banco de Chile's prints
+ * a label row like `Saldo Contable | Retenciones 24 Hrs. | Retenciones 48
+ * Hrs.` above its values, and flattening loses which column is which — the
+ * "first number after SALDO CONTABLE" becomes the `24` sitting in the next
+ * label over, never the actual balance one row below it. A profile with
+ * `periodFromBalanceRows` already has a cell that cannot be confused with a
+ * neighbouring label: the balance column of a row the layout guarantees
+ * exists.
+ */
+function readDeclaredBalancesFromAnchorRows(
+  sheet: Sheet,
+  map: ColumnMap,
+  firstDataRow: number,
+  anchors: NonNullable<StatementProfile['periodFromBalanceRows']>,
+  currency: string,
+  format: StatementProfile['numberFormat'],
+): StatementBalances {
+  const out: StatementBalances = {};
+  const openingRaw = findAnchorRowCell(sheet, map, firstDataRow, anchors.openingLabel, ColumnRole.balance);
+  const closingRaw = findAnchorRowCell(sheet, map, firstDataRow, anchors.closingLabel, ColumnRole.balance);
+  if (openingRaw) {
+    try {
+      out.opening = { amount: parseAmount(openingRaw, { currency, format }).money, source: 'declared' };
+    } catch {
+      // Fails closed by omission — `readBalances` still has `deriveBalances`.
+    }
+  }
+  if (closingRaw) {
+    try {
+      out.closing = { amount: parseAmount(closingRaw, { currency, format }).money, source: 'declared' };
+    } catch {
+      // Same.
+    }
+  }
+  return out;
 }
 
 /** `dd/mm`, no year — the raw shape `dateOmitsYear` rows carry. */
