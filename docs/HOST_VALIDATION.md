@@ -1032,3 +1032,92 @@ impacto en ninguna cartola real; no se tocó ninguna cuenta ni actividad
 preexistente. Queda pendiente terminar el borrado manual (`Activities`,
 filtrar cuenta `CMR Test`, fechas de febrero 2026) o repetirlo con aprobación
 explícita por acción.
+
+---
+
+# Sesión 6 — calibración BancoEstado CuentaRUT XLSX sintético contra 3.7.0 (2026-09-10)
+
+Objetivo: verificar que el hardening del parser `banco-estado.cuenta` v0.2.0
+(branch `fase-0.2.0-real-samples`) funciona contra el host real antes de
+cerrar el bloque. Los datos son **estrictamente sintéticos** — ninguna cartola
+real de BancoEstado participó. `validationStatus` queda `pending-real-sample`
+porque ese nivel exige una cartola real, no un fixture sintético bien calibrado.
+
+## Entorno
+
+```
+Contenedor   wealthfolio, Up (healthy), 127.0.0.1:8088, WF_VERSION=3.7.0
+Auth         requerida, autenticada mediante sesión preexistente (cookie)
+Addon        redeployado desde working tree: dist/addon.js (908.81 KB)
+             generado por pnpm build desde la rama fase-0.2.0-real-samples
+             con los cambios de este bloque todavía sin commitear.
+```
+
+## Caso 1 — XLSX sintético válido (real-shaped)
+
+Archivo: `samples/synthetic/banco-estado-cuentarut-sin-ano.xlsx` (no
+versionado — generado ad hoc con la misma estructura que el fixture de tests).
+6 filas de movimiento, período `01/09/2025`–`24/09/2025` declarado como
+`Fecha Inicio`/`Fecha Termino`, fechas de transacción como `dd/mmm` sin año,
+`Cargo`/`Abono` con coma de miles (`12,450`), `Saldo` con punto (`137.550`).
+
+| Qué | Observado |
+| --- | --- |
+| Detección de banco | BancoEstado — CuentaRUT / cuenta corriente, 100 % |
+| Período detectado | `01/09/2025 → 24/09/2025` |
+| Filas en preview | 6 / 6 sin error |
+| Fechas civiles en preview | `03/09/2025` … `24/09/2025` — el año se infirió del período declarado |
+| Cargos (`Cargo`) | leídos como gastos; `12.450`, `20.000`, `8.900`, `3.200` — coma interpretada como miles |
+| Abonos (`Abono`) | leídos como ingresos; `45.000`, `5.000` |
+| Saldo inicial / final | `150.000 → 155.450` — recorrido sin desajuste |
+| Confirmar e importar | **6 creados, 0 fallidos, 0 duplicados** |
+| Búsqueda posterior `MOVIMIENTO SINTETICO` | 6 activities encontradas, exactamente las importadas |
+| Limpieza | todas seleccionadas y eliminadas; búsqueda post-cleanup: 0/0 |
+| Activities preexistentes | no tocadas (verificado por búsqueda vacía previa) |
+
+## Caso 2 — CSV con coma ambigua (fail-safe)
+
+Archivo: texto CSV con la misma cabecera pero `Cargo = 12,450` en formato CSV
+(donde BancoEstado no ha confirmado el separador para CSV).
+
+| Qué | Observado |
+| --- | --- |
+| Detección de banco | BancoEstado detectado |
+| Resultado | `statement-invalid` — wizard bloqueó el paso de confirmación |
+| Razón mostrada | formato numérico ambiguo en uno o más montos |
+| Comportamiento fail-safe | correcto; cero escrituras |
+
+## Hallazgo de fecha: UTC midnight vs. timezone local
+
+La tabla de Activities del host renderizó algunas fechas como el día anterior
+(`02/09` en lugar de `03/09`). Investigado durante la sesión:
+
+- El parser produce `IsoDate` correcta: `2025-09-03`.
+- `prepareImport` conserva la fecha civil; `activities.create` persiste la
+  medianoche UTC (`2025-09-03T00:00:00Z`).
+- El host renderiza esa medianoche en la zona horaria local del navegador. En
+  UTC−N cualquier hora previa a la N de la mañana aparece como el día anterior.
+- El `activityDateFilters` ya compensa este desfase al buscar (ver
+  `services/activity-index.ts`). La fecha persistida es correcta; la
+  visualización depende del timezone del navegador. No es un bug del parser.
+
+**Conclusión:** no se abre issue. La fecha civil es la que el archivo declara y
+la que el usuario espera ver; la conversión UTC es una característica del host,
+no una decisión del addon.
+
+## Perfiles antes y después
+
+`validationStatus` permanece `pending-real-sample` en ambos casos, ya que esta
+validación usó datos sintéticos. El hallazgo de la sesión (parser v0.2.0) fue:
+
+- `Fecha Inicio`/`Fecha Termino`/`Fecha Final` como periodo declarado: ✅ funciona
+- Fecha `dd/mmm` sin año: ✅ resuelta por período declarado
+- Coma como separador de miles en XLSX `Cargo`/`Abono`: ✅ correcta
+- Punto como separador de miles en `Saldo` (mismo XLSX): ✅ correcta
+- Coma en CSV (`es-CL`): ✅ bloqueada como ambigua, no silenciada
+
+## Limpieza
+
+Las 6 activities sintéticas se eliminaron del host durante la validación
+(caso 1, limpieza completada). La instancia persistente quedó en el estado
+previo. Ninguna cartola ni actividad real fue modificada.

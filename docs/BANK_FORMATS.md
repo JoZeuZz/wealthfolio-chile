@@ -93,7 +93,7 @@ signo invertido.
 
 | Producto | Formato | Estado | Parser |
 | --- | --- | --- | --- |
-| CuentaRUT | CSV / XLSX | ⚠️ pendiente | `banco-estado.cuenta` |
+| CuentaRUT | CSV / XLSX | ⚠️ pendiente (calibrado 2026-09) | `banco-estado.cuenta` |
 | Cuenta corriente | CSV / XLSX | ⚠️ pendiente | `banco-estado.cuenta` |
 | Chequera electrónica | CSV | ⚠️ pendiente | `banco-estado.cuenta` |
 | Cualquiera | PDF | 🚫 | — |
@@ -109,13 +109,28 @@ Mapeo asumido:
 | saldo | `Saldo` |
 | canal | `Canal`, `Tipo Movimiento` |
 
-**Para validarlo hace falta:** una cartola real de CuentaRUT. Tres cosas
-concretas a confirmar:
+**Hallazgos de calibración 2026-09** (primera cartola XLSX real de CuentaRUT
+observada; fixture sintético equivalente en `samples/synthetic/`):
 
-1. El separador — BancoEstado ha usado `;` y tabulaciones según la época.
-2. La codificación — los exportes antiguos venían en Windows-1252 (ya
-   soportado, pero conviene confirmar).
-3. Si `Cargo` llega positivo o negativo.
+1. **Separador de columna CSV:** `;` (punto y coma) — confirmado.
+2. **Fecha de transacción:** `dd/mmm` sin año (p. ej. `03/sep`). El año se
+   infiere del período declarado en el preámbulo (`Fecha Inicio`/`Fecha
+   Termino`/`Fecha Final`). Sin período declarado, la fila falla — comportamiento
+   intencional.
+3. **Separador de miles en XLSX `Cargo`/`Abono`:** coma (`12,450`). El parser
+   lo detecta automáticamente mediante evidencia léxica (grupos de tres dígitos
+   separados por coma) y sólo en XLSX; un CSV con coma es ambiguo y se bloquea.
+4. **Separador de miles en XLSX `Saldo`:** punto (`137.550`). Mismo archivo,
+   distinto formato — el parser maneja ambos por columna.
+5. **`Cargo` llega positivo** — el parser lo convierte a negativo.
+
+**Lo que falta confirmar con una segunda cartola real:**
+
+- Clasificación (`kind`) en escenarios distintos de compra y abono básico
+  (devoluciones, pagos, avances en efectivo).
+- Chequera Electrónica y cuenta corriente, que esta calibración no cubrió.
+- Codificación — los exportes antiguos venían en Windows-1252 (ya soportado,
+  pero conviene confirmar en un archivo real moderno).
 
 Es el banco prioritario: CuentaRUT es la cuenta que la mayoría de los chilenos
 tiene.

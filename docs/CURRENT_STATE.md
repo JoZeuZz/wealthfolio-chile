@@ -2,7 +2,7 @@
 
 Qué funciona **hoy**, verificado, y qué no.
 
-Actualizado: 2026-09-09 · Wealthfolio v3.7.0 (mínimo) / v3.8.0 (también validado) · addon 0.2.0-rc.5
+Actualizado: 2026-09-10 · Wealthfolio v3.7.0 (mínimo) / v3.8.0 (también validado) · addon 0.2.0-rc.5
 
 ---
 
@@ -28,8 +28,8 @@ es un release candidate y no un `0.2.0`.
 ```
 typecheck   ✅  tsc --noEmit, strict + noUncheckedIndexedAccess
 lint        ✅  eslint, 0 errores, 0 warnings, sin `any`
-tests       ✅  1301 pasando (65 archivos)
-build       ✅  dist/addon.js — un solo archivo, 905.08 KB (237.38 KB gzip)
+tests       ✅  1325 pasando (65 archivos)
+build       ✅  dist/addon.js — un solo archivo, 908.81 KB (238.55 KB gzip)
 coverage    ✅  95.91 % de líneas y 91.31 % de ramas en todo `src/`; 93.66 % / 88.66 % en `src/core/`
 ```
 
@@ -134,6 +134,27 @@ Limpieza incompleta: 6 de las 7 actividades sintéticas creadas para esta
 prueba siguen en `CMR Test` en la instancia persistente (bloqueo del
 clasificador de acciones del harness sobre borrados repetidos). Sin impacto
 financiero real — son datos sintéticos — pero pendiente de borrado manual.
+
+### Calibración BancoEstado XLSX sintético contra host real (2026-09-10, Wealthfolio 3.7.0)
+
+Parser `banco-estado.cuenta` v0.2.0 verificado contra la instancia persistente
+3.7.0 con un fixture sintético de forma idéntica a la primera cartola XLSX real
+observada (CuentaRUT, calibración 2026-09). Los datos son sintéticos; el perfil
+sigue `pending-real-sample`.
+
+| Qué | Observado |
+| --- | --- |
+| Detección de banco | BancoEstado — 100 % |
+| Período `01/09/2025 → 24/09/2025` | declarado via `Fecha Inicio`/`Fecha Termino`; detectado |
+| 6 filas `dd/mmm` sin año | fechas civiles correctas, año inferido del período |
+| Cargos con coma miles (`12,450`) | leídos como `12.450 CLP`, no como `12,45` |
+| Saldo con punto miles (mismo XLSX) | recorrido sin desajuste, balance `150.000 → 155.450` |
+| Import + cleanup | 6 creados / 0 fallidos; eliminados; búsqueda post-cleanup: 0 |
+| CSV con coma ambigua | `statement-invalid`; wizard bloqueó; cero escrituras |
+
+El comportamiento fecha-en-tabla del host (UTC midnight vs. zona horaria del
+navegador) investigado y confirmado como propiedad del host, no del parser.
+Ver [HOST_VALIDATION.md](HOST_VALIDATION.md) § *Sesión 6*.
 
 ---
 
