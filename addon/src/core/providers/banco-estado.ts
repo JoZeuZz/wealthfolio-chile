@@ -17,7 +17,7 @@ export const BANCO_ESTADO_ACCOUNT: StatementProfile = {
   institution: 'banco-estado',
   institutionLabel: 'BancoEstado — CuentaRUT / cuenta corriente',
   parserId: 'banco-estado.cuenta',
-  parserVersion: '0.1.0',
+  parserVersion: '0.2.0',
   product: StatementProduct.checking,
   defaultCurrency: 'CLP',
   numberFormat: 'es-CL',
@@ -32,13 +32,30 @@ export const BANCO_ESTADO_ACCOUNT: StatementProfile = {
     [ColumnRole.reference]: ['N Documento', 'Numero Documento', 'Documento'],
     [ColumnRole.operationType]: ['Canal', 'Tipo Movimiento'],
   },
+  periodLinePattern:
+    /\bFecha\s+Inicio\b[^\d]{0,20}(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}-\d{2}-\d{2})[^\d]{0,40}\bFecha\s+(?:T[eé]rmino|Final)\b[^\d]{0,20}(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}-\d{2}-\d{2})/i,
   ignoreRowPatterns: [/^SALDO\s+(INICIAL|FINAL|ANTERIOR)/i, /^TOTAL/i],
-  // Sin una cartola real no hay evidencia de que la columna de saldo camine
-  // exacta, así que un desajuste aislado se informa y no bloquea.
+  // La primera cartola real de CuentaRUT (calibrada 2026-09) vino en XLSX con
+  // la fecha del movimiento como `dd/mmm` — sin año — y con `Cargo`/`Abono`
+  // impresos con coma como separador de miles mientras `Saldo`, en la misma
+  // fila, usa punto. Ambos hechos confirmados contra el archivo real: ver
+  // docs/UPSTREAM.md y el hallazgo registrado para esta calibración.
+  dateOmitsYear: true,
+  spreadsheetColumnNumberFormats: {
+    [ColumnRole.debit]: 'en-US',
+    [ColumnRole.credit]: 'en-US',
+  },
+  spreadsheetColumnNumberFormatEvidence: {
+    [ColumnRole.debit]: /^[+-]?\d{1,3}(?:,\d{3})+$/,
+    [ColumnRole.credit]: /^[+-]?\d{1,3}(?:,\d{3})+$/,
+  },
+  ambiguousAmountCheck: 'authoritative',
+  // Sigue siendo evidencia insuficiente para exigir que cada recorrido de saldo
+  // cuadre: el perfil aún espera más formatos reales antes de promoverse.
   balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes:
-    'Falta una cartola real de CuentaRUT. Hay que confirmar el separador (BancoEstado ha usado ";" y tabulaciones), la codificación (Windows-1252 en exportaciones antiguas) y si "Cargo" viene positivo o negativo.',
+    'Corregido contra una cartola XLSX real (CuentaRUT, calibración 2026-09): fecha sin año y separador de miles en coma para Cargo/Abono. Pendiente: revisar la clasificación (kind) sobre una segunda cartola real y confirmar Chequera Electrónica, que esta calibración no cubrió.',
 };
 
 export const bancoEstadoParser: StatementParser = createProfileParser(BANCO_ESTADO_ACCOUNT, {

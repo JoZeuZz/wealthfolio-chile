@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeFileHash } from '../src/core/dedupe/fingerprint';
+import { METADATA_NAMESPACE, toActivityCreate } from '../src/core/mapping/activities';
 import { toDecimalString } from '../src/core/money';
 import { Direction, TransactionKind } from '../src/core/model/kinds';
 import { loadWorkbook } from '../src/core/parsing/workbook';
@@ -8,11 +9,15 @@ import type { ParserInput } from '../src/core/providers/parser';
 import { buildDuplicateIndex } from '../src/core/dedupe/classify';
 import { prepareImport } from '../src/core/pipeline';
 import { defaultRules } from '../src/core/rules/builtin';
-import { fromText, loadFixture } from './fixtures';
+import { fromText, fromXlsxRows, loadFixture } from './fixtures';
+import type { SourceFile } from '../src/core/parsing/tabular';
+
+function inputForFile(file: SourceFile): ParserInput {
+  return { file, sheets: loadWorkbook(file).sheets, fileHash: computeFileHash(file.bytes) };
+}
 
 function inputFor(name: string): ParserInput {
-  const file = loadFixture(name);
-  return { file, sheets: loadWorkbook(file).sheets, fileHash: computeFileHash(file.bytes) };
+  return inputForFile(loadFixture(name));
 }
 
 describe('registry', () => {
@@ -140,6 +145,206 @@ describe('BancoEstado parser', () => {
 
   it('walks the declared balances without a mismatch', () => {
     expect(parser.validate(statement).summary.balanceReconciles).toBe(true);
+  });
+});
+
+/**
+ * The date layout a real CuentaRUT export actually has (calibrated 2026-09):
+ * the date cell carries no year, and the period is declared in the preamble
+ * without the `DESDE`/`PERÍODO` wording `readPeriod` looked for until now.
+ * This used to make the file unimportable — every transaction row failed
+ * with "no se pudo leer la fecha". Confirmed against the real file with
+ * `pnpm calibrate`; this fixture is the synthetic equivalent, not the file
+ * itself — see docs/REAL_SAMPLE_WORKFLOW.md. Amounts here stay dot-formatted
+ * (the CSV convention this profile already assumed); the comma-thousands
+ * quirk below is XLSX-specific and covered separately.
+ */
+describe('BancoEstado parser — fecha sin año en un CSV', () => {
+  const parser = getParser('banco-estado.cuenta')!;
+  const statement = parser.parse(inputFor('banco-estado-cuentarut-sin-ano.csv'));
+
+  it('reads every movement row, none failed', () => {
+    expect(statement.rowStats).toMatchObject({ failed: 0 });
+    expect(statement.transactions).toHaveLength(6);
+  });
+
+  it('infers the year from the period declared without a DESDE/PERÍODO keyword', () => {
+    expect(statement.period).toEqual({ from: '2025-09-01', to: '2025-09-24' });
+    expect(statement.transactions[0]!.date).toBe('2025-09-03');
+    expect(statement.transactions[5]!.date).toBe('2025-09-24');
+  });
+
+  it('walks the balance column without a mismatch', () => {
+    expect(parser.validate(statement).summary.balanceReconciles).toBe(true);
+  });
+
+  it('skips the TOTAL footer and the trailing note', () => {
+    expect(statement.rowStats.skipped).toBeGreaterThanOrEqual(3);
+    expect(statement.transactions.some((t) => /TOTAL/.test(t.description))).toBe(false);
+  });
+});
+
+describe('BancoEstado parser — período declarado', () => {
+  it('uses Fecha Inicio and Fecha Final to infer a year-less movement date', () => {
+    const parser = getParser('banco-estado.cuenta')!;
+    const file = fromText(
+      'cuentarut-fecha-final.csv',
+      [
+        'BancoEstado',
+        'Fecha Inicio;01/09/2025;Fecha Final;24/09/2025',
+        '',
+        'Fecha;N Documento;Descripcion;Abono;Cargo;Saldo',
+        '03/sep;900101;COMPRA SINTETICA;;12.450;137.550',
+      ].join('\n'),
+    );
+
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.period).toEqual({ from: '2025-09-01', to: '2025-09-24' });
+    expect(statement.transactions[0]?.date).toBe('2025-09-03');
+    expect(parser.validate(statement).ok).toBe(true);
+  });
+
+  it('does not treat an unlabelled preamble date pair as the statement period', () => {
+    const parser = getParser('banco-estado.cuenta')!;
+    const file = fromText(
+      'cuentarut-sin-periodo.csv',
+      [
+        'BancoEstado',
+        'Fechas informativas 01/08/2025 y 31/08/2025',
+        '',
+        'Fecha;N Documento;Descripcion;Abono;Cargo;Saldo',
+        '03/sep;900101;COMPRA SINTETICA;;12.450;137.550',
+      ].join('\n'),
+    );
+
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.period).toEqual({});
+    expect(statement.rowStats.failed).toBe(1);
+  });
+
+  it('rejects an inverted labelled period instead of using it to infer a year', () => {
+    const parser = getParser('banco-estado.cuenta')!;
+    const file = fromText(
+      'cuentarut-periodo-invertido.csv',
+      [
+        'BancoEstado',
+        'Fecha Inicio;24/09/2025;Fecha Termino;01/09/2025',
+        '',
+        'Fecha;N Documento;Descripcion;Abono;Cargo;Saldo',
+        '03/sep;900101;COMPRA SINTETICA;;12.450;137.550',
+      ].join('\n'),
+    );
+
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.period).toEqual({});
+    expect(parser.validate(statement).ok).toBe(false);
+  });
+});
+
+/**
+ * The exact real-file shape: an XLSX (not CSV) whose `Cargo`/`Abono` cells
+ * print a comma thousands separator while `Saldo`, in the same row, prints a
+ * dot. Built in-memory with `fromXlsxRows` so the magic-byte detection that
+ * scopes `spreadsheetColumnNumberFormats` to spreadsheet sources is genuinely
+ * exercised, not assumed from a `.csv` extension. Confirmed against the real
+ * file by reconciling the balance walk under both readings of the comma
+ * (thousands-separator: 35/35 steps matched; decimal-mark: 0/35).
+ */
+describe('BancoEstado parser — XLSX real con coma en Cargo/Abono', () => {
+  const parser = getParser('banco-estado.cuenta')!;
+  const file = fromXlsxRows('cuentarut.xlsx', [
+    ['BancoEstado'],
+    ['CuentaRUT N: 87654321'],
+    ['Titular', 'CLIENTE SINTETICO'],
+    ['Fecha Inicio', '01/09/2025', 'Fecha Termino', '24/09/2025'],
+    [],
+    ['Fecha', 'N Documento', 'Descripcion', 'Abono', 'Cargo', 'Saldo'],
+    ['03/sep', '900101', 'COMPRA SINTETICA SUPERMERCADO', '', '12,450', '137.550'],
+    ['05/sep', '900102', 'ABONO TRANSFERENCIA SINTETICA', '45,000', '', '182.550'],
+    ['09/sep', '900103', 'GIRO CAJERO SINTETICO', '', '20,000', '162.550'],
+    ['15/sep', '900104', 'PAGO SERVICIO SINTETICO', '', '8,900', '153.650'],
+    ['20/sep', '900105', 'COMPRA SINTETICA FARMACIA', '', '3,200', '150.450'],
+    ['24/sep', '900106', 'ABONO DEVOLUCION SINTETICA', '5,000', '', '155.450'],
+    ['', '', 'TOTAL CARGOS Y ABONOS DEL PERIODO $', '44.550', '49.650', ''],
+    ['NOTA:', '', '', '', '', ''],
+    ['Este documento es una representacion sintetica sin valor real.', '', '', '', '', ''],
+  ]);
+  const statement = parser.parse(inputForFile(file));
+
+  it('reads every movement row, none failed', () => {
+    expect(statement.rowStats).toMatchObject({ failed: 0 });
+    expect(statement.transactions).toHaveLength(6);
+  });
+
+  it('reads a comma-thousands Cargo as pesos, not as a decimal fraction', () => {
+    const compra = statement.transactions[0]!;
+    expect(compra.direction).toBe(Direction.out);
+    expect(toDecimalString(compra.amount)).toBe('-12450');
+  });
+
+  it('keeps dot-thousands Cargo under the statement format', () => {
+    const file = fromXlsxRows('cuentarut-dot-thousands.xlsx', [
+      ['BancoEstado'],
+      ['Fecha Inicio', '01/09/2025', 'Fecha Termino', '24/09/2025'],
+      [],
+      ['Fecha', 'N Documento', 'Descripcion', 'Abono', 'Cargo', 'Saldo'],
+      ['03/sep', '900101', 'COMPRA SINTETICA', '', '12.450', '137.550'],
+    ]);
+
+    const statement = parser.parse(inputForFile(file));
+    expect(statement.transactions[0]?.amount).toMatchObject({ minor: -12450, scale: 0 });
+  });
+
+  it('reads a comma-thousands Abono the same way', () => {
+    const abono = statement.transactions.find((t) => /ABONO TRANSFERENCIA/.test(t.description))!;
+    expect(abono.direction).toBe(Direction.in);
+    expect(toDecimalString(abono.amount)).toBe('45000');
+  });
+
+  it('walks the dot-formatted balance column without a mismatch', () => {
+    expect(parser.validate(statement).summary.balanceReconciles).toBe(true);
+  });
+});
+
+/**
+ * The comma override is scoped to spreadsheet sources on purpose: nothing has
+ * confirmed it for a `.csv` export of the same bank. A CSV that happened to
+ * use a comma would be an entirely new, unconfirmed layout question, not this
+ * one — so it stays read at the profile's default `es-CL` and is refused as
+ * malformed rather than silently guessed at.
+ */
+describe('BancoEstado parser — la coma no se asume fuera de XLSX', () => {
+  it('blocks an ambiguous comma amount and records parser version 0.2.0 in metadata', () => {
+    const parser = getParser('banco-estado.cuenta')!;
+    const file = fromText(
+      'cuentarut.csv',
+      [
+        'BancoEstado',
+        'Fecha Inicio;01/09/2025;Fecha Termino;24/09/2025',
+        '',
+        'Fecha;N Documento;Descripcion;Abono;Cargo;Saldo',
+        '03/sep;900101;COMPRA SINTETICA;;12,450;137.550',
+      ].join('\n'),
+    );
+    const statement = parser.parse(inputForFile(file));
+    const compra = statement.transactions[0]!;
+    // es-CL reads a lone comma with a 3-digit tail as the (ambiguous) decimal
+    // mark, not as thousands — a thousand-fold misread this test pins down
+    // as a known, flagged limitation of the CSV path, not a silent one.
+    expect(toDecimalString(compra.amount)).not.toBe('-12450');
+    expect(compra.warnings.some((w) => w.code === 'ambiguous-amount-format')).toBe(true);
+    expect(parser.validate(statement).ok).toBe(false);
+
+    const activity = toActivityCreate(compra, {
+      accountId: 'acc-synthetic',
+      runId: 'run-synthetic',
+    });
+    if (typeof activity.metadata !== 'string') throw new Error('expected serialized metadata');
+    const metadata = JSON.parse(activity.metadata) as Record<string, { parserVersion?: string }>;
+    expect(metadata[METADATA_NAMESPACE]?.parserVersion).toBe('0.2.0');
   });
 });
 

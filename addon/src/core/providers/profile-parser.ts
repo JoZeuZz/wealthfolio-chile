@@ -15,7 +15,7 @@ import { cell, ColumnRole, detectHeader, normalizeHeader, type ColumnMap } from 
 import { COMMON_IGNORE_PATTERNS, type StatementProfile } from '../parsing/profile';
 import { isIgnoredRow, mapRows } from '../parsing/rows';
 import type { NormalizedTransaction } from '../model/transaction';
-import { isBlankRow, type Sheet } from '../parsing/tabular';
+import { detectFileKind, isBlankRow, type Sheet } from '../parsing/tabular';
 import { pickDataSheet } from '../parsing/workbook';
 import { readCardFacts } from './card-facts';
 import { foldCase } from '../text';
@@ -206,6 +206,22 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
     profile.defaultCurrency
   ).toUpperCase();
 
+  // Read before mapping the rows, not after: a date cell that names no year
+  // (`profile.dateOmitsYear`) needs the declared period to resolve one, and
+  // that period comes from the preamble, never from the transactions it is
+  // about to help produce.
+  const declaredPeriod = readPeriod(sheet, profile, header.headerRow);
+
+  // A per-column format proven only for a spreadsheet source stays scoped to
+  // spreadsheet cells that themselves prove the configured lexical evidence.
+  // A `.csv` export, or an XLSX column without that evidence, keeps the
+  // statement-wide `numberFormat`.
+  const fileKind = detectFileKind(input.file);
+  const isSpreadsheet = fileKind === 'xlsx' || fileKind === 'xls';
+  const columnNumberFormats = isSpreadsheet
+    ? resolveSpreadsheetColumnNumberFormats(profile, sheet, map, header.firstDataRow)
+    : undefined;
+
   const mapped = mapRows({
     sheet,
     map,
@@ -214,6 +230,8 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
     fileHash: input.fileHash,
     ...(account.number !== undefined ? { accountRef: account.number } : {}),
     currency,
+    ...(profile.dateOmitsYear ? { yearHint: declaredPeriod } : {}),
+    ...(columnNumberFormats !== undefined ? { columnNumberFormats } : {}),
   });
 
   issues.push(...mapped.issues);
@@ -234,7 +252,7 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
     });
   }
 
-  const period = derivePeriod(mapped.transactions.map((t) => t.date), readPeriod(sheet, profile, header.headerRow));
+  const period = derivePeriod(mapped.transactions.map((t) => t.date), declaredPeriod);
   const balances = readBalances({
     sheet,
     profile,
@@ -699,20 +717,61 @@ const PERIOD_PATTERN =
 
 function readPeriod(sheet: Sheet, profile: StatementProfile, headerRow: number): StatementPeriod {
   const end = headerRow >= 0 ? headerRow + 1 : Math.min(sheet.rows.length, PREAMBLE_ROWS);
-  const text = sheet.rows
-    .slice(0, end)
-    .map((row) => row.join(' '))
-    .join('\n');
-  const match = PERIOD_PATTERN.exec(text);
+  const lines = sheet.rows.slice(0, end).map((row) => row.join(' '));
+  const text = lines.join('\n');
+
+  const match = PERIOD_PATTERN.exec(text) ?? firstProfilePeriodMatch(lines, profile.periodLinePattern);
   if (!match?.[1] || !match[2]) return {};
   try {
-    return {
-      from: parseStatementDate(match[1], { order: profile.dateOrder }).date,
-      to: parseStatementDate(match[2], { order: profile.dateOrder }).date,
-    };
+    const first = parseStatementDate(match[1], { order: profile.dateOrder }).date;
+    const second = parseStatementDate(match[2], { order: profile.dateOrder }).date;
+    return first <= second ? { from: first, to: second } : {};
   } catch {
     return {};
   }
+}
+
+function firstProfilePeriodMatch(
+  lines: readonly string[],
+  pattern: RegExp | undefined,
+): RegExpExecArray | null {
+  if (!pattern) return null;
+  for (const line of lines) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(line);
+    pattern.lastIndex = 0;
+    if (match) return match;
+  }
+  return null;
+}
+
+function resolveSpreadsheetColumnNumberFormats(
+  profile: StatementProfile,
+  sheet: Sheet,
+  map: ColumnMap,
+  firstDataRow: number,
+): Partial<Record<ColumnRole, StatementProfile['numberFormat']>> | undefined {
+  const configured = profile.spreadsheetColumnNumberFormats;
+  const evidence = profile.spreadsheetColumnNumberFormatEvidence;
+  if (!configured || !evidence) return undefined;
+
+  const resolved: Partial<Record<ColumnRole, StatementProfile['numberFormat']>> = {};
+  for (const role of Object.values(ColumnRole)) {
+    const format = configured[role];
+    const pattern = evidence[role];
+    if (!format || !pattern || map[role] === undefined) continue;
+
+    for (const row of sheet.rows.slice(firstDataRow)) {
+      pattern.lastIndex = 0;
+      const matches = pattern.test(cell(row, map, role));
+      pattern.lastIndex = 0;
+      if (matches) {
+        resolved[role] = format;
+        break;
+      }
+    }
+  }
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
 /** Prefer the period the file declares; fall back to the movement range. */
@@ -748,7 +807,10 @@ export function validateStatement(
   for (const transaction of transactions) {
     for (const warning of transaction.warnings) {
       issues.push({
-        level: 'warning',
+        level:
+          warning.code === 'ambiguous-amount-format' && profile.ambiguousAmountCheck === 'authoritative'
+            ? 'error'
+            : 'warning',
         code: warning.code,
         message: warning.message,
         ...(transaction.sourceLine !== undefined ? { line: transaction.sourceLine } : {}),
