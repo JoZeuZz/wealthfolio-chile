@@ -20,11 +20,53 @@ export class DateParseError extends Error {
 /** Order of the day/month fields when a numeric date is ambiguous. */
 export type DateFieldOrder = 'DMY' | 'MDY' | 'YMD';
 
+/**
+ * What a statement declares about the period it covers, for resolving a date
+ * cell that names a day and a month but never a year.
+ *
+ * Both boundaries are required: a year-less date is only safe when the
+ * complete declared period settles it — see {@link resolveYearForMonth}.
+ */
+export interface DateYearHint {
+  from?: IsoDate;
+  to?: IsoDate;
+}
+
 export interface ParseDateOptions {
   /** Field order for ambiguous numeric dates. Chilean statements are DMY. */
   order?: DateFieldOrder;
   /** Pivot for two-digit years: values below map to 2000+, at or above to 1900+. */
   twoDigitYearPivot?: number;
+  /**
+   * Supplies the year for a cell that names only a day and a month, such as
+   * BancoEstado's CuentaRUT export. Absent, a year-less date is refused rather
+   * than guessed.
+   */
+  yearHint?: DateYearHint;
+}
+
+/**
+ * The calendar year a day-and-month-only date belongs to, given the period
+ * the statement declares.
+ *
+ * A statement confined to one calendar year settles it outright. One that
+ * crosses the turn of the year — a cartola running 15 Dec to 10 Jan — cannot:
+ * `28 dic` and `05 ene` are both inside it but four months apart on the
+ * calendar, so the month decides which boundary's year applies. A month at or
+ * after the period's start month reads as the earlier year (it's the `dic`
+ * side); anything earlier reads as the later year (the `ene` side).
+ */
+export function resolveYearForMonth(month: number, hint: DateYearHint): number | undefined {
+  const { from, to } = hint;
+  if (!from || !to || !isIsoDate(from) || !isIsoDate(to) || from > to) return undefined;
+
+  const candidates: number[] = [];
+  for (let year = Number(from.slice(0, 4)); year <= Number(to.slice(0, 4)); year += 1) {
+    const monthStart = toIsoDate(year, month, 1);
+    const monthEnd = toIsoDate(year, month, daysInMonth(year, month));
+    if (monthStart <= to && monthEnd >= from) candidates.push(year);
+  }
+  return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 export interface ParseDateResult {
@@ -85,7 +127,7 @@ export function isIsoDate(value: string): value is IsoDate {
  * component (the time is discarded — statements settle on a day, not a second).
  */
 export function parseStatementDate(raw: string, options: ParseDateOptions = {}): ParseDateResult {
-  const { order = 'DMY', twoDigitYearPivot = 70 } = options;
+  const { order = 'DMY', twoDigitYearPivot = 70, yearHint } = options;
   const text = String(raw ?? '').trim();
   if (text === '') throw new DateParseError('empty date');
 
@@ -114,6 +156,28 @@ export function parseStatementDate(raw: string, options: ParseDateOptions = {}):
       date: toIsoDate(expandYear(Number(y), twoDigitYearPivot), month, Number(d)),
       ambiguous: false,
     };
+  }
+
+  // Day + Spanish month name, no year: BancoEstado's CuentaRUT export writes
+  // "03/sep" and leaves the year to be inferred from the period the statement
+  // itself declares \u2014 see `resolveYearForMonth`. Without a `yearHint` this is
+  // refused rather than guessed.
+  const namedNoYear = dateOnly
+    .toLowerCase()
+    .match(/^(\d{1,2})[\s\-/.]+([a-z\u00e0-\u00ff]+)$/);
+  if (namedNoYear) {
+    const [, d, name] = namedNoYear as unknown as [string, string, string];
+    const month = MONTHS_ES[stripAccents(name)];
+    if (month === undefined) throw new DateParseError(`unknown month name: ${name}`);
+    const year = yearHint && resolveYearForMonth(month, yearHint);
+    if (year === undefined) {
+      throw new DateParseError(`date has no year and no period to infer one from: ${text}`);
+    }
+    const date = toIsoDate(year, month, Number(d));
+    if (!yearHint?.from || !yearHint.to || date < yearHint.from || date > yearHint.to) {
+      throw new DateParseError(`date falls outside declared period: ${text}`);
+    }
+    return { date, ambiguous: false };
   }
 
   const numeric = dateOnly.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);

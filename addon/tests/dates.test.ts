@@ -70,6 +70,63 @@ describe('parseStatementDate', () => {
     expect(parseStatementDate('29/02/2024').date).toBe('2024-02-29');
     expect(() => parseStatementDate('29/02/2026')).toThrow(DateParseError);
   });
+
+  describe('day/month without a year, given a period hint', () => {
+    it('rejects a year-less date when no yearHint is supplied', () => {
+      // Real BancoEstado CuentaRUT export: the movement date cell carries only
+      // `dd/mmm`, e.g. "03/sep" — the export never repeats the year, and
+      // nothing safely fills it in without a declared period. Refusing beats
+      // guessing a calendar year.
+      expect(() => parseStatementDate('03/sep')).toThrow(DateParseError);
+    });
+
+    it('resolves the year from a same-year period', () => {
+      const yearHint = { from: '2025-09-01', to: '2025-09-24' };
+      expect(parseStatementDate('03/sep', { yearHint }).date).toBe('2025-09-03');
+      expect(parseStatementDate('24/sep', { yearHint }).date).toBe('2025-09-24');
+    });
+
+    it('picks the earlier year for a month at or after the period start, across a year boundary', () => {
+      const yearHint = { from: '2025-12-15', to: '2026-01-10' };
+      expect(parseStatementDate('28/dic', { yearHint }).date).toBe('2025-12-28');
+    });
+
+    it('picks the later year for a month before the period start, across a year boundary', () => {
+      const yearHint = { from: '2025-12-15', to: '2026-01-10' };
+      expect(parseStatementDate('05/ene', { yearHint }).date).toBe('2026-01-05');
+    });
+
+    it('rejects a year-less date when either period boundary is missing', () => {
+      expect(() => parseStatementDate('03/sep', { yearHint: { from: '2025-09-01' } })).toThrow(
+        DateParseError,
+      );
+      expect(() => parseStatementDate('03/sep', { yearHint: { to: '2025-09-24' } })).toThrow(
+        DateParseError,
+      );
+    });
+
+    it('rejects a same-year date outside the declared period', () => {
+      const yearHint = { from: '2025-09-01', to: '2025-09-24' };
+      expect(() => parseStatementDate('15/oct', { yearHint })).toThrow(DateParseError);
+      expect(() => parseStatementDate('30/sep', { yearHint })).toThrow(DateParseError);
+    });
+
+    it('rejects a cross-year date outside the declared period', () => {
+      const yearHint = { from: '2025-12-15', to: '2026-01-10' };
+      expect(() => parseStatementDate('05/mar', { yearHint })).toThrow(DateParseError);
+    });
+
+    it('rejects a year-less date whose month has multiple candidate years', () => {
+      const yearHint = { from: '2024-01-01', to: '2026-12-31' };
+      expect(() => parseStatementDate('03/sep', { yearHint })).toThrow(DateParseError);
+    });
+
+    it('rejects an unknown month name even with a yearHint', () => {
+      expect(() =>
+        parseStatementDate('03/xyz', { yearHint: { to: '2025-09-24' } }),
+      ).toThrow(DateParseError);
+    });
+  });
 });
 
 describe('civil date arithmetic', () => {
