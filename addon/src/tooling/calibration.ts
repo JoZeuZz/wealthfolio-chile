@@ -1,4 +1,4 @@
-import { compare, negate, type Money } from '../core/money';
+import { add, compare, negate, type Money } from '../core/money';
 import { Confidence, TransactionKind } from '../core/model/kinds';
 import type { NormalizedTransaction } from '../core/model/transaction';
 import {
@@ -376,20 +376,31 @@ function balanceFacts(statement: ParsedStatement): BalanceFacts {
   // summary answers "did it reconcile"; a calibration needs "and in what way
   // did it not". The order is the file's own: a report that silently sorted
   // would hide the very thing it is meant to expose.
+  //
+  // `pending` accumulates every transaction since the last balance-bearing
+  // one — same as `checkBalanceWalk` (core/providers/profile-parser.ts).
+  // Plenty of real cartolas print a balance only every few rows (Banco de
+  // Chile cuenta corriente, calibrated 2026-09: roughly 8 of every 20+ mapped
+  // rows), and comparing the declared jump against only the *last* row's own
+  // amount flags every multi-row step as a mismatch whether or not the file
+  // was read correctly.
   let previous: Money | undefined;
+  let pending: Money | undefined;
   for (const transaction of statement.transactions) {
+    pending = pending ? add(pending, transaction.amount) : transaction.amount;
     const balance = transaction.balanceAfter;
     if (!balance) continue;
     if (previous) {
       steps += 1;
       const expected = { ...balance, minor: balance.minor - previous.minor };
-      if (compare(expected, transaction.amount) !== 0) {
+      if (compare(expected, pending) !== 0) {
         mismatches += 1;
-        const kind = classifyMismatch(expected, transaction.amount);
+        const kind = classifyMismatch(expected, pending);
         kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
       }
     }
     previous = balance;
+    pending = undefined;
   }
 
   return {

@@ -119,6 +119,28 @@ describe('lo que el informe sí dice', () => {
     expect(balances.mismatchKinds).toEqual([{ kind: 'sign', count: 1 }]);
   });
 
+  /**
+   * Muchas cartolas reales no imprimen el saldo en cada fila (Banco de Chile
+   * cuenta corriente, calibrado 2026-09: 8 de cada 20+ filas mapeadas). El
+   * paso entre dos filas que sí lo traen tiene que sumar *todos* los
+   * movimientos intermedios, no comparar el salto de saldo contra el monto de
+   * la única fila que lo declara — eso descuadra cualquier tramo con más de
+   * un movimiento aunque el archivo esté perfectamente leído.
+   */
+  it('un paso entre saldos suma todos los movimientos intermedios, no sólo el último', () => {
+    const balances = report(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo',
+        '03/02/2026;A;1.000;;100.000',
+        '04/02/2026;B;2.000;;',
+        '05/02/2026;C;;500;98.500',
+      ].join('\n'),
+    ).balances;
+
+    expect(balances.steps).toBe(1);
+    expect(balances.mismatches).toBe(0);
+  });
+
   it('un descuadre por factor de cien se nombra como tal', () => {
     // El saldo baja 10 donde el cargo dice 1.000: el separador de miles de la
     // columna de saldo se leyó como decimal. Es la clase de error, no su

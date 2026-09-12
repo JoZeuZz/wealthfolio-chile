@@ -100,16 +100,35 @@ corriente; fixture sintético equivalente en `samples/synthetic/`):
    día/mes), la fila falla en vez de adivinar el año — igual que cualquier
    `dateOmitsYear` sin período.
 
+**Confirmado con las mismas 8 cartolas:**
+
+- Escala monetaria: `scale 2` en el 100% de las filas mapeadas es un `,00`
+  literal del banco (CLP no tiene centavos, pero el export siempre los
+  escribe) — mismo valor exacto que `scale 0`, no es un separador de miles mal
+  leído.
+- Signo de cargo/abono: `Cargo` negativo, `Abono` positivo (`amountSign:
+  'signed'`) reconcilia el recorrido de saldo sin un solo descuadre en 96
+  pasos comprobados (7 a 12 por cartola, las 8) una vez corregido un bug del
+  propio `pnpm calibrate` — su verificación de saldo comparaba el salto
+  declarado contra el monto de la última fila, no contra la suma de todas las
+  filas desde el último saldo declarado, y esta cartola imprime el saldo cada
+  2-3 filas, no en cada una. El validador real (`checkBalanceWalk`) nunca tuvo
+  ese bug; sólo el reporte de calibración lo tenía.
+
+**Hallazgo nuevo, sin explicar todavía — no bloquea, `balanceCheck` sigue
+`advisory`:** el aviso `balance-total-mismatch` (saldo inicial declarado +
+movimientos ≠ saldo final declarado) aparece en las 8 cartolas, a pesar de que
+el recorrido paso a paso cuadra exacto. Probable causa: `readDeclaredBalances`
+lee un saldo declarado del preámbulo con una wording distinta a la fila
+`SALDO INICIAL`/`SALDO FINAL` de la tabla (p. ej. contable vs. disponible, o
+un momento distinto), no confirmado sin ver el preámbulo real.
+
 **Lo que falta confirmar con las mismas 8 cartolas antes de `verified`:**
 
-- Escala monetaria: las 8 leen `scale 2` en el 100% de las filas mapeadas
-  (posible `,00` literal del banco, no necesariamente un error — pendiente
-  confirmar que no sea el separador de miles leído como decimal).
-- Recorrido de saldo: descuadres en la mayoría de las filas comprobadas, de
-  clase `other` (ni `sign` ni `scale-100/1000`) — no descartado como error de
-  parseo, pendiente de diagnóstico.
 - Clasificación (`kind`) por producto vs. por glosa, y semántica de
-  transferencias/pago de tarjeta en este banco específico.
+  transferencias/pago de tarjeta en este banco específico — no verificable sin
+  ver las glosas reales; `pnpm calibrate` no las expone por diseño.
+- El hallazgo de `balance-total-mismatch` de arriba.
 - Separador y layout de una eventual exportación **CSV** de cuenta corriente
   (las 8 muestras reales son XLS).
 
