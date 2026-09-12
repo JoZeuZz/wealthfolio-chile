@@ -64,24 +64,54 @@ Falta también confirmar cómo CMR marca los avances en efectivo.
 
 | Producto | Formato | Estado | Parser |
 | --- | --- | --- | --- |
-| Cuenta corriente | CSV / XLSX | ⚠️ pendiente | `banco-chile.cuenta-corriente` |
+| Cuenta corriente | XLS (BIFF) | ⚠️ pendiente (calibrado parcial 2026-09) | `banco-chile.cuenta-corriente` |
 | Tarjeta de crédito | CSV / XLSX | ⚠️ pendiente | `banco-chile.tarjeta` |
 | Cualquiera | PDF | 🚫 | — |
 
-Mapeo asumido para cuenta corriente:
+Mapeo confirmado para cuenta corriente (8 cartolas XLS reales):
 
-| Rol | Encabezados esperados |
+| Rol | Encabezado real |
 | --- | --- |
-| fecha | `Fecha`, `Fecha Transaccion` |
-| descripción | `Descripcion`, `Detalle` |
-| cargo | `Cargo`, `Cargos (CLP)`, `Cheques y Cargos` |
-| abono | `Abono`, `Abonos (CLP)`, `Depositos y Abonos` |
-| saldo | `Saldo`, `Saldo (CLP)` |
-| referencia | `N Documento`, `Canal o Sucursal` |
+| fecha | `Fecha` |
+| descripción | `Descripcion` |
+| canal (`operationType`) | `Canal o Sucursal` |
+| cargo | `Cargos (PESOS)` |
+| abono | `Abonos (PESOS)` |
+| saldo | `Saldo (PESOS)` |
 
-**Para validarlo hace falta:** una cartola real (CSV o XLSX) de cuenta
-corriente. Hay que confirmar los nombres exactos de columnas, el separador y si
-los cargos vienen con signo propio o solo en su columna.
+No hay columna de número de documento/referencia — a diferencia del mapeo
+asumido antes de calibrar, cuenta corriente no trae una.
+
+**Hallazgos de calibración 2026-09** (8 cartolas XLS reales de cuenta
+corriente; fixture sintético equivalente en `samples/synthetic/`):
+
+1. **Fecha de movimiento:** `dd/mm`, **sin año** — igual mecanismo que
+   BancoEstado CuentaRUT (`dd/mmm`), pero numérico. Confirmado en las 8.
+2. **El preámbulo nunca declara un período `desde/hasta`.** Sólo trae una
+   `Fecha de Emisión: dd/mm/yyyy` (fecha completa, un solo punto).
+3. **El año se recupera de dos filas contables fijas:** la primera fila de la
+   tabla es siempre `SALDO INICIAL` y la última siempre `SALDO FINAL`, ambas
+   con fecha `dd/mm`. `SALDO FINAL` comparte día/mes con la `Fecha de Emisión`
+   en las 8 cartolas, incluida una que cruza diciembre → enero. Ver
+   `StatementProfile.periodFromBalanceRows` y `derivePeriodFromBalanceRows`
+   (`core/providers/profile-parser.ts`) — un mecanismo específico de este
+   layout, no una regla general de "emisión = fin de período".
+4. Sin esas tres piezas coherentes (emisión + ambas filas ancla + mismo
+   día/mes), la fila falla en vez de adivinar el año — igual que cualquier
+   `dateOmitsYear` sin período.
+
+**Lo que falta confirmar con las mismas 8 cartolas antes de `verified`:**
+
+- Escala monetaria: las 8 leen `scale 2` en el 100% de las filas mapeadas
+  (posible `,00` literal del banco, no necesariamente un error — pendiente
+  confirmar que no sea el separador de miles leído como decimal).
+- Recorrido de saldo: descuadres en la mayoría de las filas comprobadas, de
+  clase `other` (ni `sign` ni `scale-100/1000`) — no descartado como error de
+  parseo, pendiente de diagnóstico.
+- Clasificación (`kind`) por producto vs. por glosa, y semántica de
+  transferencias/pago de tarjeta en este banco específico.
+- Separador y layout de una eventual exportación **CSV** de cuenta corriente
+  (las 8 muestras reales son XLS).
 
 **Para la tarjeta hace falta:** un estado de cuenta real. Hay que confirmar cómo
 se expresan las cuotas y si los pagos vienen en la misma columna de monto con

@@ -132,13 +132,16 @@ describe('idempotency', () => {
       [
         'Banco de Chile - Cartola Cuenta Corriente',
         'Cuenta Corriente N: 00-123-45678-90',
+        'Fecha de Emision: 02/03/2026',
         '',
-        'Fecha;Descripcion;Cargo;Abono;Saldo;N Documento',
+        'Fecha;Descripcion;Canal o Sucursal;Cargos (PESOS);Abonos (PESOS);Saldo (PESOS)',
+        '25/02;SALDO INICIAL;;;;1.541.310',
         // Already imported, byte-identical.
-        '25/02/2026;UBER *TRIP SANTIAGO;7.890;;1.533.420;900011',
-        '28/02/2026;COMPRA EN LINEA MERCADO LIBRE CHILE;59.990;;1.473.430;900012',
+        '25/02;UBER *TRIP SANTIAGO;INTERNET;7.890;;1.533.420',
+        '28/02;COMPRA EN LINEA MERCADO LIBRE CHILE;INTERNET;59.990;;1.473.430',
         // New.
-        '02/03/2026;COMPRA JUMBO VITACURA;44.200;;1.429.230;900013',
+        '02/03;COMPRA JUMBO VITACURA;INTERNET;44.200;;1.429.230',
+        '02/03;SALDO FINAL;;;;1.429.230',
       ].join('\n'),
     );
 

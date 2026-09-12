@@ -1,4 +1,11 @@
-import { isIsoDate, parseStatementDate, type IsoDate } from '../dates';
+import {
+  isIsoDate,
+  parseStatementDate,
+  splitDayMonth,
+  toIsoDate,
+  type DateYearHint,
+  type IsoDate,
+} from '../dates';
 import { add, compare, parseAmount, subtract, sum, type Money } from '../money';
 import {
   DETECTION_FLOOR,
@@ -210,7 +217,16 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
   // (`profile.dateOmitsYear`) needs the declared period to resolve one, and
   // that period comes from the preamble, never from the transactions it is
   // about to help produce.
-  const declaredPeriod = readPeriod(sheet, profile, header.headerRow);
+  const declaredPeriod = profile.periodFromBalanceRows
+    ? derivePeriodFromBalanceRows(
+        sheet,
+        map,
+        header.headerRow,
+        header.firstDataRow,
+        profile.periodFromBalanceRows,
+        profile.dateOrder,
+      )
+    : readPeriod(sheet, profile, header.headerRow);
 
   // A per-column format proven only for a spreadsheet source stays scoped to
   // spreadsheet cells that themselves prove the configured lexical evidence.
@@ -743,6 +759,107 @@ function firstProfilePeriodMatch(
     if (match) return match;
   }
   return null;
+}
+
+/**
+ * `dateOmitsYear`'s year hint, built from two structural rows instead of a
+ * declared period — see `StatementProfile.periodFromBalanceRows`.
+ *
+ * Every step fails closed to `{}` rather than guess: a missing emission date,
+ * a missing anchor row, or `SALDO FINAL` landing on a different day/month
+ * than the emission date all mean this file does not keep the one promise
+ * this derivation is built on, and `dateOmitsYear` then refuses every row
+ * with `missing-year` — the same outcome as a bank that never declared a
+ * period at all, just for a specific, checkable reason instead of a shrug.
+ */
+function derivePeriodFromBalanceRows(
+  sheet: Sheet,
+  map: ColumnMap,
+  headerRow: number,
+  firstDataRow: number,
+  anchors: NonNullable<StatementProfile['periodFromBalanceRows']>,
+  dateOrder: StatementProfile['dateOrder'],
+): DateYearHint {
+  const preambleEnd = headerRow >= 0 ? headerRow : Math.min(sheet.rows.length, PREAMBLE_ROWS);
+  const preambleText = sheet.rows
+    .slice(0, preambleEnd)
+    .map((row) => row.join(' '))
+    .join('\n');
+  const emission = findLabeledDate(preambleText, anchors.emissionDateLabel, dateOrder);
+  if (!emission) return {};
+
+  const openingRaw = findAnchorRowDate(sheet, map, firstDataRow, anchors.openingLabel);
+  const closingRaw = findAnchorRowDate(sheet, map, firstDataRow, anchors.closingLabel);
+  if (!openingRaw || !closingRaw) return {};
+
+  const opening = parseDayMonthCell(openingRaw, dateOrder);
+  const closing = parseDayMonthCell(closingRaw, dateOrder);
+  if (!opening || !closing) return {};
+
+  const emissionMonth = Number(emission.slice(5, 7));
+  const emissionDay = Number(emission.slice(8, 10));
+  if (closing.month !== emissionMonth || closing.day !== emissionDay) return {};
+
+  const closingYear = Number(emission.slice(0, 4));
+  // The interval crosses a year turn exactly when the opening side's month
+  // comes *after* the closing side's — "28 dic .. 05 ene" — the same test
+  // `resolveYearForMonth` (core/dates.ts) makes from a declared range; here
+  // the range is these two exact months, not a guess between them.
+  const openingYear = opening.month > closing.month ? closingYear - 1 : closingYear;
+
+  try {
+    const to = toIsoDate(closingYear, closing.month, closing.day);
+    const from = toIsoDate(openingYear, opening.month, opening.day);
+    return from <= to ? { from, to } : {};
+  } catch {
+    return {};
+  }
+}
+
+/** A single labelled date in free text, e.g. `Fecha de Emisión: 05/03/2026`. */
+function findLabeledDate(
+  text: string,
+  label: RegExp,
+  order: StatementProfile['dateOrder'],
+): IsoDate | undefined {
+  const pattern = new RegExp(
+    `${label.source}[^\\d]{0,20}(\\d{1,2}[-/.]\\d{1,2}[-/.]\\d{2,4}|\\d{4}-\\d{2}-\\d{2})`,
+    label.flags.includes('i') ? 'i' : '',
+  );
+  const match = pattern.exec(text);
+  if (!match?.[1]) return undefined;
+  try {
+    return parseStatementDate(match[1], { order }).date;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `dd/mm` cell of the first data row whose text matches `label`, anywhere in the row. */
+function findAnchorRowDate(
+  sheet: Sheet,
+  map: ColumnMap,
+  firstDataRow: number,
+  label: RegExp,
+): string | undefined {
+  for (const row of sheet.rows.slice(firstDataRow) as string[][]) {
+    if (!row.some((raw) => label.test(raw.trim()))) continue;
+    const raw = cell(row, map, ColumnRole.date);
+    if (raw !== '') return raw;
+  }
+  return undefined;
+}
+
+/** `dd/mm`, no year — the raw shape `dateOmitsYear` rows carry. */
+function parseDayMonthCell(
+  raw: string,
+  order: StatementProfile['dateOrder'],
+): { day: number; month: number } | undefined {
+  const match = raw.trim().match(/^(\d{1,2})[-/.](\d{1,2})$/);
+  if (!match) return undefined;
+  const { day, month } = splitDayMonth(Number(match[1]), Number(match[2]), order);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+  return { day, month };
 }
 
 function resolveSpreadsheetColumnNumberFormats(

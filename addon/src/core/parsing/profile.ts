@@ -80,6 +80,33 @@ export interface StatementProfile {
   dateOmitsYear?: boolean;
 
   /**
+   * Recovers the `dateOmitsYear` year hint from two structural balance rows
+   * instead of a declared preamble period, for a layout that has neither.
+   *
+   * Banco de Chile's cuenta corriente export (calibrated 2026-09 against 8
+   * real samples) never states a `Período: desde ... hasta ...` — only a
+   * single `Fecha de Emisión` in the preamble — but its first and last
+   * accounting rows are always `SALDO INICIAL` and `SALDO FINAL`, and their
+   * `dd/mm` cells are the statement's own boundaries: `SALDO FINAL` always
+   * shares its day/month with the emission date (confirmed in all 8 rollover
+   * and non-rollover samples), and the missing year comes from there. A file
+   * where the anchor rows are missing or the day/month promise breaks fails
+   * closed rather than guessing — see `derivePeriodFromBalanceRows`.
+   *
+   * This is a fact about *this* export layout, not a general "emission date
+   * ends the period" rule for banks nobody has calibrated — a profile without
+   * this field keeps using `readPeriod`'s preamble scan.
+   */
+  periodFromBalanceRows?: {
+    /** Matches the row that opens the statement, e.g. `SALDO INICIAL`. */
+    openingLabel: RegExp;
+    /** Matches the row that closes it, e.g. `SALDO FINAL`. */
+    closingLabel: RegExp;
+    /** Matches the preamble label introducing the single emission date. */
+    emissionDateLabel: RegExp;
+  };
+
+  /**
    * Rows whose description matches are dropped before mapping: subtotals,
    * "SALDO ANTERIOR", legal footers.
    */
