@@ -329,6 +329,54 @@ describe('cartola inválida', () => {
     expect(result.blockers).toHaveLength(0);
   });
 
+  it('bloquea una coma ambigua de BancoEstado como cartola inválida', async () => {
+    const host = fakeHost();
+    const result = await prepareImportFromHost(host.ctx, {
+      file: fromText(
+        'cuentarut.csv',
+        [
+          'BancoEstado',
+          'Fecha Inicio;01/09/2025;Fecha Termino;24/09/2025',
+          '',
+          'Fecha;N Documento;Descripcion;Abono;Cargo;Saldo',
+          '03/sep;900101;COMPRA SINTETICA;;12,450;137.550',
+        ].join('\n'),
+      ),
+      accountId: ACCOUNT,
+      parserId: 'banco-estado.cuenta',
+    });
+
+    expect(result.prepared?.validation.ok).toBe(false);
+    expect(result.canImport).toBe(false);
+    const blocker = result.blockers.find((entry) => entry.code === 'statement-invalid');
+    expect(blocker?.message).toMatch(/formato numérico ambiguo/i);
+    expect(blocker?.message).not.toMatch(/0 de \d+ filas no se pudieron leer/i);
+    expect(blocker?.remedy).toMatch(/separador decimal o de miles/i);
+    expect(blocker?.remedy).not.toMatch(/hueco/i);
+  });
+
+  it('bloquea un período invertido de BancoEstado', async () => {
+    const host = fakeHost();
+    const result = await prepareImportFromHost(host.ctx, {
+      file: fromText(
+        'cuentarut-periodo-invertido.csv',
+        [
+          'BancoEstado',
+          'Fecha Inicio;24/09/2025;Fecha Termino;01/09/2025',
+          '',
+          'Fecha;N Documento;Descripcion;Abono;Cargo;Saldo',
+          '03/sep;900101;COMPRA SINTETICA;;12.450;137.550',
+        ].join('\n'),
+      ),
+      accountId: ACCOUNT,
+      parserId: 'banco-estado.cuenta',
+    });
+
+    expect(result.prepared?.validation.ok).toBe(false);
+    expect(result.canImport).toBe(false);
+    expect(result.blockers.some((entry) => entry.code === 'statement-invalid')).toBe(true);
+  });
+
   it('acumula los bloqueos en vez de reportar sólo el primero', async () => {
     const host = fakeHost();
     host.searchError = new Error('backend unavailable');

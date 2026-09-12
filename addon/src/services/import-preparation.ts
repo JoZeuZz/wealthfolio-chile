@@ -236,6 +236,14 @@ function describeInvalidStatement(
     };
   }
 
+  if (codes.has('ambiguous-amount-format')) {
+    return {
+      message: 'El archivo tiene un formato numérico ambiguo en uno o más montos.',
+      remedy:
+        'Revisa el separador decimal o de miles de la cartola, o prueba con otro perfil de banco antes de importar.',
+    };
+  }
+
   if (summary.parsedRows === 0) {
     return {
       message: 'No se reconoció ningún movimiento en el archivo.',
