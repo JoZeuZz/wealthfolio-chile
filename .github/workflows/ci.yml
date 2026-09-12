@@ -73,8 +73,27 @@ jobs:
       - name: Refuse anything that looks like a RUT in fixtures
         run: |
           # Synthetic fixtures must not carry a real national ID by accident.
-          if grep -rEn '\b[0-9]{1,2}\.[0-9]{3}\.[0-9]{3}-[0-9kK]\b' samples/synthetic addon/tests 2>/dev/null; then
-            echo "::error::Se encontró algo con forma de RUT en fixtures sintéticos."
+          #
+          # Tests that exercise RUT masking/redaction (privacy.test.ts,
+          # card-facts-review.test.ts, calibration*.test.ts) need at least one
+          # RUT-shaped value to redact. Rather than exempt a path — which would
+          # let a real RUT slip in anywhere under it undetected — exactly one
+          # sentinel VALUE is allowed: 12.345.678-9. Its check digit is wrong
+          # for body 12345678 (the correct one is 5), so it can never be a real
+          # RUT; it only has to look like one to a shape-based redactor. Every
+          # other RUT-shaped value still fails the build, in both directories —
+          # samples/synthetic is not exempted by path, only this exact string
+          # is exempted by content, so a real RUT pasted there by accident is
+          # still caught.
+          ALLOWED_RUT='12.345.678-9'
+          matches=$(grep -rEno '\b[0-9]{1,2}\.[0-9]{3}\.[0-9]{3}-[0-9kK]\b' samples/synthetic addon/tests 2>/dev/null || true)
+          if [ -z "$matches" ]; then
+            exit 0
+          fi
+          offending=$(awk -F: -v ok="$ALLOWED_RUT" '{tok=$NF; if (tok != ok) print}' <<< "$matches")
+          if [ -n "$offending" ]; then
+            echo "::error::Se encontró algo con forma de RUT en fixtures sintéticos (distinto del sentinel autorizado $ALLOWED_RUT)."
+            echo "$offending"
             exit 1
           fi
 

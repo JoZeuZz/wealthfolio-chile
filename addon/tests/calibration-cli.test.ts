@@ -262,7 +262,7 @@ describe('dónde puede vivir una cartola', () => {
 describe('privacidad del informe', () => {
   const PRIVATE = [
     'Cartola Cuenta Corriente 000123456789',
-    'Titular: Juan Perez Soto  RUT 12.345.678-5',
+    'Titular: Juan Perez Soto  RUT 12.345.678-9',
     'Tarjeta 4532 1122 3344 5566   correo juan.perez@example.com   fono +56 9 8765 4321',
     'Fecha;Descripcion;Cargo;Abono;Saldo',
     '03/02/2026;TRANSFERENCIA A MARIA GONZALEZ;120.000;;380.000',
@@ -289,7 +289,7 @@ describe('privacidad del informe', () => {
         readFile: () => new TextEncoder().encode(PRIVATE),
         stat: () => ({ isDirectory: false, size: PRIVATE.length }),
       });
-      runCalibration(['/home/usuario/CartolaRut_12345678_5.csv'], context);
+      runCalibration(['/home/usuario/CartolaRut_12345678_9.csv'], context);
 
       expect(textOf(context.capture)).not.toContain(needle);
     });
