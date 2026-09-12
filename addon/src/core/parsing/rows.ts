@@ -1,6 +1,15 @@
-import { DateParseError, parseStatementDate, type IsoDate } from '../dates';
+import { DateParseError, parseStatementDate, type DateYearHint, type IsoDate } from '../dates';
 import { detectInstallment } from '../installments/detect';
-import { abs, isZero, MoneyError, negate, parseAmount, sign, type Money } from '../money';
+import {
+  abs,
+  isZero,
+  MoneyError,
+  negate,
+  parseAmount,
+  sign,
+  type Money,
+  type NumberFormatHint,
+} from '../money';
 import { defaultKindForRow } from '../classify/card-semantics';
 import { Confidence, Direction } from '../model/kinds';
 import type { RowStats, StatementIssue } from '../model/statement';
@@ -30,6 +39,17 @@ export interface MapRowsInput {
   accountRef?: string;
   /** Overrides the profile currency when the file states its own. */
   currency?: string;
+  /**
+   * The period the file declares, for resolving a date cell that names no
+   * year. Only read when `profile.dateOmitsYear` is set.
+   */
+  yearHint?: DateYearHint;
+  /**
+   * Resolved `numberFormat` overrides for specific columns — the caller's job
+   * to decide, e.g. only for a spreadsheet source. See
+   * `StatementProfile.spreadsheetColumnNumberFormats`.
+   */
+  columnNumberFormats?: Partial<Record<ColumnRole, NumberFormatHint>>;
 }
 
 export interface MapRowsResult {
@@ -40,7 +60,7 @@ export interface MapRowsResult {
 }
 
 export function mapRows(input: MapRowsInput): MapRowsResult {
-  const { sheet, map, profile, firstDataRow, fileHash, accountRef } = input;
+  const { sheet, map, profile, firstDataRow, fileHash, accountRef, yearHint, columnNumberFormats } = input;
   const currency = (input.currency ?? profile.defaultCurrency).toUpperCase();
   const ignorePatterns = [...COMMON_IGNORE_PATTERNS, ...(profile.ignoreRowPatterns ?? [])];
 
@@ -106,6 +126,8 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
         accountRef,
         dateOrder: dateOrder.order,
         ...(directionFlagHeader !== undefined ? { directionFlagHeader } : {}),
+        ...(profile.dateOmitsYear ? { yearHint } : {}),
+        ...(columnNumberFormats !== undefined ? { columnNumberFormats } : {}),
       });
       if (transaction === null) {
         skipped += 1;
@@ -142,6 +164,10 @@ interface MapRowInput {
   dateOrder: StatementProfile['dateOrder'];
   /** The direction column's heading, normalised. See {@link readDirectionFlag}. */
   directionFlagHeader?: string;
+  /** The period declared by the file, for a date cell that names no year. */
+  yearHint?: DateYearHint;
+  /** Resolved per-column `numberFormat` overrides. See {@link MapRowsInput}. */
+  columnNumberFormats?: Partial<Record<ColumnRole, NumberFormatHint>>;
 }
 
 /**
@@ -158,7 +184,7 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
   // No money in any column that could hold it: the row is a separator, a
   // continuation line or a zero-value artefact. Not a movement, and skipping it
   // is the honest answer.
-  if (!hasAmountContent(row, map, currency, profile.numberFormat)) return null;
+  if (!hasAmountContent(row, map, currency, profile, input.columnNumberFormats)) return null;
 
   // Money with neither a date nor a glosa is a total, not a movement missing
   // its date. A bank writes `;;490.000;` under the last row and means "this is
@@ -175,13 +201,13 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
 
   // No per-row ambiguity warning: the order was settled for the file, and a
   // flag that fires on every row with a day of 12 or less stops being read.
-  const parsedDate = parseStatementDate(rawDate, { order: dateOrder });
+  const parsedDate = parseStatementDate(rawDate, { order: dateOrder, yearHint: input.yearHint });
 
   let postedDate: IsoDate | undefined;
   const rawPosted = cell(row, map, ColumnRole.postedDate);
   if (rawPosted !== '') {
     try {
-      postedDate = parseStatementDate(rawPosted, { order: dateOrder }).date;
+      postedDate = parseStatementDate(rawPosted, { order: dateOrder, yearHint: input.yearHint }).date;
     } catch {
       warnings.push({
         code: 'unparsed-column',
@@ -214,6 +240,9 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     ...(input.directionFlagHeader !== undefined
       ? { directionFlagHeader: input.directionFlagHeader }
       : {}),
+    ...(input.columnNumberFormats !== undefined
+      ? { columnNumberFormats: input.columnNumberFormats }
+      : {}),
   });
   if (amountResult === null) {
     throw new Error('la fila tiene fecha pero ninguna columna de monto con contenido');
@@ -226,7 +255,12 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     warnings.push({ code: 'zero-amount', message: 'El movimiento tiene monto cero.' });
   }
 
-  const balanceAfter = readOptionalMoney(cell(row, map, ColumnRole.balance), profile, currency);
+  const balanceAfter = readOptionalMoney(
+    cell(row, map, ColumnRole.balance),
+    profile,
+    currency,
+    input.columnNumberFormats,
+  );
   const direction = sign(amount) < 0 ? Direction.out : Direction.in;
 
   const installment = detectInstallment(description, cell(row, map, ColumnRole.installment), {
@@ -434,7 +468,8 @@ function hasAmountContent(
   row: string[],
   map: ColumnMap,
   currency: string,
-  format: StatementProfile['numberFormat'],
+  profile: StatementProfile,
+  columnNumberFormats: Partial<Record<ColumnRole, NumberFormatHint>> | undefined,
 ): boolean {
   // Exactly the columns `readAmount` reads. `purchaseAmount` used to be here
   // and is not: nothing reads it, so a CMR statement with `Monto Total` filled
@@ -447,7 +482,25 @@ function hasAmountContent(
     ColumnRole.credit,
     ColumnRole.amount,
   ] as const;
-  return AMOUNT_ROLES.some((role) => carriesValue(cell(row, map, role), currency, format));
+  return AMOUNT_ROLES.some((role) =>
+    carriesValue(cell(row, map, role), currency, formatForRole(profile, columnNumberFormats, role)),
+  );
+}
+
+/**
+ * `numberFormat` for one column, honouring a resolved override.
+ *
+ * BancoEstado's CuentaRUT export is the reason this exists: `Cargo`/`Abono`
+ * print a comma thousands separator in the same row where `Saldo` prints a
+ * dot, so one `numberFormat` for the whole statement cannot read both
+ * correctly. See `StatementProfile.spreadsheetColumnNumberFormats`.
+ */
+function formatForRole(
+  profile: StatementProfile,
+  columnNumberFormats: Partial<Record<ColumnRole, NumberFormatHint>> | undefined,
+  role: ColumnRole,
+): StatementProfile['numberFormat'] {
+  return columnNumberFormats?.[role] ?? profile.numberFormat;
 }
 
 /**
@@ -488,6 +541,8 @@ interface ReadAmountInput {
    * heading above them, not by a global table. See {@link readDirectionFlag}.
    */
   directionFlagHeader?: string;
+  /** Resolved per-column `numberFormat` overrides. See {@link MapRowsInput}. */
+  columnNumberFormats?: Partial<Record<ColumnRole, NumberFormatHint>>;
 }
 
 /**
@@ -498,14 +553,14 @@ interface ReadAmountInput {
  * columns, and a single unsigned column plus a direction flag.
  */
 function readAmount(input: ReadAmountInput): Money | null {
-  const { row, map, profile, currency, warnings } = input;
-  const format = profile.numberFormat;
+  const { row, map, profile, currency, warnings, columnNumberFormats } = input;
 
   // A labelled instalment column settles what is charged this period, so it
   // wins over any general amount column on the same row.
   if (map.installmentAmount !== undefined) {
     const text = cell(row, map, ColumnRole.installmentAmount);
     if (text !== '') {
+      const format = formatForRole(profile, columnNumberFormats, ColumnRole.installmentAmount);
       const parsed = parseAmount(text, { currency, format, allowDebitCreditSuffix: true });
       if (parsed.explicitSign) return signedByMarker(parsed.money, parsed.explicitSign);
       return profile.amountSign === 'debit-positive' ? negate(parsed.money) : parsed.money;
@@ -516,8 +571,18 @@ function readAmount(input: ReadAmountInput): Money | null {
   const creditText = cell(row, map, ColumnRole.credit);
 
   if (map.debit !== undefined || map.credit !== undefined) {
-    const debit = parseOptional(debitText, currency, format, warnings);
-    const credit = parseOptional(creditText, currency, format, warnings);
+    const debit = parseOptional(
+      debitText,
+      currency,
+      formatForRole(profile, columnNumberFormats, ColumnRole.debit),
+      warnings,
+    );
+    const credit = parseOptional(
+      creditText,
+      currency,
+      formatForRole(profile, columnNumberFormats, ColumnRole.credit),
+      warnings,
+    );
 
     // Both columns filled is a layout the profile does not describe; refusing
     // beats guessing which one is authoritative.
@@ -532,6 +597,7 @@ function readAmount(input: ReadAmountInput): Money | null {
   const amountText = cell(row, map, ColumnRole.amount);
   if (amountText === '') return null;
 
+  const format = formatForRole(profile, columnNumberFormats, ColumnRole.amount);
   const parsed = parseAmount(amountText, { currency, format, allowDebitCreditSuffix: true });
   if (parsed.ambiguous) {
     warnings.push({
@@ -638,10 +704,14 @@ function readOptionalMoney(
   text: string,
   profile: StatementProfile,
   currency: string,
+  columnNumberFormats: Partial<Record<ColumnRole, NumberFormatHint>> | undefined,
 ): Money | undefined {
   if (text === '') return undefined;
   try {
-    return parseAmount(text, { currency, format: profile.numberFormat }).money;
+    return parseAmount(text, {
+      currency,
+      format: formatForRole(profile, columnNumberFormats, ColumnRole.balance),
+    }).money;
   } catch {
     return undefined;
   }

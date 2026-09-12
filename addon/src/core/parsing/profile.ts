@@ -39,6 +39,47 @@ export interface StatementProfile {
   columnSynonyms?: Partial<Record<ColumnRole, string[]>>;
 
   /**
+   * Bank-specific statement-period pattern, matched against one preamble line
+   * at a time. Capture groups one and two must contain complete dates.
+   */
+  periodLinePattern?: RegExp;
+
+  /**
+   * Overrides `numberFormat` for specific columns, spreadsheet sources only
+   * (`.xlsx`/`.xls` — never a `.csv` read of the same bank).
+   *
+   * The one real BancoEstado CuentaRUT sample seen so far is an XLSX whose
+   * `Cargo`/`Abono` cells print a comma thousands separator (`1,234`) while
+   * `Saldo`, in the same row, prints a dot (`1.234`) — a plausible artefact of
+   * how the spreadsheet cell was formatted, not necessarily of BancoEstado's
+   * CSV export, which nothing here has seen for real. Scoping the override to
+   * spreadsheet sources means a CSV of the same bank keeps the statement-wide
+   * `numberFormat` instead of inheriting an assumption only proven for XLSX.
+   */
+  spreadsheetColumnNumberFormats?: Partial<Record<ColumnRole, NumberFormatHint>>;
+
+  /**
+   * Lexical evidence required before applying each spreadsheet-only number
+   * format override. The evidence is evaluated against mapped data cells.
+   */
+  spreadsheetColumnNumberFormatEvidence?: Partial<Record<ColumnRole, RegExp>>;
+
+  /**
+   * Whether an amount-format ambiguity blocks this profile or remains a warning.
+   * Omitted profiles preserve the advisory behavior.
+   */
+  ambiguousAmountCheck?: 'advisory' | 'authoritative';
+
+  /**
+   * The date column names a day and a month but never a year — BancoEstado's
+   * CuentaRUT export does this (`03/sep`). The year is inferred from the
+   * period the statement declares in its preamble; a file with no declared
+   * period fails the row rather than guessing. See
+   * `core/dates.ts#resolveYearForMonth`.
+   */
+  dateOmitsYear?: boolean;
+
+  /**
    * Rows whose description matches are dropped before mapping: subtotals,
    * "SALDO ANTERIOR", legal footers.
    */
