@@ -1121,3 +1121,141 @@ validación usó datos sintéticos. El hallazgo de la sesión (parser v0.2.0) fu
 Las 6 activities sintéticas se eliminaron del host durante la validación
 (caso 1, limpieza completada). La instancia persistente quedó en el estado
 previo. Ninguna cartola ni actividad real fue modificada.
+
+---
+
+# Sesión 6 — host persistente actualizado de 3.7.0 a 3.8.0 (2026-09-12)
+
+La sesión 4 validó el delta 3.7→3.8 contra un contenedor **efímero**, destruido
+al terminar; la sesión 5 validó el fix INTEREST/CREDIT_CARD contra la instancia
+**persistente**, que quedó en 3.7.0 a propósito. Esta sesión promueve por
+primera vez la instancia persistente misma a 3.8.0, y hace en ella la primera
+host validation completa de la calibración de `banco-chile.cuenta-corriente`
+de esta tranche (fecha sin año, período por filas ancla, escala, signo,
+recorrido de saldo).
+
+## Preflight — riesgo legacy conocido (read-only)
+
+`docs/UPSTREAM.md` documenta un límite conocido: una fila `INTEREST` legacy en
+cuenta `CREDIT_CARD` con `metadata.dir: 'in'` se leería distinto entre host 3.7
+y 3.8. Antes de migrar, se comprobó contra la base SQLite del host persistente
+**sin login, en modo sólo lectura** (contenedor `alpine:3.21` efímero con el
+volumen de datos montado `:ro`):
+
+```sql
+SELECT COUNT(*) FROM activities a JOIN accounts acc ON acc.id = a.account_id
+WHERE a.activity_type = 'INTEREST' AND acc.account_type = 'CREDIT_CARD'
+  AND a.metadata LIKE '%"dir":"in"%';
+```
+
+Resultado: **0**. De hecho la única cuenta `CREDIT_CARD` del host (`CMR Test`)
+no tenía ninguna activity en absoluto en ese momento. Las 34 activities
+existentes en el host son 100 % sintéticas (3 cuentas, todas con sufijo
+"Test", todas con metadata `wealthfolioChile`). Sin riesgo de migración.
+
+## Backup
+
+`./scripts/backup.sh` — detiene el contenedor, vuelca el volumen completo
+(`wealthfolio.db` + `-wal` + `-shm` + `addons/`) a un `.tar.gz`, lo levanta de
+nuevo. Verificado: `backups/wealthfolio-20260912-031822.tar.gz`, 331 KB, no
+vacío, contiene los tres archivos de la base. Restore concreto y probado en
+sesiones anteriores: `./scripts/restore.sh <archivo>` (exige escribir
+`RESTAURAR`, reemplaza el volumen completo).
+
+## Baseline pre-migración
+
+| Dato | Valor |
+| --- | --- |
+| Versión | `wealthfolio/wealthfolio:3.7.0` |
+| Cuentas | 3 (`Banco Chile Test` CASH, `BancoEstado Test` CASH, `CMR Test` CREDIT_CARD) |
+| Activities | 34 (`CREDIT` 2, `DEPOSIT` 5, `FEE` 2, `TRANSFER_IN` 2, `TRANSFER_OUT` 7, `UNKNOWN` 4, `WITHDRAWAL` 12) |
+| Addon cargable | Sí, `healthz` → `ok` |
+
+## Migración
+
+`infra/.env`: `WF_VERSION=3.7.0` → `3.8.0`. `./scripts/stack.sh update`
+(respaldo automático adicional, `pull`, `recreate`). Logs de arranque:
+
+```
+Running database migrations
+Applied the following migrations:
+  - 20260809000001
+  - 20260902000001
+```
+
+Coincide exactamente con lo que `docs/UPSTREAM.md` documentó de antemano:
+sólo dos migraciones SQL entre 3.7.0 y 3.8.0, ninguna toca `activities` ni
+`accounts`. Contenedor sano (`docker inspect` confirma
+`wealthfolio/wealthfolio:3.8.0`, `healthy`) en menos de 10 segundos.
+
+## Post-migración — coherencia de datos
+
+Mismo query de baseline, después de migrar: **34 activities, mismo desglose
+por tipo, 3 cuentas** — sin cambios. La migración de cash semantics de 3.8
+(`activity_cash_migration.rs`) no tocó nada porque el addon nunca escribe
+`fee`/`tax` — consistente con lo ya documentado.
+
+## Redeploy del addon
+
+`infra/addons/wealthfolio-chile` tenía el build del 2026-09-09 (previo a toda
+la calibración de esta tranche). `./scripts/deploy-addon.sh` reconstruyó
+(`dist/addon.js`, 915.78 KB) e instaló antes de cualquier smoke.
+
+## Smoke de UI (agent-browser, login autenticado real)
+
+| Paso | Resultado |
+| --- | --- |
+| Login (`POST` vía formulario real) | OK |
+| Dashboard, sidebar, "Chile" en sidebar | OK |
+| Listado de cuentas | OK — 2 cuentas visibles en el dashboard (Banco Chile Test, BancoEstado Test) |
+| Addon carga dentro del iframe sandbox | OK — sin errores propios en consola (sólo `restore_sync_session`/device-sync, ajeno al addon) |
+| Permisos declarados aceptados | `functions=[getAll,search,saveMany,get,invalidateQueries,navigation.navigate,onDisable,router.add]` |
+
+## Host validation — Banco de Chile cuenta corriente (primera vez, fixture sintético)
+
+Archivo: `samples/synthetic/banco-chile-cuenta-corriente.csv` (el mismo
+fixture real-shaped de esta tranche — nunca la cartola real).
+
+| Paso | Resultado |
+| --- | --- |
+| Detección | `Banco de Chile — cuenta corriente 100%` |
+| Advertencias | 1 (`profile-unverified`, esperada — `pending-real-sample`); **ninguna de descuadre de saldo** |
+| Preview — fechas | `03-02-2026` … `28-02-2026`, todas correctas (período derivado de `SALDO INICIAL`/`SALDO FINAL` + `Fecha de Emisión`, no del preámbulo genérico) |
+| Preview — cargos/abonos | Signo correcto en las 12 filas (`+$1.850.000` sueldo, `-$85.400` compra, …) |
+| Dedupe | Reconoció correctamente 11 de 12 filas como "posible duplicado 100% similar" contra activities de sesiones de validación anteriores en la misma cuenta — confirma que el fingerprint/similaridad sigue funcionando bajo 3.8.0 |
+| Import (`saveMany`) | 1 fila seleccionada a mano → `1 creados, 0 fallidos` |
+| Activities resultante | Verificada por SQLite (`amount 45000 CLP`, `status POSTED`) y en la pantalla `/activities` real (`CLP45,000`, `Deposit`, `Banco Chile Test`) |
+| Cleanup | Fila borrada vía UI; verificado en SQLite que el registro desapareció y que un registro homónimo de una sesión anterior (2026-08-07) permaneció intacto |
+
+## Smoke reducido — BancoEstado CuentaRUT
+
+Archivo: `samples/synthetic/banco-estado-cuentarut.csv`. No se recalibró nada,
+sólo humo de compatibilidad 3.8.
+
+| Paso | Resultado |
+| --- | --- |
+| Detección | `BancoEstado — CuentaRUT / cuenta corriente 100%` |
+| Preview | 8 filas, todas "Nuevo" (cuenta sin historial previo), fechas y montos correctos, incluida una devolución (`ABONO DEVOLUCION COMPRA UNIMARC`) clasificada como ingreso y no confundida con la compra original |
+| Import (`saveMany`) | `8 creados, 0 fallidos` |
+| Cleanup | Las 8 filas identificadas por id en SQLite (todas con `created_at` de esta sesión) y borradas una por una vía UI, buscando por descripción única de cada una |
+
+## Verificación final
+
+- SQLite: `34` activities, `3` cuentas — idéntico al baseline pre-migración,
+  cero rastro de las filas de prueba de esta sesión.
+- `docker ps`: contenedor `healthy`, imagen `wealthfolio/wealthfolio:3.8.0`.
+- `pnpm verify`: 1362/1362 tests, typecheck, lint y build verdes.
+
+## Decisión sobre `minWealthfolioVersion`
+
+**Sin cambios.** Sigue en `3.7.0`, deliberadamente — ver
+`docs/UPSTREAM.md` § *v3.8.0 — migración de tooling controlada*. Esta sesión
+sólo mueve el **host de pruebas** a 3.8.0; no cierra el gate legacy
+INTEREST/`metadata.dir` documentado como pendiente, que sigue siendo el
+requisito antes de subir el mínimo del manifest.
+
+## Ninguna cartola real tocó el host
+
+Todo lo importado en esta sesión fue `samples/synthetic/*.csv`. Las cartolas
+reales de `samples/private/` sólo se tocaron, como siempre, a través de
+`pnpm calibrate`.

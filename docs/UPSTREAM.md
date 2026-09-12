@@ -16,7 +16,8 @@ documentación de terceros. Referencia actual **v3.7.0**, verificada el
 | --- | --- |
 | Repositorio | `wealthfolio/wealthfolio` |
 | Release estable más reciente | **v3.8.0** (2026-09-07) |
-| Release de referencia validada | **v3.7.0** (2026-08-19) — sigue siendo el mínimo host soportado |
+| Release de referencia validada | **v3.7.0** (2026-08-19) — sigue siendo el mínimo host soportado (`minWealthfolioVersion`) |
+| Host de pruebas persistente | **v3.8.0** desde 2026-09-12 (`infra/.env`, `docs/HOST_VALIDATION.md` § Sesión 6) — corre por encima del mínimo soportado; eso no cambia cuál es el mínimo |
 | Licencia del core | **AGPL-3.0** |
 | Licencia de `@wealthfolio/addon-sdk` | **MIT** |
 | Licencia de `@wealthfolio/ui` | **MIT** |
