@@ -358,6 +358,7 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
 function describeRowFailure(error: unknown): string {
   if (error instanceof DateParseError) return `no se pudo leer la fecha (${describeDateFailure(error)}).`;
   if (error instanceof MoneyError) return 'no se pudo leer el monto.';
+  if (error instanceof DirectionFlagError) return 'la columna de dirección trae un valor no reconocido.';
   const message = error instanceof Error ? error.message : String(error);
   return redactDescription(message, 80);
 }
@@ -693,6 +694,36 @@ function signedByMarker(amount: Money, marker: 'debit' | 'credit'): Money {
  * and the statement stops being importable. Guessing at the sign of a movement
  * is the one thing this module must not do.
  */
+/**
+ * Every way `readDirectionFlag` can refuse a value, as a closed vocabulary —
+ * never the value or the header that triggered it. There is only one kind
+ * today; the type exists so a future addition stays as deliberate and as
+ * PII-free as this one.
+ */
+export type DirectionFlagErrorKind = 'unrecognized';
+
+/**
+ * A direction-column value `readDirectionFlag` could not place in either
+ * vocabulary.
+ *
+ * `message` is for developers reading a stack trace locally and may name the
+ * raw cell, exactly like `MoneyError`/`DateParseError` already do — what
+ * matters is that nothing downstream ever reads it. `describeRowFailure`
+ * special-cases this type to a fixed, PII-free sentence, the same way it
+ * already does for those two, so a misaligned column that puts a name or a
+ * RUT under a `D/C` heading never reaches a calibration report or a stored
+ * issue.
+ */
+export class DirectionFlagError extends Error {
+  readonly kind: DirectionFlagErrorKind;
+
+  constructor(message: string, kind: DirectionFlagErrorKind = 'unrecognized') {
+    super(message);
+    this.name = 'DirectionFlagError';
+    this.kind = kind;
+  }
+}
+
 function readDirectionFlag(value: string, header?: string): 'debit' | 'credit' {
   const flag = normalizeDescription(value);
   const raw = value.trim();
@@ -713,7 +744,7 @@ function readDirectionFlag(value: string, header?: string): 'debit' | 'credit' {
   if (raw === '-') return 'debit';
   if (raw === '+') return 'credit';
 
-  throw new Error(
+  throw new DirectionFlagError(
     `la columna de dirección dice "${value}", que no significa nada bajo la cabecera "${header ?? '(sin cabecera)'}"`,
   );
 }

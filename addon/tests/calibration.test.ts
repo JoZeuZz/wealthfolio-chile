@@ -562,3 +562,27 @@ describe('el informe y el formato nativo de la planilla', () => {
     expect(printed).toMatch(/number/);
   });
 });
+
+/**
+ * P1 (review independiente): un valor no reconocido en la columna de
+ * dirección (`D/C`, `Cargo/Abono`) llegaba crudo hasta `formatReport` — un
+ * informe pensado para pegarse en un issue. Ver `readDirectionFlag` /
+ * `DirectionFlagError` en `core/parsing/rows.ts`.
+ */
+describe('un valor no reconocido en la columna de dirección no llega al informe', () => {
+  it('formatReport no contiene el sentinel privado, sólo la razón sanitizada', () => {
+    const sentinel = 'RUT 12.345.678-9 MARIA FERNANDA GONZALEZ';
+    const file = fromText(
+      'cartola.csv',
+      ['Fecha;Descripcion;Monto;D/C;Saldo', `03/02/2026;COMPRA;45.000;${sentinel};955.000`].join(
+        '\n',
+      ),
+    );
+
+    const printed = formatReport(reportFile(file, 'generico.cuenta'));
+
+    expect(printed).not.toContain('MARIA FERNANDA GONZALEZ');
+    expect(printed).not.toContain('12.345.678-9');
+    expect(printed).toMatch(/direcci[oó]n/i);
+  });
+});

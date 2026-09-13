@@ -314,6 +314,58 @@ describe('los problemas de una fila no citan la fila', () => {
   });
 });
 
+/**
+ * P1 (review independiente): `readDirectionFlag` lanzaba un `Error` genérico
+ * que interpolaba el valor crudo de la celda de dirección dentro del mensaje.
+ * `describeRowFailure` sólo sabe redactar tipos conocidos (`DateParseError`,
+ * `MoneyError`); todo lo demás cae a `redactDescription`, que sólo tacha
+ * patrones con forma (RUT, tarjeta) — un nombre libre "no tiene forma" y
+ * sobrevivía entero hasta el reporte de calibración.
+ */
+describe('la columna de dirección no cita el valor que no reconoció', () => {
+  function flaggedWithSentinel(sentinel: string) {
+    return prepareImport({
+      file: fromText(
+        'cartola.csv',
+        ['Fecha;Descripcion;Monto;D/C;Saldo', `03/02/2026;COMPRA;45.000;${sentinel};955.000`].join(
+          '\n',
+        ),
+      ),
+      accountId: 'acc-1',
+      parserId: 'generico.cuenta',
+      rules: [],
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+  }
+
+  it('un nombre + RUT en la columna de dirección no llega al mensaje del issue', () => {
+    const sentinel = 'RUT 12.345.678-9 MARIA FERNANDA GONZALEZ';
+    const prepared = flaggedWithSentinel(sentinel);
+
+    const issue = prepared.validation.issues.find((i) => i.code === 'row-parse-failed');
+    expect(issue).toBeDefined();
+    expect(issue?.message).not.toContain('MARIA FERNANDA GONZALEZ');
+    expect(issue?.message).not.toContain('12.345.678-9');
+    // Sigue diciendo dónde mirar y por qué, en vocabulario fijo y estable.
+    expect(issue?.message).toContain('Fila 2');
+    expect(issue?.message).toMatch(/direcci[oó]n/i);
+  });
+
+  it('la razón sanitizada es estable entre dos sentinels distintos (no interpola nada)', () => {
+    const a = flaggedWithSentinel('MARIA FERNANDA GONZALEZ');
+    const b = flaggedWithSentinel('PEDRO PABLO ROJAS');
+    const reasonA = a.validation.issues.find((i) => i.code === 'row-parse-failed')?.message.replace(
+      /^Fila \d+: /,
+      '',
+    );
+    const reasonB = b.validation.issues.find((i) => i.code === 'row-parse-failed')?.message.replace(
+      /^Fila \d+: /,
+      '',
+    );
+    expect(reasonA).toBe(reasonB);
+  });
+});
+
 describe('la metadata que llega al host', () => {
   it('no lleva un número de tarjeta en el comercio derivado', async () => {
     const { toActivityCreate, readChileMetadata } = await import(
