@@ -195,6 +195,55 @@ describe('loadDuplicateIndex', () => {
   });
 });
 
+/**
+ * P1 (review independiente): dedupe histórico Banco de Chile tarjeta.
+ *
+ * `ExistingMovement` sólo conservaba `fingerprint`/`weakFingerprint` — nunca
+ * `parser`/`parserVersion`/`fileHash`, aunque esos tres campos ya viven en
+ * `ChileMetadata` desde 0.1.0. Sin ellos, `classifyDuplicate` no tiene cómo
+ * reconocer "este archivo ya se importó antes bajo una semántica de monto
+ * incompatible" — ver `dedupe-legacy-source-conflict.test.ts` para el
+ * escenario completo. Este describe cubre sólo que la provenance sobrevive
+ * la lectura del índice.
+ */
+describe('provenance preservada en el índice', () => {
+  it('parser, parserVersion y fileHash llegan al ExistingMovement', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({
+          activityType: 'WITHDRAWAL',
+          amount: '12450',
+          date: '2026-02-05',
+          metadata: ourMetadata({ fp: 'fp-legacy' }),
+        }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+
+    const byFingerprint = index.byFingerprint.get('fp-legacy');
+    expect(byFingerprint?.parser).toBe('banco-chile.cartola-csv');
+    expect(byFingerprint?.parserVersion).toBe('1.0.0');
+    expect(byFingerprint?.fileHash).toBe('file-hash');
+
+    // Y también indexado por fileHash, que es lo que el guard de dedupe
+    // histórico necesita para encontrarlo sin conocer de antemano su huella.
+    expect(index.byFileHash.get('file-hash')).toHaveLength(1);
+    expect(index.byFileHash.get('file-hash')?.[0]?.activityId).toBe(byFingerprint?.activityId);
+  });
+
+  it('una actividad sin metadata nuestra no aporta fileHash (no hay de dónde sacarlo)', async () => {
+    const host = fakeHost({
+      activities: [
+        activityStub({ activityType: 'WITHDRAWAL', amount: '5000', date: '2026-03-06' }),
+      ],
+    });
+
+    const { index } = await loadDuplicateIndexResult(host.ctx, { accountId: ACCOUNT });
+    expect(index.byFileHash.size).toBe(0);
+  });
+});
+
 describe('pagination', () => {
   it('walks every page until the host reports no more rows', async () => {
     const activities = Array.from({ length: 1250 }, (_, i) =>

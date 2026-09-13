@@ -41,6 +41,7 @@ export type DuplicateReason =
   | 'repeated-within-file'
   | 'host-modified'
   | 'similar'
+  | 'legacy-source-conflict'
   | 'new';
 
 export interface DuplicateFinding {
@@ -71,17 +72,42 @@ export interface ExistingMovement {
    * what the ledger now holds. See {@link classifyDuplicate}.
    */
   hostModified?: boolean;
+  /**
+   * Provenance carried straight from `ChileMetadata` (`parser`,
+   * `parserVersion`, `fileHash`) — never derived, never guessed.
+   *
+   * Absent for an activity this addon did not write (no metadata at all) or
+   * written before these fields existed. Used only by the narrow
+   * `legacy-source-conflict` guard in {@link classifyDuplicate}: fingerprint
+   * and weak-fingerprint matching are already keyed on content, and adding
+   * provenance to *that* matching would make an ordinary re-import see two
+   * "different" rows whenever a parser version bumps for reasons that never
+   * touch the amount. This is deliberately a second, separate signal.
+   */
+  parser?: string;
+  parserVersion?: string;
+  fileHash?: string;
 }
 
 export interface DuplicateIndex {
   byFingerprint: Map<string, ExistingMovement>;
   byWeakFingerprint: Map<string, ExistingMovement[]>;
+  /**
+   * Every indexed movement that carries a `fileHash`, grouped by it.
+   *
+   * Exists solely for the `legacy-source-conflict` guard: finding "does this
+   * source file already have activities under an incompatible parser" needs
+   * every movement for that file, not just the one keyed by a fingerprint the
+   * current parse will never reproduce.
+   */
+  byFileHash: Map<string, ExistingMovement[]>;
 }
 
 /** Build the lookup structures once per import run. */
 export function buildDuplicateIndex(existing: readonly ExistingMovement[]): DuplicateIndex {
   const byFingerprint = new Map<string, ExistingMovement>();
   const byWeakFingerprint = new Map<string, ExistingMovement[]>();
+  const byFileHash = new Map<string, ExistingMovement[]>();
 
   for (const movement of existing) {
     if (movement.fingerprint) byFingerprint.set(movement.fingerprint, movement);
@@ -90,9 +116,42 @@ export function buildDuplicateIndex(existing: readonly ExistingMovement[]): Dupl
       if (bucket) bucket.push(movement);
       else byWeakFingerprint.set(movement.weakFingerprint, [movement]);
     }
+    if (movement.fileHash) {
+      const bucket = byFileHash.get(movement.fileHash);
+      if (bucket) bucket.push(movement);
+      else byFileHash.set(movement.fileHash, [movement]);
+    }
   }
 
-  return { byFingerprint, byWeakFingerprint };
+  return { byFingerprint, byWeakFingerprint, byFileHash };
+}
+
+/**
+ * Whether `existing` was written under a Banco de Chile card import
+ * semantics this project knows is incompatible with the current
+ * `banco-chile.tarjeta` parser, for the *same source file*.
+ *
+ * Before 0.2.0's amount-format fixes, a Banco de Chile card cartola could
+ * have been imported two ways this project no longer trusts:
+ * `banco-chile.tarjeta@0.1.0` itself, or `generico.tarjeta` (before this
+ * profile's own autodetection existed). Either can have written a different
+ * amount for the same row than the current parser now computes for the exact
+ * same cell — which changes both the strong and the weak fingerprint, so
+ * reimporting the same file makes the row look brand new even though the
+ * ledger already holds it under the old, wrong amount.
+ *
+ * Deliberately narrow: a guard for this one known transition, not a general
+ * "any parser version bump might invalidate history" rule. A future
+ * `banco-chile.tarjeta` version that does not change how amounts are read
+ * needs no entry here, and no other parser is touched at all.
+ */
+function isLegacyIncompatibleCardSource(
+  candidateParser: string,
+  existing: Pick<ExistingMovement, 'parser' | 'parserVersion'>,
+): boolean {
+  if (candidateParser !== 'banco-chile.tarjeta') return false;
+  if (existing.parser === 'generico.tarjeta') return true;
+  return existing.parser === 'banco-chile.tarjeta' && existing.parserVersion === '0.1.0';
 }
 
 export interface ClassifyOptions {
@@ -202,6 +261,29 @@ export function classifyDuplicate(
       score: best.score,
       reason: `Coincide en fecha y monto con un movimiento existente (descripción ${Math.round(best.score * 100)}% similar).`,
     };
+  }
+
+  // Neither fingerprint found it — but a row from THIS SAME source file can
+  // already be in the ledger under a parser/version this project knows
+  // rewrote the amount. Content-based matching cannot see that: the old and
+  // new amounts differ, so both the strong and weak fingerprint differ too.
+  // Fails closed to `probable` (never auto-imported, never silently skipped)
+  // rather than risk writing a second copy of a movement whose only fault is
+  // that its amount got corrected. See `isLegacyIncompatibleCardSource`.
+  if (candidate.sourceFileHash) {
+    const sameFile = index.byFileHash.get(candidate.sourceFileHash) ?? [];
+    const legacyConflict = sameFile.find((movement) =>
+      isLegacyIncompatibleCardSource(candidate.sourceParser, movement),
+    );
+    if (legacyConflict) {
+      return {
+        verdict: 'probable',
+        reason_code: 'legacy-source-conflict',
+        existingActivityId: legacyConflict.activityId,
+        reason:
+          'Este archivo ya se importó antes con una versión anterior que interpretaba el monto distinto. Podría ser el mismo movimiento con un monto corregido: revísalo a mano antes de importarlo, para no duplicar el gasto.',
+      };
+    }
   }
 
   return { verdict: 'none', reason_code: 'new', reason: 'Movimiento nuevo.' };

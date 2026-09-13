@@ -119,6 +119,13 @@ export async function loadDuplicateIndexResult(
         amount,
         description: activity.comment ?? '',
         ...(modified ? { hostModified: true } : {}),
+        // Provenance, straight from our own metadata — never guessed. Powers
+        // the `legacy-source-conflict` guard in `core/dedupe/classify.ts`,
+        // which needs to find every activity for a given source file, not
+        // only the one a fresh parse's fingerprint happens to still match.
+        ...(metadata?.parser ? { parser: metadata.parser } : {}),
+        ...(metadata?.parserVersion ? { parserVersion: metadata.parserVersion } : {}),
+        ...(metadata?.fileHash ? { fileHash: metadata.fileHash } : {}),
       });
     }
 
