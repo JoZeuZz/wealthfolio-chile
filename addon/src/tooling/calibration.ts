@@ -8,6 +8,7 @@ import {
   type ValidationResult,
 } from '../core/model/statement';
 import { detectHeader, mapColumns } from '../core/parsing/columns';
+import { describeColumnShape, type ColumnShape } from '../core/parsing/column-shape';
 import type { Sheet } from '../core/parsing/tabular';
 import { redactSensitive } from '../core/privacy';
 import {
@@ -107,8 +108,10 @@ export interface HeaderFacts {
    *
    * The operator inspects that position in the private file locally. Raw
    * headings cannot enter the pasteable report because they may contain PII.
+   * `shape` is the one thing the report can add about *what's there*: a
+   * digit-run bucket, never a digit — see `core/parsing/column-shape.ts`.
    */
-  unmapped: Array<{ column: number }>;
+  unmapped: Array<{ column: number; shape: ColumnShape }>;
 }
 
 export interface RowFacts {
@@ -286,10 +289,19 @@ function headerFacts(sheet: Sheet | undefined, parserId: string): HeaderFacts {
     if (heading === '') return;
     const role = mappedColumns.get(column);
     if (role) mapped.push({ role, column });
-    else unmapped.push({ column });
+    else unmapped.push({ column, shape: columnShapeAt(sheet, header.firstDataRow, column) });
   });
 
   return { row: header.headerRow, mapped, unmapped };
+}
+
+/** The shape of one column's own values, read straight from the sheet. */
+function columnShapeAt(sheet: Sheet, firstDataRow: number, column: number): ColumnShape {
+  const values: string[] = [];
+  for (let i = firstDataRow; i < sheet.rows.length; i += 1) {
+    values.push(sheet.rows[i]?.[column] ?? '');
+  }
+  return describeColumnShape(values);
 }
 
 function rowFacts(statement: ParsedStatement): RowFacts {
@@ -519,7 +531,7 @@ export function formatReport(report: CalibrationReport): string {
   if (report.header.unmapped.length > 0) {
     lines.push('  Sin mapear:');
     for (const column of report.header.unmapped) {
-      lines.push(`  [${column.column}] rol no reconocido`);
+      lines.push(`  [${column.column}] rol no reconocido — forma: ${column.shape}`);
     }
   }
 

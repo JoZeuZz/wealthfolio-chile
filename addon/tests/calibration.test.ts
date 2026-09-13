@@ -65,6 +65,27 @@ describe('lo que el informe sí dice', () => {
     expect(header.unmapped.every((column) => !('heading' in column))).toBe(true);
   });
 
+  /**
+   * La posición sola no distingue una columna de índice de cuota de una de
+   * moneda o de referencia larga — las tres son "sin mapear". La forma sí:
+   * dígitos cortos, código de tres letras y texto libre no se confunden entre
+   * sí aunque el perfil no sepa el nombre de ninguna de las tres columnas.
+   */
+  it('la forma de una columna sin mapear, nunca su valor', () => {
+    const header = report(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo;Sucursal;ColX7;ColY9',
+        '03/02/2026;COMPRA SUPERMERCADO LIDER PROVIDENCIA;45.000;;955.000;PROVIDENCIA;2;USD',
+        '04/02/2026;ABONO SUELDO EMPRESA;;1.200.000;2.155.000;CASA MATRIZ;;CLP',
+      ].join('\n'),
+    ).header;
+
+    const byColumn = new Map(header.unmapped.map((column) => [column.column, column.shape]));
+    expect(byColumn.get(5)).toBe('con-letras'); // Sucursal
+    expect(byColumn.get(6)).toBe('entero-corto'); // ColX7
+    expect(byColumn.get(7)).toBe('codigo-moneda'); // ColY9
+  });
+
   it('cuántas filas se leyeron y cuántas no', () => {
     const rows = report(
       [
@@ -221,6 +242,24 @@ describe('lo que el informe no puede decir nunca', () => {
     expect(text).not.toContain('CartolaCuentaRut');
     expect(text).toContain('.csv');
     expect(text).not.toContain('aaaaaaaaaaaa');
+  });
+
+  it('la forma de una columna sin mapear nunca imprime el valor de la celda', () => {
+    const withShapes = report(
+      [
+        'Fecha;Descripcion;Cargo;Abono;Saldo;Sucursal;ColX7;ColY9',
+        '03/02/2026;COMPRA SUPERMERCADO LIDER PROVIDENCIA;45.000;;955.000;PROVIDENCIA;2;USD',
+        '04/02/2026;ABONO SUELDO EMPRESA;;1.200.000;2.155.000;CASA MATRIZ;;CLP',
+      ].join('\n'),
+    );
+    const printed = formatReport(withShapes);
+
+    expect(printed).not.toMatch(/PROVIDENCIA|CASA MATRIZ|NUNOA/i);
+    expect(printed).not.toContain('USD');
+    expect(printed).not.toContain('CLP');
+    expect(printed).toContain('con-letras');
+    expect(printed).toContain('entero-corto');
+    expect(printed).toContain('codigo-moneda');
   });
 
   it('y una cabecera que llevara un número de cuenta también se redacta', () => {
