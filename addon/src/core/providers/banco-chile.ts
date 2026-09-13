@@ -136,7 +136,22 @@ export const bancoChileCheckingParser: StatementParser = createProfileParser(
 );
 
 export const bancoChileCardParser: StatementParser = createProfileParser(BANCO_CHILE_CARD, {
-  strongMarkers: [/BANCO\s+DE\s+CHILE/i, /\bBANCHILE\b/i],
+  strongMarkers: [
+    /BANCO\s+DE\s+CHILE/i,
+    /\bBANCHILE\b/i,
+    // None of the 4 real `Mov_Facturado` cartolas print "Banco de Chile" as
+    // readable text — probably a logo — so the only real bank name marker
+    // above never fires on them, and neither used to fire the generic card
+    // parser's own weak markers (`CUOTA`, `TARJETA`, `FACTURACION`), which
+    // are common enough that any card statement satisfies them too and
+    // outscored this profile's narrower ones. Neither half of this pattern is
+    // trusted alone: a `Movimientos Nacionales`/`Internacionales` split, or a
+    // `Pago Mínimo`/`Fecha de Facturación`/`Pagar Hasta` label, could plausibly
+    // appear on another bank's card export. Seeing *both together* is this
+    // export's own layout, confirmed structurally (never by content) on all 4
+    // real files.
+    /(?=[\s\S]*MOVIMIENTOS\s+(?:NACIONALES|INTERNACIONALES))(?=[\s\S]*(?:MOVIMIENTOS\s+FACTURADOS|MONTO\s+FACTURADO|PAGO\s+MINIMO|FECHA\s+DE\s+FACTURACION|PAGAR\s+HASTA))/i,
+  ],
   weakMarkers: [/TARJETA\s+DE\s+CR[EÉ]DITO/i, /FACTURACI[OÓ]N/i, /CUPO\s+(?:TOTAL|UTILIZADO)/i],
   fileNamePatterns: [/tarjeta/i, /estado.?cuenta/i],
 });
