@@ -11,7 +11,7 @@ soportadas.
 │                    Wealthfolio (host)                       │
 │   cuentas · actividades · patrimonio · inversiones          │
 └───────────────────────────┬─────────────────────────────────┘
-                            │  Addon SDK 3.7.0
+                            │  Addon SDK 3.8.0 (mínimo host 3.7.0)
                             │  (iframe sandbox, allow-scripts)
 ┌───────────────────────────▼─────────────────────────────────┐
 │                    Wealthfolio Chile                        │
@@ -122,7 +122,7 @@ Páginas: panel (`/addons/wealthfolio-chile`), wizard (`…/importar`), historia
 `@wealthfolio/ui`, provistos por el host.
 
 La página de conciliación es de **sólo lectura** por una razón de contrato, no
-de alcance: aplicar un par exige enlazar dos actividades, y el Addon SDK 3.7.0
+de alcance: aplicar un par exige enlazar dos actividades, y el Addon SDK 3.8.0
 no lo expone. Ver [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md).
 
 ---
@@ -238,7 +238,7 @@ plantilla fija. Un número plausible pero incorrecto es peor que ninguna frase.
 Proxmox
 └── LXC / VM con Docker
     └── docker compose (infra/compose.yml)
-        └── wealthfolio/wealthfolio:3.7.0
+        └── wealthfolio/wealthfolio:3.8.0  # host persistente de pruebas; minWealthfolioVersion sigue 3.7.0
             ├── volumen wealthfolio-data → /data (SQLite)
             └── bind mount              → /data/addons
                 └── wealthfolio-chile/
