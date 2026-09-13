@@ -447,6 +447,51 @@ describe('Banco de Chile — tarjeta de crédito', () => {
   });
 });
 
+/**
+ * Movimientos Internacionales es un layout real de Banco de Chile, no un
+ * error de lectura: su única columna de monto utilizable, "Monto (USD)", no
+ * está en la moneda de la cuenta. Mapearla obligaría a mentir en algún punto
+ * de la tubería — ver `banco-chile-tarjeta-currency.test.ts` para la
+ * evidencia (`account-mismatch` engañoso o `MoneyError`) — así que el layout
+ * se reconoce por su encabezado exacto y se rechaza antes de mapear ninguna
+ * fila. Layout confirmado contra un archivo real de Banco de Chile
+ * (`samples/private/Banco de Chile/Mov_Facturado*.xls`, nunca abierto más
+ * allá de su forma estructural: nombres de columna, no valores).
+ */
+describe('Banco de Chile — tarjeta, movimientos internacionales (no soportado)', () => {
+  const parser = getParser('banco-chile.tarjeta')!;
+  const file = fromXlsxRows('mov-facturado-internacional.xlsx', [
+    ['Banco de Chile'],
+    ['Titular', 'CLIENTE SINTETICO'],
+    [],
+    ['Movimientos Internacionales'],
+    ['', 'Categoría', '', 'Fecha', 'Descripción', '', 'País', 'Monto Moneda Origen', 'Monto (USD)'],
+    ['', 'VIAJES', '', '05/02/2026', 'HOTEL SINTETICO MIAMI', '', 'ESTADOS UNIDOS', '48,00', '52,30'],
+  ]);
+  const statement = parser.parse(inputForFile(file));
+
+  it('no produce ninguna transacción', () => {
+    expect(statement.transactions).toHaveLength(0);
+  });
+
+  it('reporta foreign-currency-unsupported como error', () => {
+    const issue = statement.issues.find((i) => i.code === 'foreign-currency-unsupported');
+    expect(issue?.level).toBe('error');
+  });
+
+  it('no reporta además no-transactions', () => {
+    expect(statement.issues.some((i) => i.code === 'no-transactions')).toBe(false);
+  });
+
+  it('la cuenta del statement sigue en CLP, nunca declarada USD', () => {
+    expect(statement.account.currency).toBe('CLP');
+  });
+
+  it('la validación falla', () => {
+    expect(parser.validate(statement).ok).toBe(false);
+  });
+});
+
 describe('Banco Falabella — cuenta corriente', () => {
   const prepared = () =>
     prepareImport({

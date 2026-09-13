@@ -7,8 +7,10 @@ import type { StatementParser } from './parser';
 /**
  * Banco de Chile / Edwards.
  *
- * `BANCO_CHILE_CARD` (tarjeta) is still written against published export
- * documentation, not a real cartola — `pending-real-sample` for that reason.
+ * `BANCO_CHILE_CARD` (tarjeta) is calibrated 2026-09 against 4 real XLS card
+ * cartolas (`Mov_Facturado`), through `pnpm calibrate` only — see its own
+ * doc comment below for what that confirmed and what it deliberately still
+ * refuses. `pending-real-sample` for the parts calibration could not reach.
  *
  * `BANCO_CHILE_CHECKING` (cuenta corriente) is calibrated 2026-09 against 8
  * real XLS cuenta corriente cartolas. Confirmed structure:
@@ -83,7 +85,7 @@ export const BANCO_CHILE_CARD: StatementProfile = {
   institution: 'banco-chile',
   institutionLabel: 'Banco de Chile — tarjeta de crédito',
   parserId: 'banco-chile.tarjeta',
-  parserVersion: '0.1.0',
+  parserVersion: '0.2.0',
   product: StatementProduct.credit_card,
   defaultCurrency: 'CLP',
   numberFormat: 'es-CL',
@@ -96,12 +98,32 @@ export const BANCO_CHILE_CARD: StatementProfile = {
     [ColumnRole.installment]: ['Cuotas', 'Cuota'],
     [ColumnRole.card]: ['Tarjeta', 'N Tarjeta'],
   },
+  // La tabla "Movimientos Internacionales" es un layout real distinto, no un
+  // error de lectura: su única columna de monto utilizable, "Monto (USD)", no
+  // está en la moneda de la cuenta. Ni `matchStatementToAccount` ni
+  // `computeTotals` saben hoy representar "cuenta CLP, movimiento USD" sin
+  // mentir en alguna parte — mapearla obligaría a etiquetar ese monto como CLP
+  // (el bug original) o a declarar el statement entero en USD, que
+  // `matchStatementToAccount` compararía contra la tarjeta CLP real como un
+  // `account-mismatch` engañoso, y que `computeTotals` no puede sumar junto a
+  // nada en CLP sin `MoneyError`. Reconocido por el encabezado exacto —
+  // "Monto (USD)" — y rechazado antes de mapear ninguna fila, en vez de
+  // importado a medias. `Monto Moneda Origen` no se usa: el archivo no declara
+  // en qué moneda está.
+  unsupportedLayoutHeaders: [
+    {
+      header: 'Monto (USD)',
+      code: 'foreign-currency-unsupported',
+      message:
+        'Este archivo contiene movimientos internacionales facturados en USD. Wealthfolio Chile todavía no puede importar movimientos USD dentro de una tarjeta cuya cuenta se modela en CLP sin perder la separación entre moneda de cuenta y moneda de movimiento.',
+    },
+  ],
   // Sin una cartola real no hay evidencia de que la columna de saldo camine
   // exacta, así que un desajuste aislado se informa y no bloquea.
   balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes:
-    'Falta un estado de cuenta real de tarjeta para confirmar cómo se expresan las cuotas y si los abonos (pagos) vienen en la misma columna con signo.',
+    'Calibrado 2026-09 contra 4 cartolas reales (Mov_Facturado, XLS) vía `pnpm calibrate`, dos layouts estructurales confirmados. "Movimientos Nacionales" (Categoría/Fecha/Descripción/Cuotas/Monto ($)) se mapea en CLP según la evidencia observada. "Movimientos Internacionales" (Categoría/Fecha/Descripción/País/Monto Moneda Origen/Monto (USD)) se reconoce pero queda bloqueado explícitamente (`foreign-currency-unsupported`): la tubería actual no representa cuenta CLP + movimiento USD de forma honesta. `Monto Moneda Origen` no se utiliza; `Monto (USD)` es la columna monetaria relevante de ese layout, pero no se importa todavía. Ningún archivo real trajo ambas tablas a la vez; un archivo que las combinara en una sola hoja no está cubierto (pickDataSheet lee una sola tabla). El preámbulo real sí trae labels de resumen (Monto Facturado, Pago Mínimo, Fecha de Facturación, Pagar Hasta) — `calibrate` todavía no los reconoce/extrae de este layout, no es que la cartola no los traiga. Falta también: cómo se expresan las cuotas y el signo de abono/pago, contra glosas reales.',
 };
 
 export const bancoChileCheckingParser: StatementParser = createProfileParser(

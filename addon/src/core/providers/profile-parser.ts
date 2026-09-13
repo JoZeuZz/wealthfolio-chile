@@ -180,6 +180,23 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
     };
   }
 
+  const unsupported = detectUnsupportedLayout(sheet, header.headerRow, profile);
+  if (unsupported) {
+    const dataRows = Math.max(0, sheet.rows.length - header.firstDataRow);
+    return {
+      institution: profile.institution,
+      parser: profile.parserId,
+      parserVersion: profile.parserVersion,
+      account: { product: profile.product, currency: profile.defaultCurrency },
+      period: {},
+      transactions: [],
+      rowStats: { dataRows, mapped: 0, skipped: dataRows, failed: 0 },
+      issues: [...issues, { level: 'error', code: unsupported.code, message: unsupported.message }],
+      fileHash: input.fileHash,
+      fileName: input.file.name,
+    };
+  }
+
   const map = mergeSynonyms(sheet, header.headerRow, profile, header.map);
   const account = readAccountMetadata(sheet, profile, header.headerRow);
   const fromColumn = readCurrencyColumn(sheet, map, header.firstDataRow, [
@@ -582,6 +599,37 @@ function mergeSynonyms(
   }
 
   return merged;
+}
+
+/**
+ * Recognizes a layout this profile can name precisely but does not import,
+ * from the header row's exact text alone — never from data content.
+ *
+ * Banco de Chile's card export has a second real layout, "Movimientos
+ * Internacionales", whose only usable amount column ("Monto (USD)") is not
+ * denominated in the account's own currency. Mapping it would mean either
+ * mislabeling a USD figure as CLP (the original bug) or making the whole
+ * statement claim to be USD, which `matchStatementToAccount` and
+ * `computeTotals` are not built to carry: the first would falsely refuse a
+ * correctly-chosen CLP account as a currency mismatch, and the second throws
+ * `MoneyError` the moment a CLP total and a USD amount meet. So the layout is
+ * named and refused before any row is mapped, rather than mapped into either
+ * kind of wrong.
+ */
+function detectUnsupportedLayout(
+  sheet: Sheet,
+  headerRow: number,
+  profile: StatementProfile,
+): { code: string; message: string } | undefined {
+  if (!profile.unsupportedLayoutHeaders) return undefined;
+
+  const row = (sheet.rows[headerRow] ?? []).map(normalizeHeader);
+  for (const marker of profile.unsupportedLayoutHeaders) {
+    if (row.includes(normalizeHeader(marker.header))) {
+      return { code: marker.code, message: marker.message };
+    }
+  }
+  return undefined;
 }
 
 /** Render a marker pattern as something a person can read in the UI. */

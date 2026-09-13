@@ -39,6 +39,23 @@ export interface StatementProfile {
   columnSynonyms?: Partial<Record<ColumnRole, string[]>>;
 
   /**
+   * Refuses a layout this profile can name precisely but does not import,
+   * detected from the header row's exact text alone — never from row content.
+   *
+   * A profile can recognize more than one real layout without being able to
+   * honestly import all of them: Banco de Chile's card export also prints an
+   * international-purchases table whose only usable amount column ("Monto
+   * (USD)") is not denominated in the account's own currency, and this
+   * project's pipeline assumes one currency per statement throughout the
+   * account match and the preview totals. Rather than mislabel that amount as
+   * the account's currency, or make the whole statement claim a currency the
+   * destination account does not have, the layout is named and the statement
+   * is refused — with `code`/`message` explaining why — before any row is
+   * mapped. Checked in array order, first match wins.
+   */
+  unsupportedLayoutHeaders?: Array<{ header: string; code: string; message: string }>;
+
+  /**
    * Bank-specific statement-period pattern, matched against one preamble line
    * at a time. Capture groups one and two must contain complete dates.
    */
