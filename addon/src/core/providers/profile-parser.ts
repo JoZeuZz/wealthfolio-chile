@@ -253,10 +253,21 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
   // statement-wide `numberFormat`.
   const fileKind = detectFileKind(input.file);
   const isSpreadsheet = fileKind === 'xlsx' || fileKind === 'xls';
+  const structuralFormats = isSpreadsheet
+    ? evaluateStructuralSpreadsheetColumnNumberFormats(
+        profile,
+        input.file,
+        sheet,
+        map,
+        header.headers,
+        header.firstDataRow,
+      )
+    : { overrides: undefined, conflicts: [] };
+  issues.push(...structuralFormats.conflicts);
   const columnNumberFormats = isSpreadsheet
     ? mergeColumnNumberFormats(
         resolveSpreadsheetColumnNumberFormats(profile, sheet, map, header.firstDataRow),
-        resolveStructuralSpreadsheetColumnNumberFormats(profile, input.file, sheet, map, header.firstDataRow),
+        structuralFormats.overrides,
       )
     : undefined;
 
@@ -1064,6 +1075,12 @@ function resolveSpreadsheetColumnNumberFormats(
   return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
+/** `evaluateStructuralSpreadsheetColumnNumberFormats`'s per-role verdict. */
+interface StructuralFormatVerdict {
+  overrides: Partial<Record<ColumnRole, StatementProfile['numberFormat']>> | undefined;
+  conflicts: StatementIssue[];
+}
+
 /**
  * Structural (XLS/XLSX cell metadata) twin of `resolveSpreadsheetColumnNumberFormats`.
  *
@@ -1073,23 +1090,40 @@ function resolveSpreadsheetColumnNumberFormats(
  * first place. Applies a configured override for a role only when every
  * mapped, non-blank data cell in that column is a native number whose format
  * is one of `spreadsheetColumnStructuralEvidence`'s listed shapes.
+ *
+ * A role that does not qualify is not always silent absence of evidence.
+ * `matched` (every cell qualifies) applies the override; `absent` (General, a
+ * text cell, no cell metadata at all) changes nothing and leaves the existing
+ * fail-closed lexical path — `ambiguous-amount-format` — to judge the text on
+ * its own; but `contradicted` — a native number cell whose Excel format
+ * classifies to a *real, explicit* shape (never `general`/`unknown`) that is
+ * simply not one of the allowed shapes, e.g. `decimal-3` when the profile
+ * only trusts `integer`/`grouped-integer`/`currency-integer` — is the
+ * container itself stating a scale the profile's lexical fallback cannot see
+ * and would silently get wrong (`core/money.ts#splitDecimal` reads a single
+ * dot + three-digit tail under `es-CL` as unambiguous grouping, exactly the
+ * wrong reading for a genuine 3-decimal value). That case reports
+ * `spreadsheet-number-format-conflict` and blocks rather than falling back.
  */
-function resolveStructuralSpreadsheetColumnNumberFormats(
+function evaluateStructuralSpreadsheetColumnNumberFormats(
   profile: StatementProfile,
   file: SourceFile,
   sheet: Sheet,
   map: ColumnMap,
+  headers: readonly string[],
   firstDataRow: number,
-): Partial<Record<ColumnRole, StatementProfile['numberFormat']>> | undefined {
+): StructuralFormatVerdict {
   const configured = profile.spreadsheetColumnNumberFormats;
   const evidence = profile.spreadsheetColumnStructuralEvidence;
-  if (!configured || !evidence) return undefined;
+  if (!configured || !evidence) return { overrides: undefined, conflicts: [] };
 
   const cellFormatSheets = readSpreadsheetCellFormats(file);
   const formatSheet = cellFormatSheets?.find((candidate) => candidate.name === sheet.name);
-  if (!formatSheet) return undefined;
+  if (!formatSheet) return { overrides: undefined, conflicts: [] };
 
   const resolved: Partial<Record<ColumnRole, StatementProfile['numberFormat']>> = {};
+  const conflicts: StatementIssue[] = [];
+
   for (const role of Object.values(ColumnRole)) {
     const format = configured[role];
     const allowedShapes = evidence[role];
@@ -1098,18 +1132,35 @@ function resolveStructuralSpreadsheetColumnNumberFormats(
 
     let sawRow = false;
     let everyRowQualifies = true;
+    let contradictingShape: string | undefined;
     for (let r = firstDataRow; r < sheet.rows.length; r += 1) {
       if ((sheet.rows[r]?.[column] ?? '').trim() === '') continue;
       const fact = formatSheet.cells[r]?.[column];
       sawRow = true;
-      if (!fact || fact.nativeType !== 'number' || !allowedShapes.includes(fact.numberFormatShape)) {
-        everyRowQualifies = false;
-        break;
+      if (fact && allowedShapes.includes(fact.numberFormatShape)) continue;
+
+      everyRowQualifies = false;
+      if (fact?.nativeType === 'number' && fact.numberFormatShape !== 'general' && fact.numberFormatShape !== 'unknown') {
+        contradictingShape = fact.numberFormatShape;
       }
     }
-    if (sawRow && everyRowQualifies) resolved[role] = format;
+
+    if (sawRow && everyRowQualifies) {
+      resolved[role] = format;
+    } else if (contradictingShape) {
+      const columnLabel = headers[column]?.trim() || role;
+      conflicts.push({
+        level: 'error',
+        code: 'spreadsheet-number-format-conflict',
+        message:
+          `La columna "${columnLabel}" tiene celdas cuyo formato nativo de Excel (${contradictingShape}) ` +
+          `contradice el formato esperado para esta columna (${allowedShapes.join('/')}). ` +
+          'Se bloquea la importación en vez de adivinar la escala del monto.',
+      });
+    }
   }
-  return Object.keys(resolved).length > 0 ? resolved : undefined;
+
+  return { overrides: Object.keys(resolved).length > 0 ? resolved : undefined, conflicts };
 }
 
 /** Structural evidence wins on a role both resolvers claim; neither is expected to overlap in practice. */

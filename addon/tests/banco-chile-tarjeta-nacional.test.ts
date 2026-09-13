@@ -131,6 +131,81 @@ describe('Banco de Chile — tarjeta, evidencia estructural (XLS) para Monto ($)
 });
 
 /**
+ * P1 (review independiente): metadata nativa EXPLÍCITA que contradice
+ * `spreadsheetColumnStructuralEvidence`, no ausencia de metadata.
+ *
+ * Antes: si ni una fila cumplía TODAS las formas permitidas
+ * (`integer`/`grouped-integer`/`currency-integer`), el override simplemente
+ * no se aplicaba y la columna caía al parser léxico `es-CL` — que para un
+ * único punto + cola de 3 dígitos NO es ambiguo (ver el primer describe de
+ * este archivo), así que "12.450" se leía como 12450 sin ningún warning,
+ * aunque la celda dijera explícitamente `decimal-3` (formato nativo `0.000`,
+ * es decir 12,45 real). `spreadsheet-number-format-conflict` distingue esa
+ * contradicción explícita de la mera ausencia (General/texto/sin metadata),
+ * que sigue el comportamiento fail-closed existente vía
+ * `ambiguous-amount-format`.
+ */
+describe('Banco de Chile — tarjeta, conflicto de formato nativo contradictorio', () => {
+  const parser = getParser('banco-chile.tarjeta')!;
+
+  it('XLSX: decimal-3 nativo explícito contradice integer/grouped-integer/currency-integer y bloquea', () => {
+    const file = fromXlsxCells('mov-facturado-nacional-contradiccion.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', { value: 12.45, numberFormat: '0.000' }, ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.issues.some((i) => i.code === 'spreadsheet-number-format-conflict')).toBe(true);
+    expect(parser.validate(statement).ok).toBe(false);
+  });
+
+  it('XLS (mismo contenido, extensión .xls): mismo bloqueo', () => {
+    const file = fromXlsxCells('mov-facturado-nacional-contradiccion.xls', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', { value: 12.45, numberFormat: '0.000' }, ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.issues.some((i) => i.code === 'spreadsheet-number-format-conflict')).toBe(true);
+    expect(parser.validate(statement).ok).toBe(false);
+  });
+
+  it('ausencia (General, sin metadata explícita) NO dispara el conflicto — sigue el fail-closed existente', () => {
+    const file = fromXlsxCells('mov-facturado-nacional-general.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', { value: 12450 }, ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.issues.some((i) => i.code === 'spreadsheet-number-format-conflict')).toBe(false);
+  });
+
+  it('celda de texto (no nativa) tampoco dispara el conflicto — sigue bloqueada por ambigüedad léxica, no por conflicto', () => {
+    const file = fromXlsxCells('mov-facturado-nacional-texto.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', '12,450', ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.issues.some((i) => i.code === 'spreadsheet-number-format-conflict')).toBe(false);
+    expect(statement.transactions[0]?.warnings.some((w) => w.code === 'ambiguous-amount-format')).toBe(
+      true,
+    );
+  });
+
+  it('el caso ya cubierto (grouped-integer coincidente) sigue resolviendo sin conflicto', () => {
+    const file = fromXlsxCells('mov-facturado-nacional-ok.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', { value: 12450, numberFormat: '#,##0' }, ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.issues.some((i) => i.code === 'spreadsheet-number-format-conflict')).toBe(false);
+    expect(parser.validate(statement).ok).toBe(true);
+  });
+});
+
+/**
  * Signo — alcance exacto de lo demostrado.
  *
  * Las 2 muestras reales Nacional sólo traen, cada una, UNA fila y es una
