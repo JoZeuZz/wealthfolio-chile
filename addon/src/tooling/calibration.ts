@@ -12,6 +12,7 @@ import { describeColumnShape, type ColumnShape } from '../core/parsing/column-sh
 import { readSpreadsheetCellFormats } from '../core/parsing/spreadsheet-cell-facts';
 import type { NativeCellType, NumberFormatShape } from '../core/parsing/spreadsheet-format';
 import type { Sheet } from '../core/parsing/tabular';
+import { pickDataSheet } from '../core/parsing/workbook';
 import { redactSensitive } from '../core/privacy';
 import {
   cardFactLabel,
@@ -270,7 +271,13 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
 
   const statement = parser.parse(parserInput);
   const validation = parser.validate(statement);
-  const sheet = input.sheets[0] as Sheet;
+  // The exact same sheet production picks: `pickDataSheet` is what
+  // `parseWithProfile` (core/providers/profile-parser.ts) calls before ever
+  // reading a header. `input.sheets[0]` used to be read here instead, so a
+  // workbook with a cover sheet before the movements sheet reported the cover
+  // page's (empty) header and row counts while the parser above had already
+  // read the real data from a different sheet entirely.
+  const sheet = pickDataSheet(input.sheets);
 
   return {
     file: fileFacts(input, sheet),

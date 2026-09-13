@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { calibrate, formatReport } from '../src/tooling/calibration';
 import { guardPrivateSample } from '../src/tooling/sample-guard';
 import { loadWorkbook } from '../src/core/parsing/workbook';
-import { fromText, fromXlsxCells } from './fixtures';
+import { fromText, fromXlsxCells, fromXlsxSheets } from './fixtures';
 
 /**
  * El informe de calibración.
@@ -569,6 +569,40 @@ describe('el informe y el formato nativo de la planilla', () => {
  * informe pensado para pegarse en un issue. Ver `readDirectionFlag` /
  * `DirectionFlagError` en `core/parsing/rows.ts`.
  */
+/**
+ * P2 (review independiente): `calibrate` leía `input.sheets[0]` en vez de
+ * `pickDataSheet`, la misma función que producción usa (`banco-chile.tarjeta`
+ * ya la llama vía `parseWithProfile`). Con una portada como primera hoja, el
+ * informe describía la portada — sin cabecera, sin filas — en vez de la hoja
+ * de movimientos que el parser realmente leyó.
+ */
+describe('calibrate usa la misma hoja que producción (pickDataSheet)', () => {
+  it('portada primero, movimientos segunda: los facts corresponden a movimientos', () => {
+    const file = fromXlsxSheets('cartola-con-portada.xlsx', [
+      { name: 'Portada', rows: [['Banco Generico'], ['Resumen de su cuenta'], ['Titular', 'CLIENTE SINTETICO']] },
+      {
+        name: 'Movimientos',
+        rows: [
+          ['Fecha', 'Descripcion', 'Cargo', 'Abono', 'Saldo'],
+          ['03/02/2026', 'COMPRA', '45.000', '', '955.000'],
+          ['04/02/2026', 'ABONO SUELDO', '', '1.200.000', '2.155.000'],
+        ],
+      },
+    ]);
+
+    const result = reportFile(file, 'generico.cuenta');
+
+    // La cabecera encontrada es la de Movimientos, no -1 (que sería el
+    // resultado de leer la portada como si fuera la hoja de datos).
+    expect(result.header.row).toBeGreaterThanOrEqual(0);
+    expect(result.header.mapped.map((m) => m.role)).toEqual(
+      expect.arrayContaining(['date', 'description']),
+    );
+    expect(result.rows.data).toBe(2);
+    expect(result.rows.mapped).toBe(2);
+  });
+});
+
 describe('un valor no reconocido en la columna de dirección no llega al informe', () => {
   it('formatReport no contiene el sentinel privado, sólo la razón sanitizada', () => {
     const sentinel = 'RUT 12.345.678-9 MARIA FERNANDA GONZALEZ';
