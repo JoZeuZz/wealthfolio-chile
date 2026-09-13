@@ -70,6 +70,37 @@ export function fromXlsxRows(name: string, rows: readonly (readonly string[])[])
   return { name, bytes: new Uint8Array(buffer) };
 }
 
+/**
+ * An in-memory XLSX with more than one sheet, each built the same way
+ * `fromXlsxRows` builds its single sheet — string-typed cells throughout.
+ *
+ * For pinning workbook-completeness bugs: a bank export that splits
+ * "Movimientos Nacionales" and "Movimientos Internacionales" across two
+ * sheets instead of two tables on one, which `fromXlsxRows` cannot represent
+ * at all.
+ */
+export function fromXlsxSheets(
+  name: string,
+  sheets: readonly { name: string; rows: readonly (readonly string[])[] }[],
+): SourceFile {
+  const workbook = XLSX.utils.book_new();
+  for (const { name: sheetName, rows } of sheets) {
+    const sheet = XLSX.utils.aoa_to_sheet(rows as string[][]);
+    for (const address of Object.keys(sheet)) {
+      if (address.startsWith('!')) continue;
+      const c = sheet[address] as { t?: string; v?: unknown; w?: string };
+      if (c && c.v !== undefined && c.v !== null) {
+        c.t = 's';
+        c.v = String(c.v);
+        delete c.w;
+      }
+    }
+    XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
+  }
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  return { name, bytes: new Uint8Array(buffer) };
+}
+
 export interface XlsxCellSpec {
   value: string | number;
   /** Excel number-format code, e.g. `'#,##0'`. Omit to leave it `General`. */

@@ -181,9 +181,10 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
     };
   }
 
-  const unsupported = detectUnsupportedLayout(sheet, header.headerRow, profile);
+  const unsupported =
+    detectUnsupportedLayout(sheet, header.headerRow, profile) ??
+    detectUnsupportedLayoutAcrossSheets(input.sheets, sheet, profile);
   if (unsupported) {
-    const dataRows = Math.max(0, sheet.rows.length - header.firstDataRow);
     return {
       institution: profile.institution,
       parser: profile.parserId,
@@ -191,7 +192,7 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
       account: { product: profile.product, currency: profile.defaultCurrency },
       period: {},
       transactions: [],
-      rowStats: { dataRows, mapped: 0, skipped: dataRows, failed: 0 },
+      rowStats: { dataRows: 0, mapped: 0, skipped: 0, failed: 0 },
       issues: [...issues, { level: 'error', code: unsupported.code, message: unsupported.message }],
       fileHash: input.fileHash,
       fileName: input.file.name,
@@ -632,6 +633,45 @@ function detectUnsupportedLayout(
     if (row.includes(normalizeHeader(marker.header))) {
       return { code: marker.code, message: marker.message };
     }
+  }
+  return undefined;
+}
+
+/**
+ * `detectUnsupportedLayout`, run over every other non-empty sheet in the
+ * workbook — the P0 this closes: a workbook with a supported layout on the
+ * sheet `pickDataSheet` happens to choose and an unsupported one on another
+ * sheet used to import the picked sheet whole and silently drop the other,
+ * because `detectUnsupportedLayout` only ever looked at the picked sheet's
+ * own header. Banco de Chile's card export can legitimately split
+ * "Movimientos Nacionales" and "Movimientos Internacionales" across two
+ * sheets instead of two tables on one — this project has only ever seen the
+ * two on the same sheet, but nothing here proves the bank never ships it the
+ * other way — so a currency-unsupported table cannot be allowed to hide
+ * behind a supported one merely because the supported one is wider.
+ *
+ * Reuses `detectHeader` + `detectUnsupportedLayout` exactly as the picked
+ * sheet does, so the same guarantee holds here as there: a sheet is only
+ * ever refused by its own real header row, never by a stray mention of
+ * "USD" in a cover page or summary that `detectHeader` does not recognize as
+ * a header at all (no plausible date/description/amount columns).
+ */
+function detectUnsupportedLayoutAcrossSheets(
+  sheets: readonly Sheet[],
+  alreadyChecked: Sheet,
+  profile: StatementProfile,
+): { code: string; message: string } | undefined {
+  if (!profile.unsupportedLayoutHeaders) return undefined;
+
+  for (const candidate of sheets) {
+    if (candidate === alreadyChecked) continue;
+    if (candidate.rows.every((row) => isBlankRow(row))) continue;
+
+    const header = detectHeader(candidate);
+    if (header.headerRow < 0) continue;
+
+    const unsupported = detectUnsupportedLayout(candidate, header.headerRow, profile);
+    if (unsupported) return unsupported;
   }
   return undefined;
 }
