@@ -91,6 +91,16 @@ export const BANCO_CHILE_CARD: StatementProfile = {
   numberFormat: 'es-CL',
   dateOrder: 'DMY',
   amountSign: 'debit-positive',
+  // Ambas muestras reales de "Movimientos Nacionales" (una fila cada una)
+  // traen `Monto ($)` con un único separador y 3 dígitos de cola bajo
+  // `es-CL` — la única forma genuinamente ambigua (`core/money.ts#splitDecimal`):
+  // podría ser miles al revés o una fracción real, y con una sola fila por
+  // archivo no hay cómo probar un patrón repetido que lo resuelva (el
+  // mecanismo que sí lo resolvió para BancoEstado exige esa evidencia). Un
+  // punto con cola de 3 sigue sin ser ambiguo (es miles bajo `es-CL`); esto
+  // sólo bloquea la lectura genuinamente incierta, igual que
+  // `banco-estado.cuenta`.
+  ambiguousAmountCheck: 'authoritative',
   columnSynonyms: {
     [ColumnRole.date]: ['Fecha', 'Fecha Compra', 'Fecha Operacion'],
     [ColumnRole.description]: ['Descripcion', 'Comercio', 'Detalle'],
@@ -123,7 +133,14 @@ export const BANCO_CHILE_CARD: StatementProfile = {
   balanceCheck: 'advisory',
   validationStatus: 'pending-real-sample',
   validationNotes:
-    'Calibrado 2026-09 contra 4 cartolas reales (Mov_Facturado, XLS) vía `pnpm calibrate`, dos layouts estructurales confirmados. "Movimientos Nacionales" (Categoría/Fecha/Descripción/Cuotas/Monto ($)) se mapea en CLP según la evidencia observada. "Movimientos Internacionales" (Categoría/Fecha/Descripción/País/Monto Moneda Origen/Monto (USD)) se reconoce pero queda bloqueado explícitamente (`foreign-currency-unsupported`): la tubería actual no representa cuenta CLP + movimiento USD de forma honesta. `Monto Moneda Origen` no se utiliza; `Monto (USD)` es la columna monetaria relevante de ese layout, pero no se importa todavía. Ningún archivo real trajo ambas tablas a la vez; un archivo que las combinara en una sola hoja no está cubierto (pickDataSheet lee una sola tabla). El preámbulo real sí trae labels de resumen (Monto Facturado, Pago Mínimo, Fecha de Facturación, Pagar Hasta) — `calibrate` todavía no los reconoce/extrae de este layout, no es que la cartola no los traiga. Falta también: cómo se expresan las cuotas y el signo de abono/pago, contra glosas reales.',
+    'Calibrado 2026-09 contra 4 cartolas reales (Mov_Facturado, XLS) vía `pnpm calibrate`, dos layouts estructurales confirmados y autodetección propia confirmada sobre las 4 (score > generico.tarjeta en ambos layouts). ' +
+    '"Movimientos Nacionales" (Categoría/Fecha/Descripción/Cuotas/Monto ($)): moneda CLP; ' +
+    'formato monetario — bajo es-CL un punto con cola de 3 dígitos es miles y no ambiguo (confirmado con el fixture sintético, 7/7 filas), pero las 2 muestras reales traen `Monto ($)` con una coma y cola de 3 dígitos, que es la lectura genuinamente ambigua (podría ser miles al revés o una fracción real) — con 1 fila por archivo no hay cómo probar un patrón de miles repetido que lo resuelva, así que `ambiguousAmountCheck: authoritative` bloquea esa fila en vez de adivinar, igual que banco-estado.cuenta; ' +
+    'signo — la única fila real de cada muestra es un cargo positivo del export que resulta outflow/credit_card_purchase; eso confirma sólo "cargo positivo -> outflow", nada sobre pagos, devoluciones o reversos, que ninguna muestra Nacional contiene; ' +
+    'Cuotas — la celda existe y está poblada en las 2 filas reales, pero ninguna forma un plan reconocible (`detectInstallment` no la lee como cuota); el formato real de una compra en cuotas efectiva sigue sin evidencia. ' +
+    '"Movimientos Internacionales" (Categoría/Fecha/Descripción/País/Monto Moneda Origen/Monto (USD)) se reconoce pero queda bloqueado explícitamente (`foreign-currency-unsupported`): la tubería actual no representa cuenta CLP + movimiento USD de forma honesta. `Monto Moneda Origen` no se utiliza; `Monto (USD)` es la columna monetaria relevante de ese layout, pero no se importa todavía. ' +
+    'Ningún archivo real trajo ambas tablas a la vez; un archivo que las combinara en una sola hoja no está cubierto (pickDataSheet lee una sola tabla). El preámbulo real sí trae labels de resumen (Monto Facturado, Pago Mínimo, Fecha de Facturación, Pagar Hasta) — `calibrate` todavía no los reconoce/extrae de este layout, no es que la cartola no los traiga. ' +
+    'Pendiente: pagos, devoluciones/reversos, interés, comisiones, avances, y cualquier semántica de cuotas no demostrada arriba.',
 };
 
 export const bancoChileCheckingParser: StatementParser = createProfileParser(
