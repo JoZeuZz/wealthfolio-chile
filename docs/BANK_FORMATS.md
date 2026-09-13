@@ -141,9 +141,11 @@ desaparece en las 8 cartolas sin que ningún paso deje de reconciliar.
 - Separador y layout de una eventual exportación **CSV** de cuenta corriente
   (las 8 muestras reales son XLS).
 
-**Para la tarjeta hace falta:** un estado de cuenta real. Hay que confirmar cómo
-se expresan las cuotas y si los pagos vienen en la misma columna de monto con
-signo invertido.
+**Para la tarjeta:** hay 4 cartolas reales calibradas (`Mov_Facturado`, ver
+abajo) — no falta una primera muestra. Lo que sigue faltando son filas reales
+que evidencien casos que las 4 muestras no contienen: una compra en cuotas
+efectiva (cómo se expresan las cuotas), un pago, un refund/reverso, interés,
+comisión y un avance en efectivo.
 
 **Calibración 2026-09 (`banco-chile.tarjeta`, 4 cartolas reales `Mov_Facturado`
 vía `pnpm calibrate`, ver `docs/HOST_VALIDATION.md` § Sesión 7 para la host
