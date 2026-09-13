@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { calibrate, formatReport } from '../src/tooling/calibration';
 import { guardPrivateSample } from '../src/tooling/sample-guard';
 import { loadWorkbook } from '../src/core/parsing/workbook';
-import { fromText } from './fixtures';
+import { fromText, fromXlsxCells } from './fixtures';
 
 /**
  * El informe de calibración.
@@ -35,7 +35,10 @@ function report(
   parserId = 'generico.cuenta',
   fileName = 'CartolaCuentaRut_12345678-9_202602.csv',
 ) {
-  const file = fromText(fileName, text);
+  return reportFile(fromText(fileName, text), parserId);
+}
+
+function reportFile(file: ReturnType<typeof fromText>, parserId: string) {
   const workbook = loadWorkbook(file);
   return calibrate({
     bytes: file.bytes,
@@ -502,5 +505,60 @@ describe('el informe y las cuotas', () => {
       ambiguousPlan: 0,
       ambiguousAmount: 0,
     });
+  });
+});
+
+describe('el informe y el formato nativo de la planilla', () => {
+  it('reporta tipo nativo y forma de formato numérico de la columna de monto, sólo en XLS/XLSX', () => {
+    const file = fromXlsxCells('estado.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)'],
+      ['03/02/2026', 'COMPRA UNO', { value: 45000, numberFormat: '#,##0' }],
+    ]);
+
+    const facts = reportFile(file, 'banco-chile.tarjeta').spreadsheetFormats;
+
+    expect(facts?.amount).toEqual({
+      container: 'xlsx',
+      nativeType: 'number',
+      numberFormatShape: 'grouped-integer',
+    });
+  });
+
+  it('columna con formato de tres decimales se distingue de un entero agrupado', () => {
+    const file = fromXlsxCells('estado.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)'],
+      ['03/02/2026', 'COMPRA UNO', { value: 45123, numberFormat: '0.000' }],
+    ]);
+
+    expect(reportFile(file, 'banco-chile.tarjeta').spreadsheetFormats?.amount?.numberFormatShape).toBe(
+      'decimal-3',
+    );
+  });
+
+  it('nativeType queda mixto cuando las filas de la columna no coinciden', () => {
+    const file = fromXlsxCells('estado.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)'],
+      ['03/02/2026', 'COMPRA UNO', { value: 45000, numberFormat: '#,##0' }],
+      ['04/02/2026', 'COMPRA DOS', '45.000'],
+    ]);
+
+    expect(reportFile(file, 'banco-chile.tarjeta').spreadsheetFormats?.amount?.nativeType).toBe('mixed');
+  });
+
+  it('un CSV no trae metadato de formato nativo', () => {
+    expect(report(CARTOLA).spreadsheetFormats).toBeUndefined();
+  });
+
+  it('nunca imprime el valor de la celda, sólo la forma', () => {
+    const file = fromXlsxCells('estado.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)'],
+      ['03/02/2026', 'COMPRA UNO', { value: 999999, numberFormat: '#,##0' }],
+    ]);
+
+    const printed = formatReport(reportFile(file, 'banco-chile.tarjeta'));
+
+    expect(printed).not.toContain('999999');
+    expect(printed).toContain('grouped-integer');
+    expect(printed).toMatch(/number/);
   });
 });

@@ -70,6 +70,44 @@ export function fromXlsxRows(name: string, rows: readonly (readonly string[])[])
   return { name, bytes: new Uint8Array(buffer) };
 }
 
+export interface XlsxCellSpec {
+  value: string | number;
+  /** Excel number-format code, e.g. `'#,##0'`. Omit to leave it `General`. */
+  numberFormat?: string;
+}
+
+/**
+ * An in-memory XLSX where each cell's native type and number format are
+ * controlled explicitly, for exercising `readSpreadsheetCellFormats`.
+ *
+ * Unlike `fromXlsxRows`, a plain `string` entry here stays string-typed
+ * (`t: 's'`) and an `XlsxCellSpec` with a numeric `value` is written as a
+ * native number (`t: 'n'`) carrying the given format code — confirmed by a
+ * write/read round trip through SheetJS to actually preserve `t`/`z`, not
+ * assumed.
+ */
+export function fromXlsxCells(
+  name: string,
+  rows: readonly (readonly (string | XlsxCellSpec)[])[],
+): SourceFile {
+  const aoa = rows.map((row) => row.map((entry) => (typeof entry === 'string' ? entry : entry.value)));
+  const sheet = XLSX.utils.aoa_to_sheet(aoa as (string | number)[][]);
+  rows.forEach((row, r) => {
+    row.forEach((entry, c) => {
+      if (typeof entry === 'string') return;
+      const address = XLSX.utils.encode_cell({ r, c });
+      const cell = sheet[address] as { t?: string; z?: string } | undefined;
+      if (!cell) return;
+      cell.t = 'n';
+      if (entry.numberFormat !== undefined) cell.z = entry.numberFormat;
+    });
+  });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Movimientos');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  return { name, bytes: new Uint8Array(buffer) };
+}
+
 let txCounter = 0;
 
 export type TransactionOverrides = Partial<Omit<NormalizedTransaction, 'amount'>> & {

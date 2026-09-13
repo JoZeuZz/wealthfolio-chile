@@ -9,6 +9,8 @@ import {
 } from '../core/model/statement';
 import { ColumnRole, detectHeader, mapColumns } from '../core/parsing/columns';
 import { describeColumnShape, type ColumnShape } from '../core/parsing/column-shape';
+import { readSpreadsheetCellFormats } from '../core/parsing/spreadsheet-cell-facts';
+import type { NativeCellType, NumberFormatShape } from '../core/parsing/spreadsheet-format';
 import type { Sheet } from '../core/parsing/tabular';
 import { redactSensitive } from '../core/privacy';
 import {
@@ -18,6 +20,7 @@ import {
 } from '../core/model/statement-facts';
 import { detectAll, getParser } from '../core/providers/registry';
 import type { ParserInput } from '../core/providers/parser';
+import { mergeSynonyms } from '../core/providers/profile-parser';
 
 /**
  * The report that turns one real cartola into a profile correction.
@@ -60,6 +63,17 @@ export interface CalibrationReport {
    * statement is not a card — a cuenta corriente has none of these.
    */
   cardFacts?: FactPresence[];
+  /**
+   * The mapped monetary columns' own native storage shape, spreadsheets only.
+   *
+   * Never the value, and never the decimal separator read out of the cell's
+   * *text* — that lexical reading is exactly what `core/money.ts#splitDecimal`
+   * already cannot disambiguate for some real formats. This is the cell's own
+   * SheetJS type and Excel number-format code, a genuinely independent fact.
+   * Absent entirely for a CSV/TXT source, or when no format evidence could be
+   * read at all.
+   */
+  spreadsheetFormats?: Partial<Record<string, SpreadsheetColumnFormatFacts>>;
   /** Issue codes the parser raised, with how many times each. */
   issues: Array<{ code: string; level: string; count: number }>;
   /**
@@ -206,6 +220,26 @@ export interface InstallmentFacts {
   ambiguousAmount: number;
 }
 
+/**
+ * A monetary column's spreadsheet cell shape, aggregated over its data rows.
+ *
+ * `nativeType`/`numberFormatShape` are `'mixed'` when the column's own cells
+ * disagree — a fact worth reporting, not an average to paper over. Blank
+ * cells are ignored, same as `describeColumnShape`.
+ */
+export interface SpreadsheetColumnFormatFacts {
+  container: 'xls' | 'xlsx';
+  nativeType: NativeCellType | 'mixed';
+  numberFormatShape: NumberFormatShape | 'mixed';
+}
+
+const MONETARY_ROLES: readonly ColumnRole[] = [
+  ColumnRole.amount,
+  ColumnRole.debit,
+  ColumnRole.credit,
+  ColumnRole.balance,
+];
+
 export interface CalibrationInput {
   /** Bytes of the private sample. Never retained past this call. */
   bytes: Uint8Array;
@@ -249,9 +283,65 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
     classification: classificationFacts(statement.transactions),
     installments: installmentFacts(statement.transactions),
     ...(isCardStatement(statement) ? { cardFacts: factPresence(statement.cardFacts ?? {}) } : {}),
+    ...(() => {
+      const facts = spreadsheetFormatFacts(input, sheet, parser.id);
+      return facts ? { spreadsheetFormats: facts } : {};
+    })(),
     issues: issueFacts(validation),
     rowFailureReasons: rowFailureReasonFacts(statement),
   };
+}
+
+/**
+ * Aggregates each mapped monetary column's own cell shape, spreadsheets only.
+ *
+ * Re-derives the header row and column map the same way `parser.parse` does
+ * (`detectHeader` + `mergeSynonyms`, the exact function the real profile
+ * parser uses) so a column position can never drift between what the parser
+ * actually read and what this reports on.
+ */
+function spreadsheetFormatFacts(
+  input: CalibrationInput,
+  sheet: Sheet | undefined,
+  parserId: string,
+): Partial<Record<string, SpreadsheetColumnFormatFacts>> | undefined {
+  if (!sheet) return undefined;
+  const profile = getParser(parserId)?.profile;
+  if (!profile) return undefined;
+
+  const cellFormatSheets = readSpreadsheetCellFormats({ name: input.fileName, bytes: input.bytes });
+  const formatSheet = cellFormatSheets?.find((candidate) => candidate.name === sheet.name);
+  if (!formatSheet) return undefined;
+
+  const header = detectHeader(sheet);
+  if (header.headerRow < 0) return undefined;
+  const generic = mapColumns((sheet.rows[header.headerRow] ?? []).map((cell) => cell.trim()));
+  const map = mergeSynonyms(sheet, header.headerRow, profile, generic);
+
+  const result: Partial<Record<string, SpreadsheetColumnFormatFacts>> = {};
+  for (const role of MONETARY_ROLES) {
+    const column = map[role];
+    if (column === undefined) continue;
+
+    const nativeTypes = new Set<NativeCellType>();
+    const shapes = new Set<NumberFormatShape>();
+    for (let r = header.firstDataRow; r < sheet.rows.length; r += 1) {
+      const text = (sheet.rows[r]?.[column] ?? '').trim();
+      if (text === '') continue;
+      const fact = formatSheet.cells[r]?.[column];
+      if (!fact) continue;
+      nativeTypes.add(fact.nativeType);
+      shapes.add(fact.numberFormatShape);
+    }
+    if (nativeTypes.size === 0) continue;
+
+    result[role] = {
+      container: formatSheet.container,
+      nativeType: nativeTypes.size === 1 ? ([...nativeTypes][0] as NativeCellType) : 'mixed',
+      numberFormatShape: shapes.size === 1 ? ([...shapes][0] as NumberFormatShape) : 'mixed',
+    };
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 /** Whether the parsed statement is one that can carry card facts at all. */
@@ -610,6 +700,14 @@ export function formatReport(report: CalibrationReport): string {
     report.amounts.byScale.map((entry) => `${entry.rows} filas con ${entry.scale}`).join(' · '),
   );
   add('Entradas / salidas / cero', `${report.amounts.inflows} / ${report.amounts.outflows} / ${report.amounts.zero}`);
+
+  if (report.spreadsheetFormats) {
+    lines.push('', '── Formato nativo (planilla) ────────────────────────────');
+    for (const [role, facts] of Object.entries(report.spreadsheetFormats)) {
+      if (!facts) continue;
+      lines.push(`  ${role} (${facts.container}): ${facts.nativeType} / ${facts.numberFormatShape}`);
+    }
+  }
 
   lines.push('', '── Fechas ────────────────────────────────────────────────');
   add('Orden', report.dates.order);

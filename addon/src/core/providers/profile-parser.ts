@@ -572,7 +572,7 @@ function readDeclared(
  * roles, never silently steal a column the generic pass already resolved
  * correctly.
  */
-function mergeSynonyms(
+export function mergeSynonyms(
   sheet: Sheet,
   headerRow: number,
   profile: StatementProfile,
