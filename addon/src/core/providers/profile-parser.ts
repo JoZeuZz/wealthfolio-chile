@@ -22,7 +22,8 @@ import { cell, ColumnRole, detectHeader, normalizeHeader, type ColumnMap } from 
 import { COMMON_IGNORE_PATTERNS, type StatementProfile } from '../parsing/profile';
 import { isIgnoredRow, mapRows } from '../parsing/rows';
 import type { NormalizedTransaction } from '../model/transaction';
-import { detectFileKind, isBlankRow, type Sheet } from '../parsing/tabular';
+import { readSpreadsheetCellFormats } from '../parsing/spreadsheet-cell-facts';
+import { detectFileKind, isBlankRow, type Sheet, type SourceFile } from '../parsing/tabular';
 import { pickDataSheet } from '../parsing/workbook';
 import { readCardFacts } from './card-facts';
 import { foldCase } from '../text';
@@ -252,7 +253,10 @@ function parseWithProfile(profile: StatementProfile, input: ParserInput): Parsed
   const fileKind = detectFileKind(input.file);
   const isSpreadsheet = fileKind === 'xlsx' || fileKind === 'xls';
   const columnNumberFormats = isSpreadsheet
-    ? resolveSpreadsheetColumnNumberFormats(profile, sheet, map, header.firstDataRow)
+    ? mergeColumnNumberFormats(
+        resolveSpreadsheetColumnNumberFormats(profile, sheet, map, header.firstDataRow),
+        resolveStructuralSpreadsheetColumnNumberFormats(profile, input.file, sheet, map, header.firstDataRow),
+      )
     : undefined;
 
   const mapped = mapRows({
@@ -1018,6 +1022,63 @@ function resolveSpreadsheetColumnNumberFormats(
     }
   }
   return Object.keys(resolved).length > 0 ? resolved : undefined;
+}
+
+/**
+ * Structural (XLS/XLSX cell metadata) twin of `resolveSpreadsheetColumnNumberFormats`.
+ *
+ * Reads the workbook's cell metadata through `readSpreadsheetCellFormats` — a
+ * second, independent SheetJS read of the same bytes (see that module's own
+ * comment) — so this never touches how `loadWorkbook` built `sheet` in the
+ * first place. Applies a configured override for a role only when every
+ * mapped, non-blank data cell in that column is a native number whose format
+ * is one of `spreadsheetColumnStructuralEvidence`'s listed shapes.
+ */
+function resolveStructuralSpreadsheetColumnNumberFormats(
+  profile: StatementProfile,
+  file: SourceFile,
+  sheet: Sheet,
+  map: ColumnMap,
+  firstDataRow: number,
+): Partial<Record<ColumnRole, StatementProfile['numberFormat']>> | undefined {
+  const configured = profile.spreadsheetColumnNumberFormats;
+  const evidence = profile.spreadsheetColumnStructuralEvidence;
+  if (!configured || !evidence) return undefined;
+
+  const cellFormatSheets = readSpreadsheetCellFormats(file);
+  const formatSheet = cellFormatSheets?.find((candidate) => candidate.name === sheet.name);
+  if (!formatSheet) return undefined;
+
+  const resolved: Partial<Record<ColumnRole, StatementProfile['numberFormat']>> = {};
+  for (const role of Object.values(ColumnRole)) {
+    const format = configured[role];
+    const allowedShapes = evidence[role];
+    const column = map[role];
+    if (!format || !allowedShapes || column === undefined) continue;
+
+    let sawRow = false;
+    let everyRowQualifies = true;
+    for (let r = firstDataRow; r < sheet.rows.length; r += 1) {
+      if ((sheet.rows[r]?.[column] ?? '').trim() === '') continue;
+      const fact = formatSheet.cells[r]?.[column];
+      sawRow = true;
+      if (!fact || fact.nativeType !== 'number' || !allowedShapes.includes(fact.numberFormatShape)) {
+        everyRowQualifies = false;
+        break;
+      }
+    }
+    if (sawRow && everyRowQualifies) resolved[role] = format;
+  }
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
+}
+
+/** Structural evidence wins on a role both resolvers claim; neither is expected to overlap in practice. */
+function mergeColumnNumberFormats(
+  lexical: Partial<Record<ColumnRole, StatementProfile['numberFormat']>> | undefined,
+  structural: Partial<Record<ColumnRole, StatementProfile['numberFormat']>> | undefined,
+): Partial<Record<ColumnRole, StatementProfile['numberFormat']>> | undefined {
+  if (!lexical && !structural) return undefined;
+  return { ...lexical, ...structural };
 }
 
 /** Prefer the period the file declares; fall back to the movement range. */

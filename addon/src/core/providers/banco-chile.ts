@@ -91,16 +91,28 @@ export const BANCO_CHILE_CARD: StatementProfile = {
   numberFormat: 'es-CL',
   dateOrder: 'DMY',
   amountSign: 'debit-positive',
-  // Ambas muestras reales de "Movimientos Nacionales" (una fila cada una)
-  // traen `Monto ($)` con un único separador y 3 dígitos de cola bajo
-  // `es-CL` — la única forma genuinamente ambigua (`core/money.ts#splitDecimal`):
-  // podría ser miles al revés o una fracción real, y con una sola fila por
-  // archivo no hay cómo probar un patrón repetido que lo resuelva (el
-  // mecanismo que sí lo resolvió para BancoEstado exige esa evidencia). Un
-  // punto con cola de 3 sigue sin ser ambiguo (es miles bajo `es-CL`); esto
-  // sólo bloquea la lectura genuinamente incierta, igual que
-  // `banco-estado.cuenta`.
+  // Ambas muestras reales de "Movimientos Nacionales" traen `Monto ($)` con
+  // un único separador y 3 dígitos de cola bajo `es-CL` — por texto solo, la
+  // forma genuinamente ambigua (`core/money.ts#splitDecimal`): podría ser
+  // miles al revés o una fracción real. `pnpm calibrate --parser
+  // banco-chile.tarjeta`, ahora con metadatos nativos de celda
+  // (`core/parsing/spreadsheet-cell-facts.ts`), confirmó en ambas muestras
+  // `Monto ($): number / grouped-integer` — celda numérica nativa, formato
+  // Excel sin decimales declarados y con agrupación. Esa es evidencia del
+  // CONTENEDOR, no del texto: prueba que el separador agrupa miles.
+  // `spreadsheetColumnStructuralEvidence` gatea el override sólo a esa forma
+  // (`integer`/`grouped-integer`/`currency-integer`, nunca a un formato con
+  // decimales declarados) y sólo cuando TODAS las celdas de dato de la
+  // columna la cumplen; un XLS que no la cumpla — o un CSV, que nunca trae
+  // metadato de celda — sigue bloqueado por `ambiguousAmountCheck:
+  // 'authoritative'`, igual que `banco-estado.cuenta`.
   ambiguousAmountCheck: 'authoritative',
+  spreadsheetColumnNumberFormats: {
+    [ColumnRole.amount]: 'en-US',
+  },
+  spreadsheetColumnStructuralEvidence: {
+    [ColumnRole.amount]: ['integer', 'grouped-integer', 'currency-integer'],
+  },
   columnSynonyms: {
     [ColumnRole.date]: ['Fecha', 'Fecha Compra', 'Fecha Operacion'],
     [ColumnRole.description]: ['Descripcion', 'Comercio', 'Detalle'],
@@ -135,7 +147,7 @@ export const BANCO_CHILE_CARD: StatementProfile = {
   validationNotes:
     'Calibrado 2026-09 contra 4 cartolas reales (Mov_Facturado, XLS) vía `pnpm calibrate`, dos layouts estructurales confirmados y autodetección propia confirmada sobre las 4 (score > generico.tarjeta en ambos layouts). ' +
     '"Movimientos Nacionales" (Categoría/Fecha/Descripción/Cuotas/Monto ($)): moneda CLP; ' +
-    'formato monetario — bajo es-CL un punto con cola de 3 dígitos es miles y no ambiguo (confirmado con el fixture sintético, 7/7 filas), pero las 2 muestras reales traen `Monto ($)` con una coma y cola de 3 dígitos, que es la lectura genuinamente ambigua (podría ser miles al revés o una fracción real) — con 1 fila por archivo no hay cómo probar un patrón de miles repetido que lo resuelva, así que `ambiguousAmountCheck: authoritative` bloquea esa fila en vez de adivinar, igual que banco-estado.cuenta; ' +
+    'formato monetario — bajo es-CL un punto con cola de 3 dígitos es miles y no ambiguo (confirmado con el fixture sintético, 7/7 filas); las 2 muestras reales traen `Monto ($)` con una coma y cola de 3 dígitos, ambigua por texto solo, pero `pnpm calibrate --parser banco-chile.tarjeta` con metadatos nativos de celda (`core/parsing/spreadsheet-cell-facts.ts`) confirmó en ambas `number / grouped-integer` — celda numérica nativa, formato Excel sin decimales — que es evidencia del contenedor, no otra lectura del mismo texto; `spreadsheetColumnStructuralEvidence` resuelve el override (`en-US`) sólo con esa forma y sólo si TODAS las celdas de dato la cumplen, y `ambiguousAmountCheck: authoritative` sigue bloqueando un XLS que no la cumpla o un CSV (que nunca trae metadato de celda), igual que banco-estado.cuenta; ' +
     'signo — la única fila real de cada muestra es un cargo positivo del export que resulta outflow/credit_card_purchase; eso confirma sólo "cargo positivo -> outflow", nada sobre pagos, devoluciones o reversos, que ninguna muestra Nacional contiene; ' +
     'Cuotas — la celda existe y está poblada en las 2 filas reales, pero ninguna forma un plan reconocible (`detectInstallment` no la lee como cuota); el formato real de una compra en cuotas efectiva sigue sin evidencia. ' +
     '"Movimientos Internacionales" (Categoría/Fecha/Descripción/País/Monto Moneda Origen/Monto (USD)) se reconoce pero queda bloqueado explícitamente (`foreign-currency-unsupported`): la tubería actual no representa cuenta CLP + movimiento USD de forma honesta. `Monto Moneda Origen` no se utiliza; `Monto (USD)` es la columna monetaria relevante de ese layout, pero no se importa todavía. ' +

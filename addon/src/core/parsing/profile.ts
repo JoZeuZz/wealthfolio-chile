@@ -2,6 +2,7 @@ import type { DateFieldOrder } from '../dates';
 import type { NumberFormatHint } from '../money';
 import type { StatementProduct } from '../model/statement';
 import type { ColumnRole } from './columns';
+import type { NumberFormatShape } from './spreadsheet-format';
 
 /**
  * A declarative description of one statement layout.
@@ -80,6 +81,27 @@ export interface StatementProfile {
    * format override. The evidence is evaluated against mapped data cells.
    */
   spreadsheetColumnNumberFormatEvidence?: Partial<Record<ColumnRole, RegExp>>;
+
+  /**
+   * Structural (XLS/XLSX cell metadata) evidence gate for
+   * `spreadsheetColumnNumberFormats`, as an alternative to
+   * `spreadsheetColumnNumberFormatEvidence`'s lexical check.
+   *
+   * `core/money.ts#splitDecimal` cannot always tell a reversed thousands
+   * grouping from a genuine fraction from the cell's *text* alone — that is
+   * exactly the ambiguity `spreadsheetColumnNumberFormatEvidence` cannot
+   * resolve without a repeated grouping pattern to prove it against. A real
+   * `.xls`/`.xlsx` cell carries an independent fact the text does not: its own
+   * SheetJS native type and Excel number-format shape (see
+   * `core/parsing/spreadsheet-format.ts`). The configured override for a role
+   * applies only when EVERY mapped, non-blank data cell in that column is a
+   * native number whose format is one of the listed shapes — never on the
+   * decimal count read out of the formatted text, and never on a single row.
+   * A file where even one cell disagrees (a different shape, a text-typed
+   * cell, `general`) keeps the statement-wide reading and, for a profile with
+   * `ambiguousAmountCheck: 'authoritative'`, fails closed exactly as before.
+   */
+  spreadsheetColumnStructuralEvidence?: Partial<Record<ColumnRole, readonly NumberFormatShape[]>>;
 
   /**
    * Whether an amount-format ambiguity blocks this profile or remains a warning.

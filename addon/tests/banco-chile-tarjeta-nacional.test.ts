@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { toDecimalString } from '../src/core/money';
 import { Direction } from '../src/core/model/kinds';
 import { getParser } from '../src/core/providers/registry';
-import { fromText, loadFixture } from './fixtures';
+import { fromText, fromXlsxCells, loadFixture } from './fixtures';
 import { computeFileHash } from '../src/core/dedupe/fingerprint';
 import { loadWorkbook } from '../src/core/parsing/workbook';
 import type { ParserInput } from '../src/core/providers/parser';
@@ -70,6 +70,63 @@ describe('Banco de Chile — tarjeta, escala monetaria Nacional', () => {
     expect(parsed.transactions.every((t) => !t.warnings.some((w) => w.code === 'ambiguous-amount-format'))).toBe(
       true,
     );
+  });
+});
+
+/**
+ * Evidencia estructural del contenedor XLS resuelve `Monto ($)` — checkpoint
+ * posterior al de arriba.
+ *
+ * `pnpm calibrate --parser banco-chile.tarjeta` sobre las 2 muestras reales
+ * Nacional (`Mov_Facturado.xls`, `(2)`), ahora con
+ * `core/parsing/spreadsheet-cell-facts.ts`, reportó para `Monto ($)` en
+ * ambas: `number / grouped-integer` — celda numérica nativa, formato Excel
+ * sin decimales declarados y con agrupación. Eso es justo lo que el texto solo
+ * no puede probar (`core/money.ts#splitDecimal`): que el separador agrupa
+ * miles y no parte una fracción. `spreadsheetColumnStructuralEvidence`
+ * gatea `spreadsheetColumnNumberFormats: { amount: 'en-US' }` en esa
+ * evidencia — nunca en el conteo de decimales del texto.
+ */
+describe('Banco de Chile — tarjeta, evidencia estructural (XLS) para Monto ($)', () => {
+  const parser = getParser('banco-chile.tarjeta')!;
+
+  it('celda numérica nativa con formato entero agrupado resuelve sin bloquear', () => {
+    const file = fromXlsxCells('mov-facturado-nacional.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', { value: 12450, numberFormat: '#,##0' }, ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+    const compra = statement.transactions[0]!;
+
+    expect(compra.warnings.some((w) => w.code === 'ambiguous-amount-format')).toBe(false);
+    expect(compra.amount).toMatchObject({ minor: -12450, scale: 0 });
+    expect(parser.validate(statement).ok).toBe(true);
+  });
+
+  it('celda de TEXTO con el mismo dígito no trae evidencia estructural y sigue bloqueada', () => {
+    const file = fromXlsxCells('mov-facturado-nacional.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', '12,450', ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+    const compra = statement.transactions[0]!;
+
+    expect(compra.warnings.some((w) => w.code === 'ambiguous-amount-format')).toBe(true);
+    expect(parser.validate(statement).ok).toBe(false);
+  });
+
+  it('un CSV del mismo banco no hereda la inferencia aunque el texto coincida', () => {
+    // Mismo caso que el primer test de este archivo: CSV nunca trae metadato
+    // de celda XLS, así que `isSpreadsheet` es falso y el override ni se evalúa.
+    const file = fromText(
+      'mov-facturado-nacional.csv',
+      ['Fecha;Descripcion;Monto;Cuotas', '05/02/2026;COMPRA SINTETICA;12,450;'].join('\n'),
+    );
+    const statement = parser.parse(inputForFile(file));
+    const compra = statement.transactions[0]!;
+
+    expect(compra.warnings.some((w) => w.code === 'ambiguous-amount-format')).toBe(true);
+    expect(parser.validate(statement).ok).toBe(false);
   });
 });
 
