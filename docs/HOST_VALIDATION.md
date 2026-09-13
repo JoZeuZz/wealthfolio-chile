@@ -1259,3 +1259,116 @@ requisito antes de subir el mínimo del manifest.
 Todo lo importado en esta sesión fue `samples/synthetic/*.csv`. Las cartolas
 reales de `samples/private/` sólo se tocaron, como siempre, a través de
 `pnpm calibrate`.
+
+---
+
+## Sesión 7 — Banco de Chile tarjeta (`banco-chile.tarjeta`), Nacional e Internacional
+
+**Ejecutada el 2026-09-13** contra la instancia persistente
+`wealthfolio/wealthfolio:3.8.0` (la misma que la Sesión 6 dejó arriba, sin
+migrar). Objetivo: primera host validation real de la calibración de tarjeta
+de esta tranche (7 commits: detección específica `Mov_Facturado`, bloqueo de
+movimientos internacionales, evidencia de cuotas sanitizada, bloqueo de
+`Monto ($)` genuinamente ambiguo, resolución del formato de monto XLS
+Nacional vía metadata de celda). **Ninguna cartola real tocó el host** — los
+dos archivos usados son XLSX 100% sintéticos, generados con SheetJS en un
+script fuera del repo (`/tmp`, nunca comiteado) y borrados al terminar.
+
+### Preflight
+
+- `git status --short`: limpio. Branch `fase-0.2.0-banco-chile-tarjeta-real-sample`,
+  HEAD `53bfb89`.
+- Sin residuos de investigaciones anteriores (`scratch-roundtrip*.mjs` u
+  otros) en el árbol.
+- `./scripts/deploy-addon.sh`: el `dist/addon.js` desplegado era del 12-09,
+  anterior a los 7 commits de esta tranche — reconstruido e instalado antes
+  de cualquier smoke.
+- Host: `docker inspect` → `healthy`, `wealthfolio/wealthfolio:3.8.0`.
+
+### Baseline
+
+| Dato | Valor |
+| --- | --- |
+| Cuentas | 3 (`Banco Chile Test` CASH, `BancoEstado Test` CASH, `CMR Test` CREDIT_CARD) — idéntico a la Sesión 6, sin cuenta nueva |
+| Activities | 34 (mismo desglose por tipo que la Sesión 6) |
+
+`CMR Test (CLP)` ya existía como cuenta `CREDIT_CARD`/CLP apropiada para el
+fixture Nacional — no hizo falta crear una cuenta temporal.
+
+### Fixtures sintéticos (fuera del repo, nunca comiteados)
+
+**A. Nacional soportado** — XLSX con preámbulo `Movimientos Facturados` +
+vocabulario de facturación (`Monto Facturado`, `Pago Mínimo`, `Fecha de
+Facturación`, `Pagar Hasta`), sección `Movimientos Nacionales`, encabezado
+`Categoría | Fecha | Descripción | Cuotas | Monto ($)`, 3 filas 100%
+inventadas. Requisito crítico cumplido: la celda `Monto ($)` de cada fila de
+datos es un **número nativo** (`t: 'n'`) con formato Excel `#,##0` (entero
+agrupado) — exactamente la forma que gatea
+`spreadsheetColumnStructuralEvidence`. `Cuotas` queda vacía en 2 filas y
+`CONTADO` (valor no interpretable como plan) en la otra — deliberadamente, no
+se simula una semántica de cuotas que no está demostrada.
+
+**B. Internacional no soportado** — mismo preámbulo, sección `Movimientos
+Internacionales`, encabezado `Categoría | Fecha | Descripción | País | Monto
+Moneda Origen | Monto (USD)`, 2 filas inventadas.
+
+Verificados antes de tocar el host, directo contra el tooling sintético del
+proyecto (`detectAll` + `parser.parse` + `parser.validate`, sin fixture
+comiteado): Nacional detecta `banco-chile.tarjeta` con score `1` (>
+`generico.tarjeta` `0.65`), 3/3 filas mapeadas, sin `ambiguous-amount-format`;
+Internacional detecta el mismo parser con score `1` (> `generico.tarjeta`
+`0.35`) y bloquea con `foreign-currency-unsupported`, 0 filas mapeadas.
+
+### Nacional — autodetección, preview, import, dedupe
+
+| Paso | Resultado |
+| --- | --- |
+| Autodetección (UI, sin elegir parser a mano) | `Banco de Chile — tarjeta de crédito`, **100% de coincidencia**; no gana `generico.tarjeta` |
+| Advertencias | 2, ambas esperadas: `profile-unverified` (`pending-real-sample`) y "no se pudo confirmar que la cartola sea de esta cuenta" (el archivo no trae número de cuenta legible — advisory, no bloquea) |
+| Bloqueadores | Ninguno. Sin `ambiguous-amount-format`, sin `foreign-currency-unsupported` |
+| Período detectado | `02-09-2026 → 15-09-2026`, correcto |
+| Preview | 3/3 filas, CLP, `-$38.500` / `-$12.990` / `-$105.000` — **exactos**, sin multiplicar/dividir por 100/1000 (el fix de metadata de celda validado en el punto que importaba) |
+| Cuotas | La fila con `CONTADO` no se interpretó como plan — `needsReview`/clasificación no cambia por esa columna |
+| Cuenta | `CMR Test (CLP)`, CREDIT_CARD — sin bloqueo de account match |
+| Import (`saveMany`) | Pantalla de confirmación: `3 detectados, 3 seleccionados, 3 creados en Wealthfolio, 0 fallaron, 0 duplicados exactos, 0 posibles duplicados` |
+| Verificación — UI | Las 3 filas visibles en `/activities`: `SINTETICO SUPERMERCADO CENTRAL` (`CLP38,500`, Withdrawal), `SINTETICO FARMACIA NORTE` (`CLP12,990`), `SINTETICO RESTAURANT ANDINO` (`CLP105,000`), las 3 en cuenta `CMR Test CLP` |
+| Verificación — SQLite (read-only) | `account_id` = `CMR Test`; `activity_type WITHDRAWAL`; `amount` exacto (`38500`/`12990`/`105000`); `currency CLP`; `status POSTED`; `metadata.wealthfolioChile`: `parser: banco-chile.tarjeta`, `parserVersion: 0.2.0`, `kind: credit_card_purchase`, `dir: out`, `fp`/`wfp` (fingerprints) presentes |
+| Re-subir el mismo archivo (dedupe) | Las 3 filas vuelven marcadas **`Duplicado`** (dedupe exacto, no "posible"), checkboxes desmarcadas por defecto, botón "Confirmar e importar" deshabilitado en `0 movimientos` — no se creó una segunda copia |
+
+### Internacional — autodetección + bloqueo
+
+| Paso | Resultado |
+| --- | --- |
+| Autodetección (UI, sin elegir parser a mano) | `Banco de Chile — tarjeta de crédito`, **100% de coincidencia** (> `generico.tarjeta` 35%) |
+| Bloqueador | `foreign-currency-unsupported`, mensaje: *"Este archivo contiene movimientos internacionales facturados en USD…"* — exactamente el `unsupportedLayoutHeaders` declarado en el perfil |
+| Filas | `0 de 2 filas leídas · 2 omitidas` |
+| Falsos positivos descartados | Sin `ambiguous-amount-format`; sin `account-mismatch`; sin `MoneyError`; sin mensaje genérico de "sin transacciones" — el blocker mostrado es el específico |
+| Botón "Ver movimientos" | Deshabilitado — la UI normal no ofrece manera de continuar a import/save |
+| Activities nuevas | 0 — no se forzó la capa de persistencia para saltarse el blocker |
+
+### Cleanup
+
+- Las 3 activities sintéticas del fixture Nacional borradas una por una vía
+  UI (`Activities` → `Open` → `Delete` → confirmar), buscando por su
+  descripción única.
+- No se creó cuenta temporal (se reutilizó `CMR Test`), así que no hubo
+  cuenta que borrar.
+- Los 2 fixtures XLSX y el script generador se borraron del directorio
+  temporal al terminar — nunca estuvieron en el repo.
+
+### Verificación final
+
+- SQLite: `34` activities, `3` cuentas — idéntico al baseline de esta sesión,
+  cero rastro de las filas de prueba.
+- `docker ps` / `healthz`: contenedor `healthy`, imagen
+  `wealthfolio/wealthfolio:3.8.0`; addon sigue cargando en `/addons/wealthfolio-chile`.
+- `pnpm verify`: ver sección de gates finales más abajo en el commit de esta
+  sesión.
+
+### `validationStatus` — sin cambios, sigue `pending-real-sample`
+
+Esta sesión prueba el pipeline de punta a punta contra un host real con datos
+100% sintéticos — no cierra la calibración. Sigue pendiente, sin evidencia
+real: semántica de cuotas efectiva, pagos, devoluciones/reversos, interés,
+comisiones y avances en efectivo. `Movimientos Internacionales` sigue
+deliberadamente no soportado, por diseño.

@@ -3,7 +3,7 @@
 Estado real del soporte por banco y formato, y **exactamente qué falta** para
 dar cada uno por validado.
 
-Última revisión: 2026-09-03.
+Última revisión: 2026-09-13.
 
 ---
 
@@ -31,7 +31,7 @@ como se infla el estado de un banco:
 | `generico.cuenta` | ✅ | n/a | ✅ | ✅ indirecto | n/a |
 | `generico.tarjeta` | ✅ | n/a | ✅ | ⬜ | n/a |
 | `banco-chile.cuenta-corriente` | ✅ | ✅ | ✅ | ✅ | ⬜ |
-| `banco-chile.tarjeta` | ✅ | ✅ | ✅ | ⬜ | ⬜ |
+| `banco-chile.tarjeta` | ✅ | ✅ | ✅ | ✅ (host 3.8.0) | ⬜ |
 | `banco-estado.cuenta` | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | `banco-falabella.cmr` | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | `banco-falabella.cuenta` | ✅ | ✅ | ✅ | ⬜ | ⬜ |
@@ -65,7 +65,7 @@ Falta también confirmar cómo CMR marca los avances en efectivo.
 | Producto | Formato | Estado | Parser |
 | --- | --- | --- | --- |
 | Cuenta corriente | XLS (BIFF) | ⚠️ pendiente (calibrado parcial 2026-09) | `banco-chile.cuenta-corriente` |
-| Tarjeta de crédito | CSV / XLSX | ⚠️ pendiente | `banco-chile.tarjeta` |
+| Tarjeta de crédito | CSV / XLSX | ⚠️ pendiente (calibrado 2026-09, host validado con fixture sintético) | `banco-chile.tarjeta` |
 | Cualquiera | PDF | 🚫 | — |
 
 Mapeo confirmado para cuenta corriente (8 cartolas XLS reales):
@@ -144,6 +144,38 @@ desaparece en las 8 cartolas sin que ningún paso deje de reconciliar.
 **Para la tarjeta hace falta:** un estado de cuenta real. Hay que confirmar cómo
 se expresan las cuotas y si los pagos vienen en la misma columna de monto con
 signo invertido.
+
+**Calibración 2026-09 (`banco-chile.tarjeta`, 4 cartolas reales `Mov_Facturado`
+vía `pnpm calibrate`, ver `docs/HOST_VALIDATION.md` § Sesión 7 para la host
+validation con fixture sintético):**
+
+- Autodetección propia confirmada sobre las 4 muestras reales (score >
+  `generico.tarjeta` en ambos layouts) — antes perdía contra el parser
+  genérico, lo que dejaba pasar movimientos internacionales sin el guard de
+  `foreign-currency-unsupported`.
+- "Movimientos Nacionales" (`Categoría | Fecha | Descripción | Cuotas | Monto
+  ($)`): moneda CLP; bajo `es-CL` un punto con cola de 3 dígitos es miles, no
+  ambiguo; las 2 muestras reales traen `Monto ($)` con coma y cola de 3
+  dígitos — ambiguo por texto solo, pero `spreadsheetColumnStructuralEvidence`
+  lo resuelve cuando el XLS trae evidencia estructural de celda numérica
+  nativa con formato entero agrupado (nunca por conteo de decimales del
+  texto); un CSV o un XLS sin esa evidencia sigue bloqueado
+  (`ambiguousAmountCheck: authoritative`).
+- Signo: cargo positivo del export → outflow / `credit_card_purchase`,
+  confirmado sólo con la única fila real de cada muestra (ninguna es pago,
+  devolución o reverso).
+- Cuotas: la columna existe y está poblada en las 2 filas reales, pero
+  ninguna forma un plan reconocible — sigue sin evidencia real.
+- "Movimientos Internacionales" (`Categoría | Fecha | Descripción | País |
+  Monto Moneda Origen | Monto (USD)`) se reconoce pero queda bloqueado
+  explícitamente (`foreign-currency-unsupported`): la tubería actual no
+  representa "cuenta CLP + movimiento USD" sin mentir en alguna parte.
+- Host validation (2026-09-13, `wealthfolio/wealthfolio:3.8.0`, fixture
+  100% sintético — nunca una cartola real): autodetección 100%, preview con
+  montos exactos, import, dedupe exacto y bloqueo Internacional, todo
+  confirmado de punta a punta. No cierra la calibración: sigue faltando
+  evidencia real de cuotas, pagos, devoluciones, interés, comisiones y
+  avances.
 
 ---
 
