@@ -421,3 +421,86 @@ describe('el informe y el estado de cuenta de una tarjeta', () => {
     expect(formatReport(report(CARTOLA))).not.toContain('── Estado de cuenta');
   });
 });
+
+/**
+ * Cuántas filas tienen la celda de Cuotas ocupada y qué hizo `detectInstallment`
+ * con ella — nunca el número de cuota, el total ni el texto que lo delató.
+ *
+ * Antes de esto, "Cuotas ambiguas" (`ambiguousInstallments`) era la única señal
+ * agregada, y mezclaba dos cosas distintas: un plan cuya lectura es incierta
+ * (`ambiguous-installment`, sólo `suggested`) y un plan leído con certeza pero
+ * cuyo monto es ambiguo por falta de una columna de monto de cuota
+ * (`ambiguous-installment-amount`, que dispara para *cualquier* plan detectado
+ * si el perfil no mapea `installmentAmount`). Un perfil sin evidencia real de
+ * cuotas — como `banco-chile.tarjeta` hoy, dos muestras reales con la celda
+ * vacía en la única fila de cada una — no puede distinguirse de uno donde
+ * *todas* las filas tienen cuota ambigua sin este desglose.
+ */
+describe('el informe y las cuotas', () => {
+  const CARD_WITH_INSTALLMENTS = [
+    'Banco Generico — Estado de Cuenta Tarjeta de Credito',
+    '',
+    'Fecha;Descripcion;Monto;Cuotas',
+    '02/09/2026;COMPRA A;45.000;',
+    '03/09/2026;COMPRA B;19.990;2 de 6',
+    '04/09/2026;COMPRA C 3/9;12.000;',
+    '05/09/2026;COMPRA D;30.000;',
+    '06/09/2026;COMPRA E;5.000;ABC',
+  ].join('\n');
+
+  function installments() {
+    return report(CARD_WITH_INSTALLMENTS, 'generico.tarjeta', 'estado.csv').installments;
+  }
+
+  it('cuenta celdas presentes y vacías por separado', () => {
+    // B (columna) y E (columna con texto que no forma un plan) están presentes;
+    // A, C y D están vacías — aunque C igual produce un plan desde la glosa.
+    expect(installments().cellsPresent).toBe(2);
+    expect(installments().cellsEmpty).toBe(3);
+  });
+
+  it('cuenta planes reconocidos, confirmados y sugeridos', () => {
+    // B: columna dedicada -> confirmed. C: "3/9" en la glosa, sin CUOTA
+    // explícito -> suggested. A y D no tienen plan. E tiene celda pero no
+    // forma un plan reconocible.
+    expect(installments().parsed).toBe(2);
+    expect(installments().confirmed).toBe(1);
+    expect(installments().suggested).toBe(1);
+  });
+
+  it('cuenta celdas presentes que no formaron un plan', () => {
+    expect(installments().unparsed).toBe(1); // E
+  });
+
+  it('separa ambiguous-installment (la lectura) de ambiguous-installment-amount (el monto)', () => {
+    expect(installments().ambiguousPlan).toBe(1); // sólo C, que es "suggested"
+    expect(installments().ambiguousAmount).toBe(2); // B y C: cualquier plan sin installmentAmount mapeado
+  });
+
+  it('nunca imprime el número de cuota, el total ni el texto que los delató', () => {
+    const text = formatReport(report(CARD_WITH_INSTALLMENTS, 'generico.tarjeta', 'estado.csv'));
+    expect(text).not.toMatch(/2\s*(?:de|\/)\s*6/i);
+    expect(text).not.toContain('3/9');
+    expect(text).not.toContain('ABC');
+    expect(text).not.toMatch(/COMPRA [A-E]/);
+  });
+
+  it('un archivo sin ninguna cuota reporta todo en cero, no la ausencia de la sección', () => {
+    const noInstallments = report(
+      ['Fecha;Descripcion;Monto;Cuotas', '02/09/2026;COMPRA A;45.000;'].join('\n'),
+      'generico.tarjeta',
+      'estado.csv',
+    ).installments;
+
+    expect(noInstallments).toEqual({
+      cellsPresent: 0,
+      cellsEmpty: 1,
+      parsed: 0,
+      confirmed: 0,
+      suggested: 0,
+      unparsed: 0,
+      ambiguousPlan: 0,
+      ambiguousAmount: 0,
+    });
+  });
+});

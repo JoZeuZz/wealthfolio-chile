@@ -7,7 +7,7 @@ import {
   type ParsedStatement,
   type ValidationResult,
 } from '../core/model/statement';
-import { detectHeader, mapColumns } from '../core/parsing/columns';
+import { ColumnRole, detectHeader, mapColumns } from '../core/parsing/columns';
 import { describeColumnShape, type ColumnShape } from '../core/parsing/column-shape';
 import type { Sheet } from '../core/parsing/tabular';
 import { redactSensitive } from '../core/privacy';
@@ -51,6 +51,7 @@ export interface CalibrationReport {
   dates: DateFacts;
   balances: BalanceFacts;
   classification: ClassificationFacts;
+  installments: InstallmentFacts;
   /**
    * Which statement facts the profile found, on a card statement.
    *
@@ -182,6 +183,29 @@ export interface ClassificationFacts {
   ambiguousInstallments: number;
 }
 
+/**
+ * Cuotas evidence, aggregated. Counters only — never the installment number,
+ * the total, or the text `detectInstallment` read them from: `2 de 6` on a
+ * card is a fact about a person's debt, exactly like an amount.
+ */
+export interface InstallmentFacts {
+  /** Rows whose Cuotas cell (whatever the profile calls it) is non-empty. */
+  cellsPresent: number;
+  cellsEmpty: number;
+  /** Rows `detectInstallment` turned into a plan, from the cell or the glosa. */
+  parsed: number;
+  /** Of `parsed`, how many came from an explicit `CUOTA` marker or the dedicated column. */
+  confirmed: number;
+  /** Of `parsed`, how many came from a bare `n/m` with no keyword to confirm it. */
+  suggested: number;
+  /** A non-empty cell that `detectInstallment` could not turn into a plan. */
+  unparsed: number;
+  /** Rows carrying the `ambiguous-installment` warning (an uncertain reading). */
+  ambiguousPlan: number;
+  /** Rows carrying `ambiguous-installment-amount` (plan certain, amount role unclear). */
+  ambiguousAmount: number;
+}
+
 export interface CalibrationInput {
   /** Bytes of the private sample. Never retained past this call. */
   bytes: Uint8Array;
@@ -223,6 +247,7 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
     dates: dateFacts(statement.transactions),
     balances: balanceFacts(statement),
     classification: classificationFacts(statement.transactions),
+    installments: installmentFacts(statement.transactions),
     ...(isCardStatement(statement) ? { cardFacts: factPresence(statement.cardFacts ?? {}) } : {}),
     issues: issueFacts(validation),
     rowFailureReasons: rowFailureReasonFacts(statement),
@@ -471,6 +496,38 @@ function classificationFacts(
   };
 }
 
+function installmentFacts(transactions: readonly NormalizedTransaction[]): InstallmentFacts {
+  let cellsPresent = 0;
+  let cellsEmpty = 0;
+  let parsed = 0;
+  let confirmed = 0;
+  let suggested = 0;
+  let unparsed = 0;
+  let ambiguousPlan = 0;
+  let ambiguousAmount = 0;
+
+  for (const transaction of transactions) {
+    const cellPresent = transaction.rawMetadata[ColumnRole.installment] !== undefined;
+    if (cellPresent) cellsPresent += 1;
+    else cellsEmpty += 1;
+
+    if (transaction.installment) {
+      parsed += 1;
+      if (transaction.installment.confidence === Confidence.confirmed) confirmed += 1;
+      if (transaction.installment.confidence === Confidence.suggested) suggested += 1;
+    } else if (cellPresent) {
+      unparsed += 1;
+    }
+
+    for (const warning of transaction.warnings) {
+      if (warning.code === 'ambiguous-installment') ambiguousPlan += 1;
+      if (warning.code === 'ambiguous-installment-amount') ambiguousAmount += 1;
+    }
+  }
+
+  return { cellsPresent, cellsEmpty, parsed, confirmed, suggested, unparsed, ambiguousPlan, ambiguousAmount };
+}
+
 function issueFacts(validation: ValidationResult): CalibrationReport['issues'] {
   const counts = new Map<string, { level: string; count: number }>();
   for (const issue of validation.issues) {
@@ -587,6 +644,14 @@ export function formatReport(report: CalibrationReport): string {
   add('Sin clasificar', report.classification.unknown);
   add('Sólo por producto', report.classification.suggested);
   add('Cuotas ambiguas', report.classification.ambiguousInstallments);
+
+  lines.push('', '── Cuotas ────────────────────────────────────────────────');
+  add('Celda presente / vacía', `${report.installments.cellsPresent} / ${report.installments.cellsEmpty}`);
+  add('Plan reconocido', report.installments.parsed);
+  add('  confirmado / sugerido', `${report.installments.confirmed} / ${report.installments.suggested}`);
+  add('Celda presente sin plan', report.installments.unparsed);
+  add('Aviso: lectura incierta', report.installments.ambiguousPlan);
+  add('Aviso: monto de cuota incierto', report.installments.ambiguousAmount);
 
   if (report.issues.length > 0) {
     lines.push('', '── Avisos ────────────────────────────────────────────────');
