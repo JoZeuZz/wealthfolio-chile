@@ -126,6 +126,59 @@ describe('controles negativos', () => {
     );
   });
 
+  it('CMR real-shaped con firma estructural de Banco de Chile: gana Falabella CMR, no Banco de Chile', () => {
+    // Reproduce el P1 del review: branding CMR/Falabella explícito PERO el
+    // vocabulario estructural (Movimientos Nacionales + billing summary) que
+    // activa el strong marker propio de Banco de Chile. Antes del fix ambos
+    // empataban en score 1 y el orden del registry (Banco de Chile primero)
+    // desempataba mal.
+    const file = fromXlsxRows('cmr-realshaped.xlsx', [
+      ['CMR FALABELLA'],
+      ['Titular', 'CLIENTE SINTETICO'],
+      [],
+      ['Movimientos Facturados'],
+      ['Monto Facturado', 'Pago Minimo', 'Fecha de Facturacion', 'Pagar Hasta'],
+      [],
+      ['Movimientos Nacionales'],
+      ['Fecha', 'Descripcion', 'Cuotas', 'Monto'],
+      ['05/02/2026', 'COMPRA SINTETICA', '3/12', '15.000'],
+    ]);
+
+    const detections = detectAll(inputForFile(file));
+    const bancoChile = detections.find((d) => d.parser === 'banco-chile.tarjeta');
+
+    expect(topParser(file)?.parser).toBe('banco-falabella.cmr');
+    // Banco de Chile no sólo pierde: queda descalificado del todo, no sólo
+    // relegado a segundo lugar por un margen chico.
+    expect(bancoChile).toBeUndefined();
+  });
+
+  it('lo mismo sin que el nombre de archivo mencione cmr/falabella — el texto basta', () => {
+    const file = fromXlsxRows('archivo-neutro.xlsx', [
+      ['CMR FALABELLA'],
+      ['Titular', 'CLIENTE SINTETICO'],
+      [],
+      ['Movimientos Facturados'],
+      ['Monto Facturado', 'Pago Minimo', 'Fecha de Facturacion', 'Pagar Hasta'],
+      [],
+      ['Movimientos Nacionales'],
+      ['Fecha', 'Descripcion', 'Cuotas', 'Monto'],
+      ['05/02/2026', 'COMPRA SINTETICA', '3/12', '15.000'],
+    ]);
+
+    expect(topParser(file)?.parser).toBe('banco-falabella.cmr');
+  });
+
+  it('Banco de Chile real-shaped SIN branding textual rival sigue ganando (sin regresión)', () => {
+    expect(topParser(nationalFile())?.parser).toBe('banco-chile.tarjeta');
+  });
+
+  it('Banco de Chile cuenta corriente no se ve afectado por el marker descalificante de tarjeta', () => {
+    expect(topParser(loadFixture('banco-chile-cuenta-corriente.csv'))?.parser).toBe(
+      'banco-chile.cuenta-corriente',
+    );
+  });
+
   it('el nombre de archivo Mov_Facturado.xls por sí solo no basta sin la firma estructural', () => {
     const file = fromXlsxRows('Mov_Facturado.xls', [
       ['Estado de Cuenta Tarjeta de Credito'],

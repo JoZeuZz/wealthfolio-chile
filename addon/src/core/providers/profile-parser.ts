@@ -79,6 +79,24 @@ function detectWithProfile(
   const reasons: string[] = [];
   let score = 0;
 
+  // A layout signature is evidence about how a statement is shaped, not who
+  // issued it, so it can legitimately coincide across issuers — Falabella's
+  // CMR card can print the same "Movimientos Nacionales" + billing-summary
+  // vocabulary this profile's own strong marker looks for. When the file also
+  // names a rival institution's branding in plain text, that explicit
+  // statement wins outright: this parser is disqualified rather than merely
+  // outscored, so a tie can never be broken by registry order.
+  for (const pattern of hints.disqualifyingMarkers ?? []) {
+    if (pattern.test(preamble)) {
+      return {
+        parser: profile.parserId,
+        institution: profile.institution,
+        score: 0,
+        reasons: [`El archivo menciona la marca de otra institución ("${describePattern(pattern)}").`],
+      };
+    }
+  }
+
   for (const pattern of hints.strongMarkers ?? []) {
     if (pattern.test(preamble)) {
       score += 0.5;

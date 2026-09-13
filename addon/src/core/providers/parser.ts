@@ -55,4 +55,18 @@ export interface DetectionHints {
   weakMarkers?: RegExp[];
   /** File naming conventions used by the bank's download button. */
   fileNamePatterns?: RegExp[];
+  /**
+   * Explicit branding of a rival, supported institution that this parser
+   * must never outscore, no matter how well the file otherwise fits its own
+   * structural markers.
+   *
+   * A layout signature (a section title, a column shape) is evidence about
+   * *how* a statement is laid out, not *who* issued it, so it can legitimately
+   * coincide across issuers — and when it does, the issuer the file actually
+   * names in plain text has to win. Checked against the same preamble text as
+   * `strongMarkers`/`weakMarkers`, never the filename: a match forces this
+   * parser's score to 0, dropping it below `DETECTION_FLOOR` regardless of
+   * every other signal.
+   */
+  disqualifyingMarkers?: RegExp[];
 }

@@ -183,4 +183,10 @@ export const bancoChileCardParser: StatementParser = createProfileParser(BANCO_C
   ],
   weakMarkers: [/TARJETA\s+DE\s+CR[EÉ]DITO/i, /FACTURACI[OÓ]N/i, /CUPO\s+(?:TOTAL|UTILIZADO)/i],
   fileNamePatterns: [/tarjeta/i, /estado.?cuenta/i],
+  // The "Movimientos Nacionales/Internacionales" + billing-summary structural
+  // marker above is a layout signature, not proof of who issued the card —
+  // Banco Falabella's CMR statement can print the same vocabulary. Explicit
+  // CMR/Falabella branding in the file must win over that layout coincidence
+  // (see `falabellaCardParser`'s own strong markers, same vocabulary).
+  disqualifyingMarkers: [/\bCMR\b/i, /BANCO\s+FALABELLA/i, /\bFALABELLA\b/i],
 });
