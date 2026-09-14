@@ -146,6 +146,26 @@ function detectWithProfile(
   score += structural.score;
   reasons.push(...structural.reasons);
 
+  // Recognizing a layout is not the same as supporting it: a profile that
+  // declares `unsupportedLayoutHeaders` (today only `banco-chile.tarjeta`,
+  // for "Movimientos Internacionales") can name that table's exact column
+  // precisely even though it will later refuse to import it. That is
+  // product-specific structural evidence in its own right — the same
+  // evidence `detectUnsupportedLayoutInWorkbook` already uses at parse time
+  // to block the file — so detection reuses it too, scanning every header
+  // row of every sheet via `findHeaderRows` rather than only the single
+  // header `pickDataSheet`/`detectHeader` happened to pick. Without this, a
+  // workbook whose only visible header (by pick order) is the card's own
+  // unsupported table scored identically to `banco-chile.cuenta-corriente`
+  // (no balance/debit-credit/installment column either way) and lost the
+  // tie to registry order.
+  if (detectUnsupportedLayoutInWorkbook(input.sheets, profile)) {
+    score += 0.35;
+    reasons.push(
+      'Se encontró la cabecera exacta del layout de tarjeta que este perfil reconoce pero no puede importar (evidencia de producto, no sólo de marca).',
+    );
+  }
+
   const account = readAccountMetadata(sheet, profile, header.headerRow);
   if (account.number) {
     score += 0.05;
