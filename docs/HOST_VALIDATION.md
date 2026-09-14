@@ -1469,8 +1469,8 @@ sólo se añadió la trazabilidad de qué comando lo produjo.
 | Smoke | Resultado |
 | --- | --- |
 | P0 — multi-tabla escondida, orden Nacional→Internacional (Sheet A Nacional sola, Sheet B Nacional + Internacional apiladas) | Autodetección automática (sin elegir parser): `banco-chile.tarjeta` 95%. Bloqueo `foreign-currency-unsupported` con el texto declarado del perfil ("...movimientos internacionales facturados en USD. Wealthfolio Chile todavía no puede importar movimientos USD dentro de una tarjeta cuya cuenta se modela en CLP..."), `0 · CLP` movimientos, `0 de 0 filas leídas`, sin botón de import habilitado. La hoja Nacional **no** se importó parcialmente |
-| P0 — mismo caso, orden invertido (Internacional→Nacional dentro de Sheet B) | **Hallazgo, no fallo:** la autodetección empata `Banco de Chile — cuenta corriente 75%` con `— tarjeta de crédito 75%` y el desempate elige *cuenta corriente*, no `banco-chile.tarjeta`. El bloqueo resultante no es `foreign-currency-unsupported` sino dos motivos del gate genérico de cuenta: mismatch USD/CLP contra la cuenta destino y una fila con fecha illegible (fail-closed igual, `0 filas`, cero Activities, import deshabilitado). El invariante "nunca importa Nacional ignorando Internacional" se sostiene, pero por una ruta de bloqueo distinta a la que el código de `banco-chile.tarjeta` fue diseñado para reportar — el ranking de autodetección para este orden específico no se ejercita en los tests unitarios de `banco-chile-tarjeta-multisheet.test.ts` (esos tests fuerzan `parserId: 'banco-chile.tarjeta'` y nunca pasan por `detectAll`). No se tocó código: no hay escritura incorrecta que corregir, sólo un mensaje de bloqueo menos específico en este orden concreto |
-| Internacional simple (una sola hoja, sin Nacional) | Mismo patrón que el caso invertido de arriba: autodetecta `cuenta corriente` 75% en vez de `tarjeta` (no había sido cubierto por la Sesión 8, que sólo probó Internacional-hoja-única bajo `banco-chile.tarjeta` 85% — la diferencia parece venir del `Titular`/preámbulo exacto de este fixture). Bloqueado igual, cero Activities |
+| P0 — mismo caso, orden invertido (Internacional→Nacional dentro de Sheet B) | **Hallazgo histórico de esta sesión, corregido más abajo:** en el momento de este smoke, la autodetección empataba `Banco de Chile — cuenta corriente 75%` con `— tarjeta de crédito 75%` y el desempate elegía *cuenta corriente*, no `banco-chile.tarjeta`. El bloqueo resultante no era `foreign-currency-unsupported` sino dos motivos del gate genérico de cuenta: mismatch USD/CLP contra la cuenta destino y una fila con fecha ilegible (fail-closed igual, `0 filas`, cero Activities, import deshabilitado). El invariante "nunca importa Nacional ignorando Internacional" se sostenía, pero por una ruta de bloqueo distinta a la que el código de `banco-chile.tarjeta` fue diseñado para reportar — el ranking de autodetección para este orden específico no se ejercitaba en los tests unitarios de `banco-chile-tarjeta-multisheet.test.ts` (esos tests fuerzan `parserId: 'banco-chile.tarjeta'` y nunca pasan por `detectAll`). En el momento de este hallazgo no se tocó código: no había escritura incorrecta que corregir, sólo un mensaje de bloqueo menos específico en este orden concreto. **Corregido en el commit `fix(detection): recognize Banco Chile international card layouts` de la misma Sesión 9 — ver § abajo**: repetido en el host tras el fix, ahora autodetecta `Banco de Chile — tarjeta de crédito 100%` y bloquea con `foreign-currency-unsupported`, texto exacto, `0 de 0 filas`, cero Activities |
+| Internacional simple (una sola hoja, sin Nacional) | Mismo patrón que el caso invertido de arriba, **también histórico y corregido por el mismo fix**: en el momento de este smoke autodetectaba `cuenta corriente` 75% en vez de `tarjeta` (no había sido cubierto por la Sesión 8, que sólo probó Internacional-hoja-única bajo `banco-chile.tarjeta` 85% — la diferencia venía del `Titular`/preámbulo exacto de este fixture, sin el vocabulario de facturación que hacía ganar a la tarjeta en la Sesión 8). Bloqueado igual en ese momento (cero Activities). Repetido en el host tras el fix: `Banco de Chile — tarjeta de crédito 100%`, `foreign-currency-unsupported`, cero Activities |
 | Issuer multi-hoja — Portada `CMR`/`BANCO FALABELLA` + hoja de datos con firma estructural de Banco de Chile | Autodetección: `Banco Falabella / CMR — tarjeta` **100%**; `Banco de Chile — tarjeta de crédito` no aparece en la lista de candidatos (descalificado). Sólo detección, sin import |
 | Control — Portada `BANCO DE CHILE` + misma hoja de datos | Autodetección: `Banco de Chile — tarjeta de crédito` **100%**, Falabella baja a 45%. Sin import |
 | Formato de planilla inseguro — `Monto ($)` numérico nativo con formato Excel `#,##0,` (escala x1000) | Autodetección `banco-chile.tarjeta` 95%. Bloqueo `spreadsheet-number-format-conflict`: "La columna 'Monto (\$)' tiene celdas cuyo formato nativo de Excel (unknown) contradice el formato esperado para esta columna (integer/grouped-integer/currency-integer). Se bloquea la importación en vez de adivinar la escala del monto." `0 de 1 filas`, cero Activities. El monto nunca se reinterpretó en silencio |
@@ -1510,6 +1510,77 @@ sobre `samples/private`:
 Este host smoke de la Sesión 9 corrió enteramente sobre XLSX (OOXML), igual
 que las Sesiones 7 y 8 — **no** se afirma BIFF de host en ningún punto de esta
 sesión.
+
+### Corrección de detección — empate 75/75 resuelto (misma Sesión 9)
+
+El hallazgo de arriba (orden invertido e Internacional-hoja-única cayendo a
+`banco-chile.cuenta-corriente`) se corrigió en la misma sesión, con TDD, antes
+de repetir el smoke en el host.
+
+**Causa exacta** (confirmada imprimiendo `reasons` de `detectAll` sobre el
+fixture sintético mínimo — sólo texto "Banco de Chile" en el preámbulo, sin el
+vocabulario de facturación que ya separaba los perfiles en otro test):
+ambos perfiles llegaban a `0.75` con exactamente las mismas dos razones —
+`strongMarkers` ("BANCO DE CHILE", +0.5) y cabecera con fecha/descripción/monto
+encontrada (+0.25). `scoreStructuralFit` no aportaba nada a ninguno de los dos,
+porque la única cabecera que `pickDataSheet`/`detectHeader` llegaban a ver
+("Movimientos Internacionales") no trae columna de saldo, cargo/abono ni
+cuotas — las tres únicas señales que esa función sabe leer. El desempate
+final lo resolvía el orden de registro en `registry.ts`
+(`bancoChileCheckingParser` antes que `bancoChileCardParser`), nunca evidencia.
+
+**RED:** `addon/tests/banco-chile-tarjeta-international-detection.test.ts`
+(nuevo), 2 tests en rojo reproduciendo el empate exacto (`expected 0.75 to be
+greater than 0.75`) para Internacional-hoja-única y para el multi-tabla
+invertido.
+
+**Mecanismo nuevo (reutiliza infraestructura existente, sin nueva
+arquitectura de detector):** `detectWithProfile`
+(`core/providers/profile-parser.ts`) ahora también llama a
+`detectUnsupportedLayoutInWorkbook` — la misma función, ya existente, que
+`parseWithProfile` usa para bloquear el layout Internacional en tiempo de
+import, construida sobre `findHeaderRows` (cada cabecera plausible de cada
+hoja, no sólo la que `pickDataSheet` elige). Si el workbook contiene, en
+cualquier hoja y posición, una cabecera plausible que además trae la columna
+exacta que el perfil declara como su propio layout reconocido-pero-no-
+soportado (`unsupportedLayoutHeaders`, hoy sólo `Monto (USD)` en
+`banco-chile.tarjeta`), eso suma `+0.35` y una razón sanitizada ("cabecera
+exacta del layout de tarjeta que este perfil reconoce pero no puede
+importar"), sin exponer ningún valor de celda. Ningún otro perfil declara
+`unsupportedLayoutHeaders` hoy, así que el boost nunca aplica a
+`cuenta-corriente`, Falabella/CMR ni a los genéricos. No se tocó el orden de
+`registry.ts`, no se añadió atajo de nombre de archivo, no se penalizó
+`cuenta-corriente` artificialmente y no se creó una segunda cabecera de rol
+(`ColumnRole`) nueva.
+
+**Score/reasons después del fix** (mismo fixture mínimo):
+
+```
+banco-chile.tarjeta          1.00  (0.5 + 0.25 + 0.35, tope 1)
+banco-chile.cuenta-corriente 0.75  (sin cambios)
+```
+
+**GREEN:** los 2 tests en rojo pasan, más 6 tests adicionales del mismo
+archivo: multi-tabla orden normal (regresión), cuenta corriente real-shaped
+con branding Banco de Chile (control negativo — sigue ganando
+`cuenta-corriente`), tarjeta genérica sin firma exacta (control negativo — no
+se promueve a Banco de Chile), Nacional-sola (regresión). `pnpm verify`
+completo: **1519/1519 tests**, typecheck/lint/build verdes — cero regresiones
+sobre los 1511 preexistentes (incluidos los controles de Falabella/CMR,
+branding en portada separada, y "Falabella" mencionado sólo en una glosa, ya
+cubiertos por `banco-chile-tarjeta-detection.test.ts` y
+`banco-chile-tarjeta-multisheet.test.ts`).
+
+**Host smoke puntual post-fix** (mismo host `3.8.0`, tras
+`./scripts/deploy-addon.sh`, mismos 2 fixtures sintéticos regenerados,
+`CMR Test (CLP)`): ambos casos autodetectan `Banco de Chile — tarjeta de
+crédito 100%` y bloquean con `foreign-currency-unsupported` (texto exacto),
+`0 de 0 filas`, cero Activities. Baseline verificado antes y después: 3
+cuentas, `34/34 activities` — sin cambios; nada se importó en ningún caso.
+Falabella/branding y Nacional-safe no se repitieron en host (los tests
+completos cubren esas rutas y detection no las toca).
+
+Commit: `fix(detection): recognize Banco Chile international card layouts`.
 
 ### Nota metodológica
 
