@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { toDecimalString } from '../src/core/money';
 import { Direction } from '../src/core/model/kinds';
 import { getParser } from '../src/core/providers/registry';
-import { fromText, fromXlsxCells, loadFixture } from './fixtures';
+import { fromText, fromXlsCells, fromXlsxCells, loadFixture } from './fixtures';
 import { computeFileHash } from '../src/core/dedupe/fingerprint';
 import { loadWorkbook } from '../src/core/parsing/workbook';
 import type { ParserInput } from '../src/core/providers/parser';
@@ -159,8 +159,11 @@ describe('Banco de Chile — tarjeta, conflicto de formato nativo contradictorio
     expect(parser.validate(statement).ok).toBe(false);
   });
 
-  it('XLS (mismo contenido, extensión .xls): mismo bloqueo', () => {
-    const file = fromXlsxCells('mov-facturado-nacional-contradiccion.xls', [
+  it('XLS/BIFF real (mismo contenido, bytes BIFF genuinos, no XLSX con nombre .xls): mismo bloqueo', () => {
+    // `fromXlsCells` escribe bytes BIFF/OLE2 reales (`bookType: 'xls'`) —
+    // a diferencia del test anterior a esta tranche, que usaba `fromXlsxCells`
+    // con un nombre `.xls` y en realidad nunca ejercitó el contenedor legacy.
+    const file = fromXlsCells('mov-facturado-nacional-contradiccion.xls', [
       ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
       ['05/02/2026', 'COMPRA SINTETICA', { value: 12.45, numberFormat: '0.000' }, ''],
     ]);
@@ -168,6 +171,67 @@ describe('Banco de Chile — tarjeta, conflicto de formato nativo contradictorio
 
     expect(statement.issues.some((i) => i.code === 'spreadsheet-number-format-conflict')).toBe(true);
     expect(parser.validate(statement).ok).toBe(false);
+  });
+
+  /**
+   * P1 (re-review OpenCode) — un formato nativo que el classifier no puede
+   * demostrar seguro (`unknown`) se trataba como AUSENCIA de metadata en vez
+   * de como CONFLICTO: el override simplemente no se aplicaba y la columna
+   * caía al parser léxico `es-CL`, que para "12,450" (coma + cola de 3
+   * dígitos) SÍ es ambiguo pero para formatos de escala como `#,##0,` deja
+   * pasar el texto visual ya escalado por SheetJS sin ningún warning. Cada
+   * caso de aquí es una celda NUMÉRICA NATIVA cuyo formato Excel es una forma
+   * que el profile no permite para esta columna (`integer`/`grouped-integer`/
+   * `currency-integer`) — deben bloquear, nunca caer en silencio al lexical.
+   */
+  it.each([
+    ['coma de escala simple (x1000)', '#,##0,'],
+    ['coma de escala doble (x1.000.000)', '#,##0,,'],
+    ['porcentaje', '0%'],
+    ['notación científica', '0.00E+00'],
+    ['fracción', '# ?/?'],
+  ])('XLSX: formato nativo no demostrablemente seguro (%s: %s) bloquea, no cae a lexical', (_label, numberFormat) => {
+    const file = fromXlsxCells('mov-facturado-nacional-formato-inseguro.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', { value: 12450, numberFormat }, ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.issues.some((i) => i.code === 'spreadsheet-number-format-conflict')).toBe(true);
+    expect(parser.validate(statement).ok).toBe(false);
+  });
+
+  it('XLS/BIFF real: la coma de escala también bloquea bajo el contenedor legacy', () => {
+    const file = fromXlsCells('mov-facturado-nacional-escala.xls', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', { value: 12450, numberFormat: '#,##0,' }, ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.issues.some((i) => i.code === 'spreadsheet-number-format-conflict')).toBe(true);
+    expect(parser.validate(statement).ok).toBe(false);
+  });
+
+  /**
+   * P1 (re-review OpenCode) — el override sólo puede demostrar algo desde una
+   * celda NUMÉRICA NATIVA. Una celda de TEXTO cuyo código de formato residual
+   * coincide textualmente con una forma permitida (`#,##0`) no es evidencia
+   * de nada: Excel deja formato pegado a celdas de texto sin que signifique
+   * "este texto es un número agrupado". Antes, `evaluateStructuralSpreadsheetColumnNumberFormats`
+   * sólo miraba `numberFormatShape`, nunca `nativeType`, así que esta celda
+   * activaba el override igual que una numérica genuina.
+   */
+  it('celda de TEXTO con formato "#,##0" residual NO activa el override — sigue bloqueada por ambigüedad léxica', () => {
+    const file = fromXlsxCells('mov-facturado-nacional-texto-con-formato.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', { value: '12,450', numberFormat: '#,##0', nativeType: 'string' }, ''],
+    ]);
+    const statement = parser.parse(inputForFile(file));
+
+    expect(statement.issues.some((i) => i.code === 'spreadsheet-number-format-conflict')).toBe(false);
+    expect(statement.transactions[0]?.warnings.some((w) => w.code === 'ambiguous-amount-format')).toBe(
+      true,
+    );
   });
 
   it('ausencia (General, sin metadata explícita) NO dispara el conflicto — sigue el fail-closed existente', () => {

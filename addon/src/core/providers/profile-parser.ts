@@ -1110,19 +1110,33 @@ interface StructuralFormatVerdict {
  * mapped, non-blank data cell in that column is a native number whose format
  * is one of `spreadsheetColumnStructuralEvidence`'s listed shapes.
  *
- * A role that does not qualify is not always silent absence of evidence.
- * `matched` (every cell qualifies) applies the override; `absent` (General, a
- * text cell, no cell metadata at all) changes nothing and leaves the existing
- * fail-closed lexical path — `ambiguous-amount-format` — to judge the text on
- * its own; but `contradicted` — a native number cell whose Excel format
- * classifies to a *real, explicit* shape (never `general`/`unknown`) that is
- * simply not one of the allowed shapes, e.g. `decimal-3` when the profile
- * only trusts `integer`/`grouped-integer`/`currency-integer` — is the
- * container itself stating a scale the profile's lexical fallback cannot see
- * and would silently get wrong (`core/money.ts#splitDecimal` reads a single
- * dot + three-digit tail under `es-CL` as unambiguous grouping, exactly the
- * wrong reading for a genuine 3-decimal value). That case reports
- * `spreadsheet-number-format-conflict` and blocks rather than falling back.
+ * A role that does not qualify is not always silent absence of evidence, and
+ * only a native number cell can ever be evidence of anything:
+ *
+ * - `absent` — no cell metadata at all, a text cell (whatever its leftover
+ *   format code says — Excel happily leaves one stuck on a cell after its
+ *   content was retyped as text, and that residue asserts nothing about the
+ *   text), or a native number formatted `general` (Excel's "no format was
+ *   ever chosen" state, which does not assert zero decimals either). Changes
+ *   nothing and leaves the existing fail-closed lexical path —
+ *   `ambiguous-amount-format` — to judge the text on its own.
+ * - `matched` — every mapped, non-blank cell is a native number whose format
+ *   is one of the role's allowed shapes. Applies the override.
+ * - `contradicted` — a native number cell whose Excel format is anything
+ *   else: a real, explicit shape not in the allowed list (`decimal-3` when
+ *   the profile only trusts `integer`/`grouped-integer`/`currency-integer`),
+ *   or a shape `classifyNumberFormatCode` cannot prove safe at all (a
+ *   trailing scale comma, a percentage, scientific notation, a fraction —
+ *   all fold to `'unknown'`, this project's fail-closed bucket, never to a
+ *   named safe shape). Both are the container stating a scale or a semantics
+ *   the profile's lexical fallback cannot see and would silently get wrong
+ *   (`core/money.ts#splitDecimal` reads a single dot + three-digit tail
+ *   under `es-CL` as unambiguous grouping, exactly the wrong reading for a
+ *   genuine 3-decimal value, and a scale-comma format prints a value 1000x
+ *   too small with no textual clue at all). Either one reports
+ *   `spreadsheet-number-format-conflict` and blocks rather than falling
+ *   back — silently treating "not provably safe" as "no evidence" is the
+ *   bug this distinction exists to close.
  */
 function evaluateStructuralSpreadsheetColumnNumberFormats(
   profile: StatementProfile,
@@ -1156,10 +1170,25 @@ function evaluateStructuralSpreadsheetColumnNumberFormats(
       if ((sheet.rows[r]?.[column] ?? '').trim() === '') continue;
       const fact = formatSheet.cells[r]?.[column];
       sawRow = true;
-      if (fact && allowedShapes.includes(fact.numberFormatShape)) continue;
+
+      // Only a native `number` cell can ever be evidence of anything — a
+      // string cell's leftover format code (Excel keeps `z` around after a
+      // cell is retyped as text) proves nothing about the text it holds, and
+      // must never activate the override on its own.
+      if (fact !== undefined && fact.nativeType === 'number' && allowedShapes.includes(fact.numberFormatShape)) {
+        continue;
+      }
 
       everyRowQualifies = false;
-      if (fact?.nativeType === 'number' && fact.numberFormatShape !== 'general' && fact.numberFormatShape !== 'unknown') {
+      // `general` is Excel's "no format was ever chosen" state — it asserts
+      // no scale either way, so it is absence of evidence, not a
+      // contradiction. Every other explicit shape, including `unknown` (this
+      // project's fail-closed bucket for anything `classifyNumberFormatCode`
+      // cannot prove safe — a scale comma, a percentage, scientific
+      // notation, a fraction), IS the container asserting something the
+      // allowed list does not cover, and must conflict rather than silently
+      // fall back to lexical parsing.
+      if (fact !== undefined && fact.nativeType === 'number' && fact.numberFormatShape !== 'general') {
         contradictingShape = fact.numberFormatShape;
       }
     }

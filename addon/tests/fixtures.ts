@@ -105,6 +105,46 @@ export interface XlsxCellSpec {
   value: string | number;
   /** Excel number-format code, e.g. `'#,##0'`. Omit to leave it `General`. */
   numberFormat?: string;
+  /**
+   * Force the cell's native type. Defaults to `'number'`.
+   *
+   * Exists to pin the case a leftover format code on a text cell must never
+   * turn into: `'string'` with a `numberFormat` set reproduces a cell whose
+   * container says "text" while its format code still reads as one of the
+   * shapes `spreadsheetColumnStructuralEvidence` accepts, which must never
+   * activate a structural override — only `nativeType === 'number'` can.
+   */
+  nativeType?: 'number' | 'string';
+}
+
+/**
+ * Builds an in-memory spreadsheet where each cell's native type and number
+ * format are controlled explicitly, for exercising `readSpreadsheetCellFormats`.
+ *
+ * Shared by `fromXlsxCells` (real OOXML/ZIP bytes) and `fromXlsCells` (real
+ * legacy BIFF/OLE2 bytes) — the only difference between the two file formats
+ * this project has to distinguish is `bookType`, so both go through the same
+ * cell construction to keep them from silently drifting apart.
+ */
+function buildCellWorkbook(
+  rows: readonly (readonly (string | XlsxCellSpec)[])[],
+  bookType: 'xlsx' | 'xls',
+): Buffer {
+  const aoa = rows.map((row) => row.map((entry) => (typeof entry === 'string' ? entry : entry.value)));
+  const sheet = XLSX.utils.aoa_to_sheet(aoa as (string | number)[][]);
+  rows.forEach((row, r) => {
+    row.forEach((entry, c) => {
+      if (typeof entry === 'string') return;
+      const address = XLSX.utils.encode_cell({ r, c });
+      const cell = sheet[address] as { t?: string; z?: string } | undefined;
+      if (!cell) return;
+      cell.t = entry.nativeType === 'string' ? 's' : 'n';
+      if (entry.numberFormat !== undefined) cell.z = entry.numberFormat;
+    });
+  });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Movimientos');
+  return XLSX.write(workbook, { type: 'buffer', bookType }) as Buffer;
 }
 
 /**
@@ -121,22 +161,26 @@ export function fromXlsxCells(
   name: string,
   rows: readonly (readonly (string | XlsxCellSpec)[])[],
 ): SourceFile {
-  const aoa = rows.map((row) => row.map((entry) => (typeof entry === 'string' ? entry : entry.value)));
-  const sheet = XLSX.utils.aoa_to_sheet(aoa as (string | number)[][]);
-  rows.forEach((row, r) => {
-    row.forEach((entry, c) => {
-      if (typeof entry === 'string') return;
-      const address = XLSX.utils.encode_cell({ r, c });
-      const cell = sheet[address] as { t?: string; z?: string } | undefined;
-      if (!cell) return;
-      cell.t = 'n';
-      if (entry.numberFormat !== undefined) cell.z = entry.numberFormat;
-    });
-  });
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, 'Movimientos');
-  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
-  return { name, bytes: new Uint8Array(buffer) };
+  return { name, bytes: new Uint8Array(buildCellWorkbook(rows, 'xlsx')) };
+}
+
+/**
+ * `fromXlsxCells`'s real-BIFF twin.
+ *
+ * A test file named `*.xls` built by `fromXlsxCells` still writes OOXML/ZIP
+ * bytes (`bookType: 'xlsx'`) — `detectFileKind` reads the magic bytes, not
+ * the extension, so a `.xls`-named XLSX fixture is silently read as `xlsx`
+ * and never exercises the legacy BIFF/OLE2 container at all. This writes the
+ * real thing: `bookType: 'xls'` produces the OLE2 compound-document magic
+ * (`D0 CF 11 E0`), confirmed by a round trip through `XLSX.read` in
+ * `fixtures-biff.test.ts`, so a test built on this actually exercises the
+ * BIFF path `readSpreadsheetCellFormats` and `loadWorkbook` both support.
+ */
+export function fromXlsCells(
+  name: string,
+  rows: readonly (readonly (string | XlsxCellSpec)[])[],
+): SourceFile {
+  return { name, bytes: new Uint8Array(buildCellWorkbook(rows, 'xls')) };
 }
 
 let txCounter = 0;
