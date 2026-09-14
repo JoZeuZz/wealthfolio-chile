@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { buildDuplicateIndex } from '../src/core/dedupe/classify';
+import { DirectionFlagError } from '../src/core/parsing/rows';
 import { prepareImport } from '../src/core/pipeline';
 import { runImport } from '../src/services/import-runner';
 import { fromText } from './fixtures';
@@ -363,6 +364,13 @@ describe('la columna de dirección no cita el valor que no reconoció', () => {
       '',
     );
     expect(reasonA).toBe(reasonB);
+  });
+
+  it('DirectionFlagError no puede construirse con contenido dinámico: su propio message es fijo', () => {
+    const error = new DirectionFlagError();
+    expect(error.message).toBe('la columna de dirección trae un valor no reconocido.');
+    expect(error.message).not.toContain('RUT');
+    expect(error.message).not.toContain('MARIA');
   });
 });
 

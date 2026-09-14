@@ -706,19 +706,17 @@ export type DirectionFlagErrorKind = 'unrecognized';
  * A direction-column value `readDirectionFlag` could not place in either
  * vocabulary.
  *
- * `message` is for developers reading a stack trace locally and may name the
- * raw cell, exactly like `MoneyError`/`DateParseError` already do — what
- * matters is that nothing downstream ever reads it. `describeRowFailure`
- * special-cases this type to a fixed, PII-free sentence, the same way it
- * already does for those two, so a misaligned column that puts a name or a
- * RUT under a `D/C` heading never reaches a calibration report or a stored
- * issue.
+ * Unlike `MoneyError`/`DateParseError`, this class takes no free-text
+ * message — a misaligned column can put a name or a RUT under a `D/C`
+ * heading, and that raw cell must never exist inside this error's own
+ * `message`, not only inside the sanitized issue `describeRowFailure`
+ * derives from it.
  */
 export class DirectionFlagError extends Error {
   readonly kind: DirectionFlagErrorKind;
 
-  constructor(message: string, kind: DirectionFlagErrorKind = 'unrecognized') {
-    super(message);
+  constructor(kind: DirectionFlagErrorKind = 'unrecognized') {
+    super('la columna de dirección trae un valor no reconocido.');
     this.name = 'DirectionFlagError';
     this.kind = kind;
   }
@@ -744,9 +742,7 @@ function readDirectionFlag(value: string, header?: string): 'debit' | 'credit' {
   if (raw === '-') return 'debit';
   if (raw === '+') return 'credit';
 
-  throw new DirectionFlagError(
-    `la columna de dirección dice "${value}", que no significa nada bajo la cabecera "${header ?? '(sin cabecera)'}"`,
-  );
+  throw new DirectionFlagError();
 }
 
 /**
