@@ -160,6 +160,44 @@ describe('6. Una sola hoja Internacional sigue igual', () => {
   });
 });
 
+describe('7. Nacional seguido de Internacional en la MISMA hoja', () => {
+  const prepared = prepare(
+    fromXlsxSheets('mixto-una-hoja.xlsx', [
+      { name: 'Movimientos', rows: [...NACIONAL_ROWS, ...INTERNACIONAL_ROWS] },
+    ]),
+  );
+
+  it('reporta foreign-currency-unsupported aunque la Internacional esté bajo la misma cabecera Nacional', () => {
+    const issue = prepared.statement.issues.find((i) => i.code === 'foreign-currency-unsupported');
+    expect(issue).toBeDefined();
+    expect(issue?.level).toBe('error');
+  });
+
+  it('cero transacciones — fail-closed total, no sólo la tabla Nacional', () => {
+    expect(prepared.statement.transactions).toHaveLength(0);
+    expect(prepared.rows).toHaveLength(0);
+  });
+
+  it('validation.ok es false', () => {
+    expect(prepared.validation.ok).toBe(false);
+  });
+});
+
+describe('8. Internacional seguido de Nacional en la MISMA hoja (orden invertido)', () => {
+  const prepared = prepare(
+    fromXlsxSheets('mixto-una-hoja-invertido.xlsx', [
+      { name: 'Movimientos', rows: [...INTERNACIONAL_ROWS, ...NACIONAL_ROWS] },
+    ]),
+  );
+
+  it('mismo resultado: bloqueo total', () => {
+    const issue = prepared.statement.issues.find((i) => i.code === 'foreign-currency-unsupported');
+    expect(issue).toBeDefined();
+    expect(prepared.statement.transactions).toHaveLength(0);
+    expect(prepared.validation.ok).toBe(false);
+  });
+});
+
 describe('Regresión: CSV de una sola hoja no cambia', () => {
   it('banco-chile-tarjeta.csv sigue importando Nacional normalmente', () => {
     const prepared = prepareImport({

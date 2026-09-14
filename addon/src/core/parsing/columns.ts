@@ -189,18 +189,38 @@ export interface DetectHeaderOptions {
  */
 export function detectHeader(sheet: Sheet, options: DetectHeaderOptions = {}): HeaderDetection {
   const maxScanRows = options.maxScanRows ?? 30;
+  return findHeaderRows(sheet, { maxScanRows })[0] ?? { headerRow: -1, map: {}, headers: [], firstDataRow: 0 };
+}
+
+/**
+ * Every plausible header row in a sheet, not just the first.
+ *
+ * A bank workbook can stack two real tables in one sheet — "Movimientos
+ * Nacionales" followed further down by "Movimientos Internacionales" — and a
+ * scan that stops at the first match never looks at the second table's own
+ * header. `detectHeader` is right to stop early when it only needs *a*
+ * header to start mapping rows; unsupported-layout detection needs *every*
+ * header, because a second table's columns are never in `sheet.rows` under
+ * the first table's header at all. Uses no cap on how far to scan by
+ * default — unlike `detectHeader`, which bounds itself to the region banks
+ * actually bury a first header under — because the second table can appear
+ * arbitrarily far down a long statement.
+ */
+export function findHeaderRows(sheet: Sheet, options: DetectHeaderOptions = {}): HeaderDetection[] {
+  const maxScanRows = options.maxScanRows ?? sheet.rows.length;
   const limit = Math.min(sheet.rows.length, maxScanRows);
+  const found: HeaderDetection[] = [];
 
   for (let i = 0; i < limit; i += 1) {
     const row = sheet.rows[i] as string[];
     if (isBlankRow(row)) continue;
     const map = mapColumns(row);
     if (isPlausibleHeader(map)) {
-      return { headerRow: i, map, headers: row.slice(), firstDataRow: i + 1 };
+      found.push({ headerRow: i, map, headers: row.slice(), firstDataRow: i + 1 });
     }
   }
 
-  return { headerRow: -1, map: {}, headers: [], firstDataRow: 0 };
+  return found;
 }
 
 /** Map one row of header cells to column roles. */
