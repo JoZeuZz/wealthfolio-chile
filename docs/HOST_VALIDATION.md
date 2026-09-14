@@ -1372,3 +1372,63 @@ Esta sesión prueba el pipeline de punta a punta contra un host real con datos
 real: semántica de cuotas efectiva, pagos, devoluciones/reversos, interés,
 comisiones y avances en efectivo. `Movimientos Internacionales` sigue
 deliberadamente no soportado, por diseño.
+
+## Sesión 8 — regresión/hardening posterior al review independiente
+
+**Ejecutada el 2026-09-14** contra la misma instancia persistente
+`wealthfolio/wealthfolio:3.8.0` (healthy, sin migrar). Objetivo: confirmar
+contra un host real los fixes de un review independiente sobre esta misma
+tranche, más dos hardenings adicionales hechos en esta sesión
+(`DirectionFlagError` sin valor crudo propio; `legacy-source-conflict`
+fail-closed de punta a punta, verificado con `runImport`/`saveMany` fake-host
+en `addon/tests/dedupe-legacy-source-conflict.test.ts`, no contra este host —
+reproducir el escenario de dos parsers históricos en un host real está fuera
+de alcance de una sesión de regresión). **Ninguna cartola real tocó el host**;
+todos los fixtures fueron XLSX 100% sintéticos generados con SheetJS fuera del
+repo (`/tmp`, nunca comiteados) y borrados al terminar.
+
+### Preflight
+
+- `git status --short`: limpio antes y después de cada commit.
+- `pnpm verify` verde (typecheck, lint, 1487 tests, build) antes de tocar el
+  host.
+- `./scripts/deploy-addon.sh`: reconstruye e instala el `dist/addon.js` con
+  los 2 commits de esta sesión antes de cualquier smoke.
+- Host: `docker inspect` → `healthy`.
+
+### Baseline
+
+3 cuentas (`Banco Chile Test`, `BancoEstado Test`, `CMR Test`), 34 Activities —
+idéntico a la Sesión 7.
+
+### Resultados
+
+| Smoke | Resultado |
+| --- | --- |
+| A — Nacional soportado (hoja única) | Autodetección `banco-chile.tarjeta` 95%, 1/1 fila, `-$38.500` exacto, import `1 detectado, 1 seleccionado, 1 creado` |
+| B — Internacional no soportado (hoja única) | Autodetección `banco-chile.tarjeta` 85%, `foreign-currency-unsupported`, `0 de 0 filas leídas`, cero Activities |
+| C — P0 multi-hoja (Nacional + Internacional en el mismo workbook) | Ambos órdenes probados. `banco-chile.tarjeta` 95%, bloqueo total por `foreign-currency-unsupported`, `MOVIMIENTOS 0 · CLP`, `0 de 0 filas leídas`, botón "Ver movimientos" deshabilitado. La hoja Nacional **no** se importó parcialmente en ningún orden — el P0 original está cerrado |
+| D — formato de monto contradictorio/peligroso (`#,##0,`, `0.000`) | No repetido en UI: `addon/tests/spreadsheet-format.test.ts` y `addon/tests/banco-chile-tarjeta-nacional.test.ts` ya prueban `classifyNumberFormatCode('#,##0,') === 'unknown'` (nunca `grouped-integer`) y que un `0.000` nativo explícito dispara `spreadsheet-number-format-conflict` (`level: 'error'`, bloquea `validation.ok`) contra `integer`/`grouped-integer`/`currency-integer` esperados, en XLS y XLSX |
+| E — branding CMR/Falabella explícito con firma estructural de Banco de Chile | Autodetección: `Banco Falabella / CMR — tarjeta`, **100% de coincidencia**; Banco de Chile no aparece como candidato. Sólo detección, no se importó |
+
+### Cleanup
+
+- La única Activity sintética creada (Smoke A, `CMR Test`) borrada vía UI
+  (`Activities` → buscar por descripción única → `Open` → `Delete` →
+  confirmar). Búsqueda confirmó un único resultado antes de borrar.
+- Baseline final: 3 cuentas, 34 Activities — idéntico al inicial.
+- Fixtures XLSX y scripts generadores, fuera del repo desde el inicio,
+  borrados del directorio temporal.
+
+### Verificación final
+
+- Activities/cuentas: idéntico al baseline.
+- `docker inspect` → `healthy`; addon carga en `/addons/wealthfolio-chile`.
+- `pnpm verify`: ver el commit de cada fix de esta sesión.
+
+### `validationStatus` — sin cambios, sigue `pending-real-sample`
+
+Esta sesión es regresión/hardening sobre código ya calibrado, no nueva
+calibración. Lo pendiente real sigue siendo lo mismo que cierra la Sesión 7:
+cuotas efectivas, pagos, devoluciones/reversos, interés, comisiones y avances
+en efectivo con evidencia real.
