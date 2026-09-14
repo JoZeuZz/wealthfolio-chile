@@ -1432,3 +1432,86 @@ Esta sesión es regresión/hardening sobre código ya calibrado, no nueva
 calibración. Lo pendiente real sigue siendo lo mismo que cierra la Sesión 7:
 cuotas efectivas, pagos, devoluciones/reversos, interés, comisiones y avances
 en efectivo con evidencia real.
+
+## Sesión 9 — smoke final tras el hardening multi-tabla/dedupe (retoma post-`deploy-addon.sh`)
+
+**Ejecutada el 2026-09-14** contra la misma instancia persistente
+`wealthfolio/wealthfolio:3.8.0` (healthy). Objetivo: regression smoke sobre
+los 5 commits de esta ronda (`e12d6e8` completitud multi-tabla, `5afc50f`
+evidencia insegura de planilla + fixtures BIFF reales sintéticos, `1516b2e`
+preámbulos de workbook para issuer detection, `e7ffdf9` precedencia de
+conflicto legacy, `16d2c03` breakdown coherente con write gate). **Ninguna
+cartola real tocó el host**; los 8 fixtures fueron XLSX 100% sintéticos
+generados con SheetJS fuera del repo (scratchpad de sesión, nunca comiteados)
+y borrados al terminar.
+
+### Corrección metodológica previa (no incidente de producto)
+
+Antes del smoke se corrigió una nota de evidencia en `docs/BANK_FORMATS.md`
+(fila de tarjeta de crédito, madurez): el claim "4 cartolas reales XLS/BIFF"
+quedó re-verificado corriendo `pnpm --silent calibrate` sobre las 4
+`Mov_Facturado` reales de `samples/private/Banco de Chile/` — único canal
+permitido sobre esa carpeta. Las 4 reportan `container: xls` en la sección
+"Formato nativo" de `calibrate` (BIFF/OLE2, vía `detectFileKind` sobre los
+bytes reales, nunca la extensión ni un valor de celda). El claim se mantiene;
+sólo se añadió la trazabilidad de qué comando lo produjo.
+
+### Preflight
+
+- `docker ps`: `wealthfolio/wealthfolio:3.8.0`, `healthy`.
+- Login real vía formulario (`POST /api/v1/auth/login` implícito en el submit
+  del form) — OK.
+- Baseline: 3 cuentas (`Banco Chile Test`, `BancoEstado Test`, `CMR Test`),
+  `34/34 activities` — idéntico a Sesiones 7 y 8. No se creó cuenta nueva.
+
+### Resultados
+
+| Smoke | Resultado |
+| --- | --- |
+| P0 — multi-tabla escondida, orden Nacional→Internacional (Sheet A Nacional sola, Sheet B Nacional + Internacional apiladas) | Autodetección automática (sin elegir parser): `banco-chile.tarjeta` 95%. Bloqueo `foreign-currency-unsupported` con el texto declarado del perfil ("...movimientos internacionales facturados en USD. Wealthfolio Chile todavía no puede importar movimientos USD dentro de una tarjeta cuya cuenta se modela en CLP..."), `0 · CLP` movimientos, `0 de 0 filas leídas`, sin botón de import habilitado. La hoja Nacional **no** se importó parcialmente |
+| P0 — mismo caso, orden invertido (Internacional→Nacional dentro de Sheet B) | **Hallazgo, no fallo:** la autodetección empata `Banco de Chile — cuenta corriente 75%` con `— tarjeta de crédito 75%` y el desempate elige *cuenta corriente*, no `banco-chile.tarjeta`. El bloqueo resultante no es `foreign-currency-unsupported` sino dos motivos del gate genérico de cuenta: mismatch USD/CLP contra la cuenta destino y una fila con fecha illegible (fail-closed igual, `0 filas`, cero Activities, import deshabilitado). El invariante "nunca importa Nacional ignorando Internacional" se sostiene, pero por una ruta de bloqueo distinta a la que el código de `banco-chile.tarjeta` fue diseñado para reportar — el ranking de autodetección para este orden específico no se ejercita en los tests unitarios de `banco-chile-tarjeta-multisheet.test.ts` (esos tests fuerzan `parserId: 'banco-chile.tarjeta'` y nunca pasan por `detectAll`). No se tocó código: no hay escritura incorrecta que corregir, sólo un mensaje de bloqueo menos específico en este orden concreto |
+| Internacional simple (una sola hoja, sin Nacional) | Mismo patrón que el caso invertido de arriba: autodetecta `cuenta corriente` 75% en vez de `tarjeta` (no había sido cubierto por la Sesión 8, que sólo probó Internacional-hoja-única bajo `banco-chile.tarjeta` 85% — la diferencia parece venir del `Titular`/preámbulo exacto de este fixture). Bloqueado igual, cero Activities |
+| Issuer multi-hoja — Portada `CMR`/`BANCO FALABELLA` + hoja de datos con firma estructural de Banco de Chile | Autodetección: `Banco Falabella / CMR — tarjeta` **100%**; `Banco de Chile — tarjeta de crédito` no aparece en la lista de candidatos (descalificado). Sólo detección, sin import |
+| Control — Portada `BANCO DE CHILE` + misma hoja de datos | Autodetección: `Banco de Chile — tarjeta de crédito` **100%**, Falabella baja a 45%. Sin import |
+| Formato de planilla inseguro — `Monto ($)` numérico nativo con formato Excel `#,##0,` (escala x1000) | Autodetección `banco-chile.tarjeta` 95%. Bloqueo `spreadsheet-number-format-conflict`: "La columna 'Monto (\$)' tiene celdas cuyo formato nativo de Excel (unknown) contradice el formato esperado para esta columna (integer/grouped-integer/currency-integer). Se bloquea la importación en vez de adivinar la escala del monto." `0 de 1 filas`, cero Activities. El monto nunca se reinterpretó en silencio |
+| Nacional normal (safe) — numérico nativo `#,##0` | Autodetección `banco-chile.tarjeta` 95%, preview `-$17.900` exacto, `Compra tarjeta`, `Nuevo`. Import: `1 detectado, 1 seleccionado, 1 creado en Wealthfolio, 0 fallidos`. El hardening de esta ronda no convirtió el caso válido en falso positivo |
+
+### Cleanup
+
+- La única Activity sintética creada (Nacional safe, `Farmacia Sintetica Host
+  Smoke`, `CMR Test`) borrada vía UI (`Activities` → buscar por descripción
+  única, un solo resultado → `Open` → `Delete` → confirmar). Verificado `0/0`
+  resultados tras borrar antes de limpiar el filtro.
+- Baseline final: 3 cuentas, `34/34 activities` — idéntico al inicial.
+- Los 8 fixtures XLSX y el script generador (scratchpad de sesión, nunca
+  dentro del repo) borrados al terminar, junto con las capturas intermedias.
+- `samples/private/` no se tocó durante el smoke — sólo se leyó antes, vía
+  `pnpm calibrate`, para la corrección de la Sesión 9 § arriba.
+
+### Verificación final
+
+- Activities/cuentas: idéntico al baseline (`34/34`, 3 cuentas).
+- `docker ps` → `healthy`; addon carga en `/addons/wealthfolio-chile`.
+- `pnpm verify`: **1511/1511 tests**, typecheck, lint y build verdes.
+
+### BIFF real — de dónde viene cada afirmación
+
+Para que una futura sesión no repita la confusión de origen de evidencia: el
+BIFF/OLE2 real (`D0 CF 11 E0`) que este proyecto puede afirmar con confianza
+viene de dos fuentes, ninguna de las cuales es una lectura de bytes ad hoc
+sobre `samples/private`:
+
+1. `addon/tests/fixtures-biff.test.ts` y `fromXlsCells` — bytes BIFF 100%
+   sintéticos, generados en el propio test, verificados por round-trip
+   `XLSX.read`.
+2. `pnpm calibrate` sobre las 4 `Mov_Facturado` reales — `container: xls` vía
+   `detectFileKind`, sin exponer ningún valor de celda.
+
+Este host smoke de la Sesión 9 corrió enteramente sobre XLSX (OOXML), igual
+que las Sesiones 7 y 8 — **no** se afirma BIFF de host en ningún punto de esta
+sesión.
+
+### Nota metodológica
+
+Ninguna cartola real tocó el host en esta sesión. Todo lo subido fue XLSX
+sintético generado localmente y descartado al cerrar.

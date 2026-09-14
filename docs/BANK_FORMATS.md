@@ -68,7 +68,7 @@ Falta también confirmar cómo CMR marca los avances en efectivo.
 | Producto | Formato | Estado | Parser |
 | --- | --- | --- | --- |
 | Cuenta corriente | XLS (BIFF) | ⚠️ pendiente (calibrado parcial 2026-09) | `banco-chile.cuenta-corriente` |
-| Tarjeta de crédito | XLS (BIFF), real — CSV/XLSX, sólo fixture sintético | ⚠️ pendiente (calibrado 2026-09 con 4 cartolas reales XLS/BIFF; CSV y XLSX nunca vistos reales para este producto, sólo probados con fixtures sintéticos; host validado con fixture XLSX 100% sintético) | `banco-chile.tarjeta` |
+| Tarjeta de crédito | XLS (BIFF), real — CSV/XLSX, sólo fixture sintético | ⚠️ pendiente (calibrado 2026-09 con 4 cartolas reales XLS/BIFF — las 4 reportan `container: xls` en la sección "Formato nativo" de `pnpm calibrate`, único canal permitido sobre `samples/private`, nunca una lectura de bytes ad hoc; CSV y XLSX nunca vistos reales para este producto, sólo probados con fixtures sintéticos; host validado con fixture XLSX 100% sintético) | `banco-chile.tarjeta` |
 | Cualquiera | PDF | 🚫 | — |
 
 Mapeo confirmado para cuenta corriente (8 cartolas XLS reales):
