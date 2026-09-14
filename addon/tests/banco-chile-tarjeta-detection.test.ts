@@ -3,7 +3,7 @@ import { computeFileHash } from '../src/core/dedupe/fingerprint';
 import { loadWorkbook } from '../src/core/parsing/workbook';
 import { detectAll } from '../src/core/providers/registry';
 import type { ParserInput } from '../src/core/providers/parser';
-import { fromXlsxRows, loadFixture } from './fixtures';
+import { fromXlsxRows, fromXlsxSheets, loadFixture } from './fixtures';
 import type { SourceFile } from '../src/core/parsing/tabular';
 
 /**
@@ -188,5 +188,76 @@ describe('controles negativos', () => {
     ]);
 
     expect(topParser(file)?.parser).not.toBe('banco-chile.tarjeta');
+  });
+});
+
+/**
+ * P1 (re-review OpenCode) — branding en una hoja distinta a la de datos.
+ *
+ * `detectWithProfile` sólo miraba el preámbulo de la hoja que `pickDataSheet`
+ * elige. Un workbook real puede traer una "Portada" separada con el branding
+ * explícito del banco y los movimientos en OTRA hoja cuya firma estructural
+ * coincide con `banco-chile.tarjeta` (Movimientos Nacionales + vocabulario
+ * de facturación) — `pickDataSheet` elige la hoja de datos por ancho/columnas,
+ * nunca la Portada, así que ni `strongMarkers` de Falabella ni
+ * `disqualifyingMarkers` de Banco de Chile veían nunca el "CMR"/"BANCO
+ * FALABELLA" de la portada. `workbookPreambleText` agrega el preámbulo de
+ * TODAS las hojas (nunca sus filas de movimiento) antes de evaluar markers.
+ */
+describe('branding multi-hoja (Portada separada de los datos)', () => {
+  const dataSheetRows = [
+    ['Titular', 'CLIENTE SINTETICO'],
+    [],
+    ['Movimientos Facturados'],
+    ['Monto Facturado', 'Pago Minimo', 'Fecha de Facturacion', 'Pagar Hasta'],
+    [],
+    ['Movimientos Nacionales'],
+    ['Categoria', 'Fecha', 'Descripcion', 'Cuotas', 'Monto ($)'],
+    ['VIAJES', '05/02/2026', 'HOTEL SINTETICO', '', '38.500'],
+  ];
+  const portadaRows = [['CMR'], ['BANCO FALABELLA'], ['Estado de Cuenta']];
+
+  it('Portada con CMR/Banco Falabella + hoja de datos con firma de Banco de Chile: gana Falabella, Banco de Chile queda descalificado', () => {
+    const file = fromXlsxSheets('cmr-portada-separada.xlsx', [
+      { name: 'Portada', rows: portadaRows },
+      { name: 'Movimientos', rows: dataSheetRows },
+    ]);
+
+    const detections = detectAll(inputForFile(file));
+    const bancoChile = detections.find((d) => d.parser === 'banco-chile.tarjeta');
+
+    expect(topParser(file)?.parser).toBe('banco-falabella.cmr');
+    expect(bancoChile).toBeUndefined();
+  });
+
+  it('mismo resultado con el orden de hojas invertido (datos primero, Portada después)', () => {
+    const file = fromXlsxSheets('cmr-portada-separada-invertido.xlsx', [
+      { name: 'Movimientos', rows: dataSheetRows },
+      { name: 'Portada', rows: portadaRows },
+    ]);
+
+    expect(topParser(file)?.parser).toBe('banco-falabella.cmr');
+  });
+
+  it('Banco de Chile verdadero (sin Falabella en ninguna hoja) no se ve afectado', () => {
+    const file = fromXlsxSheets('banco-chile-portada-separada.xlsx', [
+      { name: 'Portada', rows: [['BANCO DE CHILE'], ['Estado de Cuenta']] },
+      { name: 'Movimientos', rows: dataSheetRows },
+    ]);
+
+    expect(topParser(file)?.parser).toBe('banco-chile.tarjeta');
+  });
+
+  it('"Falabella" mencionado sólo en una descripción de movimiento NO descalifica a Banco de Chile', () => {
+    const rowsWithFalabellaMerchant = [
+      ...dataSheetRows.slice(0, -1),
+      ['VIAJES', '05/02/2026', 'COMPRA EN FALABELLA RETAIL', '', '38.500'],
+    ];
+    const file = fromXlsxSheets('banco-chile-comercio-falabella.xlsx', [
+      { name: 'Portada', rows: [['BANCO DE CHILE'], ['Estado de Cuenta']] },
+      { name: 'Movimientos', rows: rowsWithFalabellaMerchant },
+    ]);
+
+    expect(topParser(file)?.parser).toBe('banco-chile.tarjeta');
   });
 });

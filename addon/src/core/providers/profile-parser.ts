@@ -72,10 +72,16 @@ function detectWithProfile(
   const sheet = pickDataSheet(input.sheets);
   const header = detectHeader(sheet);
 
-  // Markers are searched in the preamble and header only. Scanning the movement
-  // rows too would let a single `PAGO TARJETA DE CREDITO` line convince the
-  // card parser that a current-account cartola is a card statement.
-  const preamble = preambleText(sheet, header.headerRow);
+  // Markers are searched in the preamble and header of EVERY sheet, never in
+  // movement rows. Scanning movement text too would let a single `PAGO
+  // TARJETA DE CREDITO` line convince the card parser that a current-account
+  // cartola is a card statement; scanning only the sheet `pickDataSheet`
+  // happens to choose let a workbook's branding vanish when it lives on a
+  // separate cover sheet — CMR/Falabella's own branding on a "Portada" sheet,
+  // movements on another sheet whose column shape happens to match Banco de
+  // Chile's card layout, used to leave `disqualifyingMarkers` and Falabella's
+  // own `strongMarkers` blind to it. See `workbookPreambleText`.
+  const preamble = workbookPreambleText(input.sheets);
   const reasons: string[] = [];
   let score = 0;
 
@@ -785,6 +791,24 @@ function preambleText(sheet: Sheet, headerRow: number): string {
       .map((row) => row.join(' '))
       .join('\n'),
   );
+}
+
+/**
+ * `preambleText`, joined across every sheet in the workbook.
+ *
+ * A bank workbook can put its own branding on a separate cover sheet
+ * ("Portada") from the one carrying movements — `pickDataSheet` chooses the
+ * data sheet by width/column shape, never the cover, so a check that only
+ * ever read the picked sheet's own preamble was structurally blind to
+ * branding printed anywhere else. Issuer markers (`strongMarkers`,
+ * `weakMarkers`, `disqualifyingMarkers`) need to see the whole workbook's
+ * branding; they must still never see a movement row, which is exactly what
+ * `preambleText` already guarantees per sheet — each sheet contributes only
+ * its own preamble/header region, resolved with its own `detectHeader`, and
+ * nothing below it.
+ */
+function workbookPreambleText(sheets: readonly Sheet[]): string {
+  return sheets.map((sheet) => preambleText(sheet, detectHeader(sheet).headerRow)).join('\n');
 }
 
 const ACCOUNT_PATTERNS = [
