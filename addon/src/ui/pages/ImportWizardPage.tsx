@@ -846,15 +846,21 @@ function PreviewRowView({
   onToggle: (rowKey: string, willImport: boolean) => void;
 }) {
   const { transaction } = row;
+  const legacyConflict = row.duplicate.reason_code === 'legacy-source-conflict';
   return (
     <tr className={`border-b ${row.willImport ? '' : 'opacity-50'}`}>
       <td className="p-2">
         <Checkbox
           checked={row.willImport}
+          disabled={legacyConflict}
           // Without a name this is one of 400 unlabelled checkboxes to anyone
           // not reading the row visually. The date, the amount and the glosa
           // are what identify the row on screen, so they are what it says.
-          aria-label={`Importar el movimiento del ${formatIsoDate(transaction.date)} por ${toDecimalString(transaction.amount)} ${transaction.amount.currency}: ${transaction.description}`}
+          aria-label={
+            legacyConflict
+              ? `No importable: conflicto con una fuente antigua del movimiento del ${formatIsoDate(transaction.date)} por ${toDecimalString(transaction.amount)} ${transaction.amount.currency}: ${transaction.description}`
+              : `Importar el movimiento del ${formatIsoDate(transaction.date)} por ${toDecimalString(transaction.amount)} ${transaction.amount.currency}: ${transaction.description}`
+          }
           onCheckedChange={(checked) => onToggle(row.key, checked === true)}
         />
       </td>

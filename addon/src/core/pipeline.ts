@@ -280,13 +280,27 @@ function needsAttention(transaction: EnrichedTransaction): boolean {
   return movesExistingMoney && transaction.kindConfidence !== Confidence.confirmed;
 }
 
-/** Toggle one row and return a new preview with totals refreshed. */
+/**
+ * Toggle one row and return a new preview with totals refreshed.
+ *
+ * A `legacy-source-conflict` row never accepts `willImport: true`. Its
+ * `probable` verdict exists because an old parser/version may have written a
+ * different amount for this same source file than the current parser now
+ * computes — re-selecting it by hand is exactly the silent-second-Activity
+ * risk the guard in `core/dedupe/classify.ts` exists to stop, not an
+ * ordinary "I know better than the heuristic" override. Every other
+ * `probable` reason keeps the existing override behaviour.
+ */
 export function setRowSelection(
   prepared: PreparedImport,
   key: string,
   willImport: boolean,
 ): PreparedImport {
-  const rows = prepared.rows.map((row) => (row.key === key ? { ...row, willImport } : row));
+  const rows = prepared.rows.map((row) => {
+    if (row.key !== key) return row;
+    if (willImport && row.duplicate.reason_code === 'legacy-source-conflict') return row;
+    return { ...row, willImport };
+  });
   return {
     ...prepared,
     rows,

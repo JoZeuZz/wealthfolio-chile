@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { buildDuplicateIndex, classifyDuplicate, type ExistingMovement } from '../src/core/dedupe/classify';
 import { money } from '../src/core/money';
-import { makeTransaction } from './fixtures';
+import { defaultRules } from '../src/core/rules/builtin';
+import { prepareImport, setRowSelection, type PreparedImport } from '../src/core/pipeline';
+import { runImport } from '../src/services/import-runner';
+import { fromText, makeTransaction } from './fixtures';
+import { fakeHost } from './host';
 
 /**
  * P1 (review independiente) — dedupe histórico Banco de Chile tarjeta.
@@ -148,5 +152,98 @@ describe('sin regresión — casos que deben seguir igual', () => {
     );
 
     expect(finding.reason_code).not.toBe('legacy-source-conflict');
+  });
+});
+
+/**
+ * Fail-closed end to end: `classifyDuplicate` reporting `probable` /
+ * `legacy-source-conflict` is only half the guarantee. The other half is that
+ * nothing downstream — a manual re-selection in the preview, or the write
+ * step itself — can turn that row into a second Activity.
+ *
+ * Trace: `classifyDuplicate` -> `PreviewRow.willImport` (default selection) ->
+ * `setRowSelection` (manual re-selection) -> `runImport` -> `saveMany`.
+ */
+describe('legacy-source-conflict: fail-closed a lo largo de todo el pipeline', () => {
+  const ACCOUNT2 = 'acc-card-2';
+
+  function preparedWithConflictRow(): PreparedImport {
+    const prepared = prepareImport({
+      file: fromText(
+        'cartola.csv',
+        ['Fecha;Descripcion;Monto;D/C;Saldo', '05/02/2026;COMPRA SINTETICA;12.450;C;100.000'].join('\n'),
+      ),
+      accountId: ACCOUNT2,
+      accountName: 'Tarjeta',
+      rules: defaultRules(),
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+    // The real classifier is exercised elsewhere in this file; here the one
+    // row's finding is overridden to the conflict outcome so this block tests
+    // only what happens to a row already classified that way, independent of
+    // which parser or fixture produced it.
+    const rows = prepared.rows.map((row) => ({
+      ...row,
+      willImport: false,
+      duplicate: {
+        verdict: 'probable' as const,
+        reason_code: 'legacy-source-conflict' as const,
+        reason: 'Coincide con una actividad escrita por una versión de parser incompatible para este archivo.',
+        existingActivityId: 'legacy-activity-1',
+      },
+    }));
+    return { ...prepared, rows };
+  }
+
+  it('la fila nace deseleccionada (default de prepareImport)', () => {
+    const prepared = preparedWithConflictRow();
+    expect(prepared.rows[0]?.willImport).toBe(false);
+  });
+
+  it('setRowSelection se niega a marcarla para importar', () => {
+    const prepared = preparedWithConflictRow();
+    const row = prepared.rows[0];
+    if (!row) throw new Error('fixture sin filas');
+
+    const attempted = setRowSelection(prepared, row.key, true);
+
+    expect(attempted.rows[0]?.willImport).toBe(false);
+  });
+
+  it('otros probable (host-modified/similar) sí se pueden reseleccionar: el guard es sólo para legacy-source-conflict', () => {
+    const prepared = preparedWithConflictRow();
+    const row = prepared.rows[0];
+    if (!row) throw new Error('fixture sin filas');
+    const ordinaryProbable = {
+      ...prepared,
+      rows: prepared.rows.map((r) => ({
+        ...r,
+        duplicate: { verdict: 'probable' as const, reason_code: 'similar' as const, reason: 'similar' },
+      })),
+    };
+
+    const attempted = setRowSelection(ordinaryProbable, row.key, true);
+
+    expect(attempted.rows[0]?.willImport).toBe(true);
+  });
+
+  it('runImport nunca escribe la fila aunque willImport llegue en true sin pasar por setRowSelection', async () => {
+    const prepared = preparedWithConflictRow();
+    const forced: PreparedImport = {
+      ...prepared,
+      rows: prepared.rows.map((row) => ({ ...row, willImport: true })),
+    };
+    const host = fakeHost();
+
+    const result = await runImport({
+      ctx: host.ctx,
+      prepared: forced,
+      accountId: ACCOUNT2,
+      accountName: 'Tarjeta',
+    });
+
+    expect(host.saveManyCalls).toEqual([]);
+    expect(host.activities).toEqual([]);
+    expect(result.breakdown.created).toBe(0);
   });
 });

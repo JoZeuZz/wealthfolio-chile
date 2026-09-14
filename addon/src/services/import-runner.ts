@@ -142,7 +142,12 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
   });
 
   const runId = newRunId();
-  const selected = prepared.rows.filter((row) => row.willImport);
+  // `willImport` alone is not trusted here: `legacy-source-conflict` must
+  // never reach `saveMany`, even if some future caller flips it without going
+  // through `setRowSelection`'s guard. This is the last gate before writing.
+  const selected = prepared.rows.filter(
+    (row) => row.willImport && row.duplicate.reason_code !== 'legacy-source-conflict',
+  );
 
   const activities = withIdempotencyKeys(
     selected.map((row) =>
