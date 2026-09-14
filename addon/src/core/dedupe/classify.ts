@@ -238,6 +238,31 @@ export function classifyDuplicate(
     };
   }
 
+  // Checked before the ordinary weak/similar match, not after: a row that
+  // ALSO happens to look similar to something already stored must not let
+  // that similarity match return first and skip the legacy guard entirely.
+  // `similar` and `legacy-source-conflict` both end up `probable`, but only
+  // `legacy-source-conflict` is fail-closed against reselection
+  // (`setRowSelection`, `runImport`) — so if `similar` won the race merely by
+  // being computed first, a row with real legacy provenance conflict came out
+  // as an ordinary reselectable probable and the guard never fired. See
+  // `isLegacyIncompatibleCardSource`.
+  if (candidate.sourceFileHash) {
+    const sameFile = index.byFileHash.get(candidate.sourceFileHash) ?? [];
+    const legacyConflict = sameFile.find((movement) =>
+      isLegacyIncompatibleCardSource(candidate.sourceParser, movement),
+    );
+    if (legacyConflict) {
+      return {
+        verdict: 'probable',
+        reason_code: 'legacy-source-conflict',
+        existingActivityId: legacyConflict.activityId,
+        reason:
+          'Este archivo ya se importó antes con una versión anterior que interpretaba el monto distinto. Podría ser el mismo movimiento con un monto corregido: revísalo a mano antes de importarlo, para no duplicar el gasto.',
+      };
+    }
+  }
+
   const weak = computeWeakFingerprint(candidate, scope);
   const sameDayAmount = [
     ...(index.byWeakFingerprint.get(weak) ?? []),
@@ -261,29 +286,6 @@ export function classifyDuplicate(
       score: best.score,
       reason: `Coincide en fecha y monto con un movimiento existente (descripción ${Math.round(best.score * 100)}% similar).`,
     };
-  }
-
-  // Neither fingerprint found it — but a row from THIS SAME source file can
-  // already be in the ledger under a parser/version this project knows
-  // rewrote the amount. Content-based matching cannot see that: the old and
-  // new amounts differ, so both the strong and weak fingerprint differ too.
-  // Fails closed to `probable` (never auto-imported, never silently skipped)
-  // rather than risk writing a second copy of a movement whose only fault is
-  // that its amount got corrected. See `isLegacyIncompatibleCardSource`.
-  if (candidate.sourceFileHash) {
-    const sameFile = index.byFileHash.get(candidate.sourceFileHash) ?? [];
-    const legacyConflict = sameFile.find((movement) =>
-      isLegacyIncompatibleCardSource(candidate.sourceParser, movement),
-    );
-    if (legacyConflict) {
-      return {
-        verdict: 'probable',
-        reason_code: 'legacy-source-conflict',
-        existingActivityId: legacyConflict.activityId,
-        reason:
-          'Este archivo ya se importó antes con una versión anterior que interpretaba el monto distinto. Podría ser el mismo movimiento con un monto corregido: revísalo a mano antes de importarlo, para no duplicar el gasto.',
-      };
-    }
   }
 
   return { verdict: 'none', reason_code: 'new', reason: 'Movimiento nuevo.' };

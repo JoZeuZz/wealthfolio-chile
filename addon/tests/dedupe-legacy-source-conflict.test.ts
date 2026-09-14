@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildDuplicateIndex, classifyDuplicate, type ExistingMovement } from '../src/core/dedupe/classify';
+import { computeWeakFingerprint } from '../src/core/dedupe/fingerprint';
 import { money } from '../src/core/money';
 import { defaultRules } from '../src/core/rules/builtin';
 import { prepareImport, setRowSelection, type PreparedImport } from '../src/core/pipeline';
@@ -152,6 +153,103 @@ describe('sin regresión — casos que deben seguir igual', () => {
     );
 
     expect(finding.reason_code).not.toBe('legacy-source-conflict');
+  });
+});
+
+/**
+ * P1 (re-review OpenCode) — precedencia: `legacy-source-conflict` debe
+ * evaluarse ANTES que el match `similar` ordinario.
+ *
+ * `classifyDuplicate` calculaba primero el mejor match `similar` (mismo
+ * día/monto, descripción parecida) y retornaba `probable`/`similar` de
+ * inmediato si superaba el umbral — el guard de `legacy-source-conflict`
+ * corría DESPUÉS, así que una fila que además calzaba por similitud nunca
+ * llegaba a evaluarse contra el guard legacy y salía como un `probable`
+ * ordinario, reseleccionable por diseño (`setRowSelection` sólo bloquea
+ * `legacy-source-conflict`, no `similar`). Eso bypasseaba el blocker legacy
+ * por completo para cualquier fila que también tuviera un match similar.
+ */
+describe('precedencia: legacy-source-conflict antes que similarity', () => {
+  it('fileHash legacy incompatible + match similar existente -> reason_code sigue siendo legacy-source-conflict, no similar', () => {
+    const candidate = currentCandidate({ fingerprint: 'current-fp-precedencia-a' });
+    const weak = computeWeakFingerprint(candidate, SCOPE);
+    const similarAndLegacy = legacyMovement({
+      fingerprint: 'legacy-fp-precedencia-a',
+      weakFingerprint: weak,
+      amount: candidate.amount,
+      description: candidate.description,
+    });
+    const index = buildDuplicateIndex([similarAndLegacy]);
+
+    const finding = classifyDuplicate(candidate, index, SCOPE, new Map());
+
+    expect(finding.verdict).toBe('probable');
+    expect(finding.reason_code).toBe('legacy-source-conflict');
+  });
+
+  it('mismo caso con legacy generico.tarjeta -> también gana sobre similarity', () => {
+    const candidate = currentCandidate({ fingerprint: 'current-fp-precedencia-b' });
+    const weak = computeWeakFingerprint(candidate, SCOPE);
+    const similarAndLegacy = legacyMovement({
+      parser: 'generico.tarjeta',
+      parserVersion: '0.1.0',
+      fingerprint: 'legacy-fp-precedencia-b',
+      weakFingerprint: weak,
+      amount: candidate.amount,
+      description: candidate.description,
+    });
+    const index = buildDuplicateIndex([similarAndLegacy]);
+
+    const finding = classifyDuplicate(candidate, index, SCOPE, new Map());
+
+    expect(finding.reason_code).toBe('legacy-source-conflict');
+  });
+
+  it('un duplicado exacto MODERNO sigue ganando sobre el guard legacy (exact > legacy)', () => {
+    // El mismo movimiento ya existe bajo la versión actual (fingerprint
+    // exacto) Y el archivo también tiene provenance legacy incompatible en
+    // otra fila — el exact match moderno debe seguir precediendo al guard.
+    const candidate = currentCandidate({ fingerprint: 'exact-fp-precedencia-c' });
+    const exactModern = legacyMovement({
+      parser: 'banco-chile.tarjeta',
+      parserVersion: '0.2.0',
+      fingerprint: 'exact-fp-precedencia-c',
+      weakFingerprint: 'wfp-exacto-c',
+      amount: candidate.amount,
+    });
+    const legacyOtherRow = legacyMovement({
+      activityId: 'legacy-activity-otra-fila',
+      parser: 'banco-chile.tarjeta',
+      parserVersion: '0.1.0',
+      fingerprint: 'legacy-fp-otra-fila-c',
+      weakFingerprint: 'legacy-wfp-otra-fila-c',
+    });
+    const index = buildDuplicateIndex([exactModern, legacyOtherRow]);
+
+    const finding = classifyDuplicate(candidate, index, SCOPE, new Map());
+
+    expect(finding.verdict).toBe('exact');
+    expect(finding.reason_code).toBe('exact-fingerprint');
+  });
+
+  it('similar ordinario SIN provenance legacy sigue reseleccionable (no se convierte en legacy-source-conflict)', () => {
+    const candidate = currentCandidate({ fingerprint: 'current-fp-precedencia-d', sourceFileHash: 'hash-sin-legacy-d' });
+    const weak = computeWeakFingerprint(candidate, SCOPE);
+    const ordinarySimilar = legacyMovement({
+      fingerprint: 'legacy-fp-precedencia-d',
+      weakFingerprint: weak,
+      amount: candidate.amount,
+      description: candidate.description,
+      fileHash: 'hash-sin-legacy-d',
+      parser: 'banco-chile.tarjeta',
+      parserVersion: '0.2.0',
+    });
+    const index = buildDuplicateIndex([ordinarySimilar]);
+
+    const finding = classifyDuplicate(candidate, index, SCOPE, new Map());
+
+    expect(finding.reason_code).toBe('similar');
+    expect(finding.verdict).toBe('probable');
   });
 });
 
