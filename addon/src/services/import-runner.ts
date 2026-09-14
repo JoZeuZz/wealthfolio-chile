@@ -145,9 +145,7 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
   // `willImport` alone is not trusted here: `legacy-source-conflict` must
   // never reach `saveMany`, even if some future caller flips it without going
   // through `setRowSelection`'s guard. This is the last gate before writing.
-  const selected = prepared.rows.filter(
-    (row) => row.willImport && row.duplicate.reason_code !== 'legacy-source-conflict',
-  );
+  const selected = prepared.rows.filter(crossesWriteGate);
 
   const activities = withIdempotencyKeys(
     selected.map((row) =>
@@ -289,6 +287,20 @@ export async function runImport(input: RunImportInput): Promise<RunImportResult>
 }
 
 /**
+ * The one write gate `runImport` actually honours: an approved row whose
+ * duplicate verdict is not a known-incompatible legacy source.
+ *
+ * `buildBreakdown` shares this instead of reading `row.willImport` on its
+ * own so the two can never disagree about which rows were actually attempted
+ * — a caller that forces `willImport = true` on a `legacy-source-conflict`
+ * row without going through `setRowSelection`'s guard still gets a row that
+ * was never sent to `saveMany`, and the breakdown must say so.
+ */
+function crossesWriteGate(row: PreviewRow): boolean {
+  return row.willImport && row.duplicate.reason_code !== 'legacy-source-conflict';
+}
+
+/**
  * Attribute every detected row to exactly one outcome.
  *
  * Skip reasons are checked in order of how little the user chose them: an exact
@@ -302,7 +314,7 @@ export function buildBreakdown(rows: readonly PreviewRow[], created: number): Im
   let skippedByUser = 0;
 
   for (const row of rows) {
-    if (row.willImport) {
+    if (crossesWriteGate(row)) {
       selected += 1;
       continue;
     }

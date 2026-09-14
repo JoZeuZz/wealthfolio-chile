@@ -343,5 +343,12 @@ describe('legacy-source-conflict: fail-closed a lo largo de todo el pipeline', (
     expect(host.saveManyCalls).toEqual([]);
     expect(host.activities).toEqual([]);
     expect(result.breakdown.created).toBe(0);
+    // P2 (re-review OpenCode): `breakdown` debe reflejar el conjunto que
+    // REALMENTE cruzó el write gate, no `willImport` forzado. La fila nunca
+    // se intentó guardar — reportarla como `failed` diría que Wealthfolio la
+    // rechazó, cuando nunca llegó a `saveMany`.
+    expect(result.breakdown.selected).toBe(0);
+    expect(result.breakdown.failed).toBe(0);
+    expect(result.breakdown.skippedProbableDuplicate).toBe(1);
   });
 });

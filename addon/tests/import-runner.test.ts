@@ -289,11 +289,12 @@ describe('buildBreakdown', () => {
     willImport: boolean;
     verdict?: 'exact' | 'probable' | 'none';
     ignoredByRule?: boolean;
+    reasonCode?: string;
   }) =>
     ({
       transaction: {},
       weakFingerprint: 'w',
-      duplicate: { verdict: overrides.verdict ?? 'none', reason: '' },
+      duplicate: { verdict: overrides.verdict ?? 'none', reason: '', reason_code: overrides.reasonCode },
       ignoredByRule: overrides.ignoredByRule ?? false,
       willImport: overrides.willImport,
     }) as never;
@@ -351,6 +352,22 @@ describe('buildBreakdown', () => {
 
     const breakdown = buildBreakdown(toggled.rows, 0);
     expect(breakdown.skippedByUser).toBeGreaterThanOrEqual(1);
+  });
+
+  it('un legacy-source-conflict con willImport forzado a true nunca se cuenta como selected/failed — nunca cruzó el write gate', () => {
+    // P2 (re-review OpenCode): `runImport` ya filtra `legacy-source-conflict`
+    // del set que llega a `saveMany` aunque `willImport` venga forzado en
+    // `true` sin pasar por `setRowSelection`. `buildBreakdown` debe usar la
+    // misma regla, o reporta `failed: 1` como si Wealthfolio hubiera
+    // rechazado una fila que nunca se intentó guardar.
+    const breakdown = buildBreakdown(
+      [row({ willImport: true, verdict: 'probable', reasonCode: 'legacy-source-conflict' })],
+      0,
+    );
+
+    expect(breakdown.selected).toBe(0);
+    expect(breakdown.failed).toBe(0);
+    expect(breakdown.skippedProbableDuplicate).toBe(1);
   });
 });
 
