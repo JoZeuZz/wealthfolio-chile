@@ -26,12 +26,12 @@ importaciones guarda la versión del parser usada.
 Cuatro preguntas distintas, y la tabla las separa porque responderlas juntas es
 como se infla el estado de un banco:
 
-| Perfil | Parser | Fixture sintético | Test que lo parsea | Validado en host 3.7.0 | Cartola real |
+| Perfil | Parser | Fixture sintético | Test que lo parsea | Validado en host real | Cartola real |
 | --- | --- | --- | --- | --- | --- |
 | `generico.cuenta` | ✅ | n/a | ✅ | ✅ indirecto | n/a |
 | `generico.tarjeta` | ✅ | n/a | ✅ | ⬜ | n/a |
 | `banco-chile.cuenta-corriente` | ✅ | ✅ | ✅ | ✅ | ⬜ |
-| `banco-chile.tarjeta` | ✅ | ✅ | ✅ | ✅ (host 3.8.0) | ⬜ |
+| `banco-chile.tarjeta` | ✅ | ✅ | ✅ | ✅ (3.8.0) | ⬜ |
 | `banco-estado.cuenta` | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | `banco-falabella.cmr` | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | `banco-falabella.cuenta` | ✅ | ✅ | ✅ | ⬜ | ⬜ |
@@ -39,7 +39,10 @@ como se infla el estado de un banco:
 «Validado en host» significa que una cartola **sintética** de ese perfil se
 importó contra un Wealthfolio real y las actividades resultantes se verificaron
 una por una. No dice nada sobre si el mapeo coincide con lo que el banco emite:
-para eso está la última columna, y hoy está vacía entera.
+para eso está la última columna, y hoy está vacía entera. La versión exacta del
+host varió por sesión — de `3.6.2` (validación inicial) a `3.8.0` (sesiones 6 en
+adelante, incluida `banco-chile.tarjeta`); ver `docs/HOST_VALIDATION.md` para la
+versión de cada sesión concreta.
 
 ### Lo que sigue sin evidencia en CMR
 
@@ -65,7 +68,7 @@ Falta también confirmar cómo CMR marca los avances en efectivo.
 | Producto | Formato | Estado | Parser |
 | --- | --- | --- | --- |
 | Cuenta corriente | XLS (BIFF) | ⚠️ pendiente (calibrado parcial 2026-09) | `banco-chile.cuenta-corriente` |
-| Tarjeta de crédito | CSV / XLSX | ⚠️ pendiente (calibrado 2026-09, host validado con fixture sintético) | `banco-chile.tarjeta` |
+| Tarjeta de crédito | XLS (BIFF), real — CSV/XLSX, sólo fixture sintético | ⚠️ pendiente (calibrado 2026-09 con 4 cartolas reales XLS/BIFF; CSV y XLSX nunca vistos reales para este producto, sólo probados con fixtures sintéticos; host validado con fixture XLSX 100% sintético) | `banco-chile.tarjeta` |
 | Cualquiera | PDF | 🚫 | — |
 
 Mapeo confirmado para cuenta corriente (8 cartolas XLS reales):
@@ -178,6 +181,17 @@ validation con fixture sintético):**
   confirmado de punta a punta. No cierra la calibración: sigue faltando
   evidencia real de cuotas, pagos, devoluciones, interés, comisiones y
   avances.
+- **Recalibración 2026-09-14** (re-review independiente: escaneo de layout no
+  soportado por hoja completa, evidencia estructural `unknown`/string-cell
+  corregida, precedencia de dedupe legacy, branding multi-hoja): las 4
+  `Mov_Facturado` reales se releyeron con `pnpm calibrate` sin cambios de
+  resultado — las 2 muestras Nacional siguen resolviendo `Monto ($)` como
+  `number/grouped-integer` sin conflicto ni ambigüedad, y las 2 Internacional
+  siguen bloqueadas por `foreign-currency-unsupported`. Las 8 cartolas reales
+  de cuenta corriente y la muestra real de BancoEstado CuentaRUT también se
+  releyeron sin cambios (saldo reconcilia, cero descuadres). Confirma que
+  ninguno de los fixes de esta tranche movió el comportamiento sobre datos
+  reales ya calibrados.
 
 ---
 
