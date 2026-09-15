@@ -1,5 +1,5 @@
 import { DateParseError, parseStatementDate, type DateYearHint, type IsoDate } from '../dates';
-import { detectInstallment } from '../installments/detect';
+import { detectInstallment, detectRemainingInstallments } from '../installments/detect';
 import {
   abs,
   isZero,
@@ -263,7 +263,8 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
   );
   const direction = sign(amount) < 0 ? Direction.out : Direction.in;
 
-  const installment = detectInstallment(description, cell(row, map, ColumnRole.installment), {
+  const installmentColumnText = cell(row, map, ColumnRole.installment);
+  const installment = detectInstallment(description, installmentColumnText, {
     product: profile.product,
   });
   if (installment?.confidence === Confidence.suggested) {
@@ -273,11 +274,19 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     });
   }
 
+  // A dedicated column that prints only a running remaining-cuotas count —
+  // never a `current/total` pair — is invisible to `detectInstallment`
+  // above, which only reads that shape. Confirmed against real CMR Banco
+  // Falabella statements (2026-09): see `detectRemainingInstallments`.
+  const installmentRemaining =
+    installment === undefined ? detectRemainingInstallments(installmentColumnText) : undefined;
+
   // The row says it is part of a plan, and the amount came from a column the
   // statement did not label. `MONTO` next to `2 de 6` is either this month's
   // instalment or the whole purchase repeated, and the two readings differ by a
-  // factor of the plan length. Nobody has seen a real CMR export, so the
-  // uncertainty travels with the row instead of being resolved by assumption.
+  // factor of the plan length. Confirmed against real CMR statements
+  // (2026-09) that this ambiguity is real when it occurs — the uncertainty
+  // still travels with the row instead of being resolved by assumption.
   if (installment !== undefined && map.installmentAmount === undefined) {
     warnings.push({
       code: 'ambiguous-installment-amount',
@@ -336,6 +345,7 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
     kindConfidence: confidence,
     tags: [],
     ...(installment !== undefined ? { installment } : {}),
+    ...(installmentRemaining !== undefined ? { installmentRemaining } : {}),
 
     warnings,
     rawMetadata: buildRawMetadata(row, map),

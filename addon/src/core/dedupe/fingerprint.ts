@@ -59,6 +59,17 @@ export function computeFingerprint(
     // exports (extra spaces, changing card tails) while keeping the merchant.
     descriptionKey(transaction.description),
     transaction.reference ?? '',
+    // Real CMR Banco Falabella statements (2026-09): a billed cuota's own
+    // `date` does not advance between statement cycles, so without this an
+    // open plan's second charge hashes identically to its first — same date,
+    // same amount, same glosa — and reimporting the next cycle would silently
+    // drop it as an exact duplicate. Appended only when the field is present,
+    // so every fingerprint computed before this field existed is unchanged:
+    // no version bump, no legacy dual-hash, because nothing that shipped ever
+    // produced this field before now.
+    ...(transaction.installmentRemaining !== undefined
+      ? [String(transaction.installmentRemaining)]
+      : []),
   ]);
 }
 

@@ -126,6 +126,34 @@ function looksLikeDate(a: string, b: string): boolean {
   return day >= 1 && day <= 31 && month >= 1 && month <= 12;
 }
 
+/** Longest remaining-cuotas count trusted from a bare-integer column. */
+const MAX_REMAINING = 60;
+
+/** A bare non-negative integer, and nothing else in the cell. */
+const BARE_INTEGER = /^\d{1,2}$/;
+
+/**
+ * Read a remaining-cuotas count from a dedicated column that prints only a
+ * running count — `banco-falabella.cmr`'s real "CUOTAS PENDIENTES" export,
+ * confirmed against 4 real statements (2026-09), rather than the `current/m
+ * total` pair `detectInstallment` reads elsewhere.
+ *
+ * Column only, never free text: a bare number inside a description proves
+ * nothing on its own — it is what {@link BARE} in `detectInstallment` already
+ * treats as a `suggested` plan, a different and weaker claim than a bank
+ * labelling its own dedicated column this way. `0` is a real, meaningful
+ * reading (no plan open on this charge) and is returned, not treated as
+ * "nothing here" — callers that only care about active plans compare against
+ * it explicitly.
+ */
+export function detectRemainingInstallments(column: string): number | undefined {
+  const text = column.trim();
+  if (!BARE_INTEGER.test(text)) return undefined;
+  const value = Number(text);
+  if (value > MAX_REMAINING) return undefined;
+  return value;
+}
+
 /**
  * Does the description mention installments at all?
  *

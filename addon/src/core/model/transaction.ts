@@ -89,6 +89,21 @@ export interface NormalizedTransaction {
   installment?: InstallmentInfo;
 
   /**
+   * Cuotas still owed after this charge, read from a dedicated column that
+   * prints only a running count — never a `current/total` pair.
+   *
+   * Distinct from `installment` on purpose: a bare remaining count carries no
+   * total and none may be guessed from it (`MONTO / VALOR CUOTA` can be off
+   * by rounding or interest), so it never feeds `buildInstallmentPlans` and
+   * never turns into `InstallmentInfo`. It exists so the count itself is not
+   * silently dropped, and so two billed cuotas of the same plan — same date,
+   * same amount, same glosa, because the statement's own date column does not
+   * advance between cycles — still fingerprint apart. See
+   * `core/installments/detect.ts#detectRemainingInstallments`.
+   */
+  installmentRemaining?: number;
+
+  /**
    * Which financial cost this movement is, when the glosa names one.
    *
    * A refinement of `kind`, never a replacement: `fee`, `interest` and `tax`

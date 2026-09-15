@@ -9,14 +9,27 @@ import { fromText } from './fixtures';
 /**
  * CMR y las cuotas.
  *
- * La pregunta que decide todo el cálculo de deuda comprometida es qué contiene
- * la columna de monto de un estado de cuenta en cuotas: lo que se cobra este
- * mes, o el total de la compra repetido en cada cargo. Nadie de este proyecto
- * ha visto un estado de cuenta CMR real, así que la respuesta honesta es «no se
- * sabe» — y eso tiene que estar en los datos, no en un comentario.
+ * Calibrado contra 4 estados de cuenta reales de CMR Banco Falabella
+ * (2026-09, `pnpm calibrate -- <archivo> --parser banco-falabella.cmr`):
+ * `MONTO` y `VALOR CUOTA` coinciden en toda fila que no es una cuota activa
+ * (128 de 130 filas reales); difieren sólo en las cuotas activas observadas
+ * (2 de 130), donde `MONTO` es la compra completa y `VALOR CUOTA` el cargo
+ * del mes — confirmando, no asumiendo, la lectura que ya usaba la columna
+ * etiquetada. `readAmount` ya prioriza `VALOR CUOTA` cuando existe, así que
+ * el monto de cada fila ya es el cargo del ciclo, nunca el total.
  *
- * Equivocarse no cuesta un poco: si el monto es el total y lo tratamos como
- * cuota, `originalAmount = cuota × n` sale mal por un factor de n.
+ * La columna de cuotas real («CUOTAS PENDIENTES») no es un par `n de m`:
+ * es un entero simple — cuotas restantes tras este cargo — presente en el
+ * 100 % de las filas reales (0 cuando no hay plan abierto). Ningún total se
+ * infiere de ella ni de `MONTO / VALOR CUOTA`: ver
+ * `detectRemainingInstallments` (`core/installments/detect.ts`) y el describe
+ * «cuotas como conteo restante» más abajo.
+ *
+ * Evidencia real también mostró que la fecha de una cuota activa NO avanza
+ * entre ciclos — la cuota 2 de una compra trae la misma `FECHA` que la
+ * cuota 1 — así que sin más ajuste el fingerprint (fecha+monto+glosa) de dos
+ * cuotas consecutivas de la misma compra colisiona. Ver «el fingerprint
+ * distingue cuotas consecutivas» más abajo.
  */
 
 function prepareCmr(rows: string[], header = 'Fecha;Descripcion;Monto;Cuotas') {
@@ -138,5 +151,69 @@ describe('planes de cuotas con monto incierto', () => {
 
     const plans = buildInstallmentPlans(prepared.rows.map((row) => row.transaction));
     expect(plans[0]?.remainingInstallments).toBe(4);
+  });
+});
+
+describe('cuotas como conteo restante (forma real de CUOTAS PENDIENTES)', () => {
+  it('lee un entero simple sin inventar total', () => {
+    const prepared = prepareCmr(['04/02/2026;FALABELLA RETAIL PLAZA VESPUCIO;49.990;3']);
+    const row = prepared.rows[0]?.transaction;
+    expect(row?.installment).toBeUndefined();
+    expect(row?.installmentRemaining).toBe(3);
+  });
+
+  it('cero es un dato — no hay plan abierto, no "sin evidencia"', () => {
+    const prepared = prepareCmr(['04/02/2026;FALABELLA RETAIL PLAZA VESPUCIO;49.990;0']);
+    expect(prepared.rows[0]?.transaction.installmentRemaining).toBe(0);
+  });
+
+  it('una fila sin nada en la columna no reporta conteo', () => {
+    const prepared = prepareCmr(['04/02/2026;FALABELLA RETAIL PLAZA VESPUCIO;49.990;']);
+    expect(prepared.rows[0]?.transaction.installmentRemaining).toBeUndefined();
+  });
+
+  it('no arma un plan a partir de un conteo restante — no hay total que agrupar', () => {
+    // buildInstallmentPlans agrupa por `installment.total`; un conteo restante
+    // nunca alimenta `installment`, así que estas filas no producen un plan.
+    // Silencioso a propósito: es preferible no mostrar un plan a inventar uno.
+    const prepared = prepareCmr([
+      '04/01/2026;FALABELLA RETAIL PLAZA VESPUCIO;49.990;3',
+      '04/02/2026;FALABELLA RETAIL PLAZA VESPUCIO;49.990;2',
+    ]);
+
+    const plans = buildInstallmentPlans(prepared.rows.map((row) => row.transaction));
+    expect(plans).toHaveLength(0);
+  });
+});
+
+describe('el fingerprint distingue cuotas consecutivas', () => {
+  it('misma fecha, mismo monto, misma glosa, distinto conteo restante: distinto fingerprint', () => {
+    // Evidencia real (2026-09, comparación cruzada entre 2 estados de cuenta
+    // consecutivos vía `pnpm calibrate -- A B --compare`): la FECHA de una
+    // cuota activa no avanza entre ciclos. Sin el conteo restante en el
+    // fingerprint, la cuota 2 se leería como duplicado exacto de la cuota 1
+    // y se perdería silenciosamente al reimportar el ciclo siguiente.
+    const prepared = prepareCmr([
+      '04/01/2026;FALABELLA RETAIL PLAZA VESPUCIO;49.990;3',
+      '04/01/2026;FALABELLA RETAIL PLAZA VESPUCIO;49.990;2',
+    ]);
+
+    const [first, second] = prepared.rows.map((row) => row.transaction.fingerprint);
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(first).not.toBe(second);
+  });
+
+  it('dos cuotas con el mismo conteo restante siguen siendo el mismo hecho, no dos', () => {
+    // Dos filas idénticas en todo, incluido el conteo restante, son
+    // exactamente el caso que el dedupe existente ya cubre — reimportar el
+    // mismo archivo no debe duplicar.
+    const prepared = prepareCmr([
+      '04/01/2026;FALABELLA RETAIL PLAZA VESPUCIO;49.990;3',
+      '04/01/2026;FALABELLA RETAIL PLAZA VESPUCIO;49.990;3',
+    ]);
+
+    const [first, second] = prepared.rows.map((row) => row.transaction.fingerprint);
+    expect(first).toBe(second);
   });
 });

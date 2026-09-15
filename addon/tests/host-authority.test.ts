@@ -394,4 +394,53 @@ describe('una edición invalida refinamientos cacheados aunque conserve el tipo'
     expect(edited?.installment).toBeUndefined();
     expect(edited?.tags).toEqual([]);
   });
+
+  it('el conteo restante de cuotas sobrevive un reimport sin edición', () => {
+    // Sin esto, releer la actividad ya escrita perdía `installmentRemaining`
+    // y el fingerprint recalculado en el reimport ya no coincidía con el que
+    // se escribió — cada ciclo habría vuelto a importar la misma cuota.
+    const original = makeTransaction({
+      amount: -49990,
+      date: '2026-09-04',
+      description: 'FALABELLA RETAIL PLAZA VESPUCIO',
+      kind: TransactionKind.credit_card_purchase,
+      installmentRemaining: 3,
+    });
+    const create = toActivityCreate(original, { accountId: ACCOUNT, runId: 'run-cuota' });
+
+    const reread = activityToTransaction(
+      ourActivity({
+        activityType: 'WITHDRAWAL',
+        amount: '49990',
+        date: '2026-09-04',
+        comment: create.comment as string,
+        metadata: readChileMetadata(create.metadata as string),
+      }),
+    );
+
+    expect(reread?.installmentRemaining).toBe(3);
+  });
+
+  it('el conteo restante de cuotas no sobrevive una edición en Wealthfolio', () => {
+    const original = makeTransaction({
+      amount: -49990,
+      date: '2026-09-04',
+      description: 'FALABELLA RETAIL PLAZA VESPUCIO',
+      kind: TransactionKind.credit_card_purchase,
+      installmentRemaining: 3,
+    });
+    const create = toActivityCreate(original, { accountId: ACCOUNT, runId: 'run-cuota-2' });
+
+    const edited = activityToTransaction(
+      ourActivity({
+        activityType: 'WITHDRAWAL',
+        amount: '49990',
+        date: '2026-09-04',
+        comment: 'FALABELLA RETAIL PLAZA VESPUCIO (editado)',
+        metadata: readChileMetadata(create.metadata as string),
+      }),
+    );
+
+    expect(edited?.installmentRemaining).toBeUndefined();
+  });
 });

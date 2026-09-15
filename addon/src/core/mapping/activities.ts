@@ -125,6 +125,13 @@ export interface ChileMetadata {
   /** Installment counter, when the row is part of a plan. */
   cuota?: { n: number; of: number };
   /**
+   * Cuotas still owed after this charge, from a dedicated column that prints
+   * only a running count — see `NormalizedTransaction.installmentRemaining`.
+   * Never present together with `cuota`: one or the other, depending on what
+   * the statement's own column shape can support.
+   */
+  cuotaRem?: number;
+  /**
    * Which financial cost the glosa named, when it named one — and named it
    * specifically enough to be sure.
    *
@@ -252,6 +259,9 @@ export function toActivityCreate(
     ...(transaction.tags.length > 0 ? { tags: transaction.tags } : {}),
     ...(transaction.installment
       ? { cuota: { n: transaction.installment.current, of: transaction.installment.total } }
+      : {}),
+    ...(transaction.installmentRemaining !== undefined
+      ? { cuotaRem: transaction.installmentRemaining }
       : {}),
     // Only a reading that named the cost. A bare `COMISION` is `other` at
     // `suggested`, and persisting it would come back indistinguishable from a
@@ -994,6 +1004,9 @@ export function activityToTransaction(
             matchedText: `${metadata.cuota.n}/${metadata.cuota.of}`,
           },
         }
+      : {}),
+    ...(cacheIsCurrent && metadata.cuotaRem !== undefined
+      ? { installmentRemaining: metadata.cuotaRem }
       : {}),
     // The evidence text is not stored: it was a slice of the glosa, and the
     // glosa is in `comment`. What has to survive is which cost it was.

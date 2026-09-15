@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { buildDuplicateIndex } from '../src/core/dedupe/classify';
-import { detectInstallment, mentionsInstallments } from '../src/core/installments/detect';
+import {
+  detectInstallment,
+  detectRemainingInstallments,
+  mentionsInstallments,
+} from '../src/core/installments/detect';
 import { buildInstallmentPlans, buildOutlook } from '../src/core/installments/plans';
 import { money, toDecimalString } from '../src/core/money';
 import { Confidence, Direction, TransactionKind } from '../src/core/model/kinds';
@@ -72,6 +76,37 @@ describe('detectInstallment', () => {
   it('notices a mention without a counter', () => {
     expect(mentionsInstallments('EN 6 CUOTAS SIN INTERES')).toBe(true);
     expect(mentionsInstallments('COMPRA LIDER')).toBe(false);
+  });
+});
+
+describe('detectRemainingInstallments', () => {
+  it('reads a bare remaining-count column', () => {
+    expect(detectRemainingInstallments('3')).toBe(3);
+  });
+
+  it('reads zero — no plan open, not "no evidence"', () => {
+    expect(detectRemainingInstallments('0')).toBe(0);
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(detectRemainingInstallments('  5  ')).toBe(5);
+  });
+
+  it('rejects an n/m pair — that belongs to detectInstallment, not this', () => {
+    expect(detectRemainingInstallments('2/6')).toBeUndefined();
+    expect(detectRemainingInstallments('2 DE 6')).toBeUndefined();
+  });
+
+  it('rejects an empty cell', () => {
+    expect(detectRemainingInstallments('')).toBeUndefined();
+  });
+
+  it('rejects text', () => {
+    expect(detectRemainingInstallments('CUOTA UNICA')).toBeUndefined();
+  });
+
+  it('rejects a count past what any real plan reaches', () => {
+    expect(detectRemainingInstallments('61')).toBeUndefined();
   });
 });
 
