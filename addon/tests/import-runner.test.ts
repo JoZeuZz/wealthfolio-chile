@@ -4,8 +4,8 @@ import { METADATA_NAMESPACE, readChileMetadata } from '../src/core/mapping/activ
 import { prepareImport, setRowSelection, type PreparedImport } from '../src/core/pipeline';
 import { defaultRules } from '../src/core/rules/builtin';
 import { ImportHistory } from '../src/services/import-history';
-import { buildBreakdown, runImport } from '../src/services/import-runner';
-import { fromText, loadFixture } from './fixtures';
+import { buildBreakdown, ImportBlockedError, runImport } from '../src/services/import-runner';
+import { fromText, fromXlsxCells, fromXlsxRows, loadFixture } from './fixtures';
 import { fakeHost } from './host';
 
 /**
@@ -488,6 +488,132 @@ describe('la clave de idempotencia del host es la nuestra', () => {
  * usuario más necesita decidir fila por fila — el archivo lista un movimiento
  * dos veces, o hubo dos cafés del mismo precio — era el único donde no podía.
  */
+/**
+ * P0 (re-review OpenCode) — la UI no es una frontera de seguridad suficiente.
+ *
+ * `willImport=true` en una fila, un checkbox marcado, o un caller que no pasó
+ * por el wizard no pueden llevar a `saveMany` cuando `prepared.validation.ok`
+ * es `false`. Antes de este fix, `runImport` sólo filtraba por
+ * `crossesWriteGate` (willImport + no legacy-source-conflict) y nunca miraba
+ * `prepared.validation.ok` — una fila que sobrevivió a una validación
+ * fallida (formato de celda no probadamente seguro, layout internacional no
+ * soportado) llegaba a `saveMany` igual.
+ */
+describe('runImport rechaza un PreparedImport con validation.ok=false', () => {
+  it('Caso A — formato de celda de spreadsheet no seguro: la fila sobrevive con willImport=true pero validation.ok=false, y runImport no debe llamar a saveMany', async () => {
+    const file = fromXlsxCells('mov-facturado-nacional-formato-inseguro.xlsx', [
+      ['Fecha', 'Descripcion', 'Monto ($)', 'Cuotas'],
+      ['05/02/2026', 'COMPRA SINTETICA', { value: 12450000, numberFormat: '#,##0,' }, ''],
+    ]);
+    const prepared = prepareImport({
+      file,
+      accountId: ACCOUNT,
+      parserId: 'banco-chile.tarjeta',
+      rules: defaultRules(),
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    // Reproducción independiente: la fila SÍ sobrevive con willImport=true
+    // pese a que la validación general falló. No se oculta el bug ajustando
+    // el fixture.
+    expect(prepared.validation.ok).toBe(false);
+    expect(prepared.rows.some((row) => row.willImport)).toBe(true);
+
+    const host = fakeHost();
+    await expect(
+      runImport({ ctx: host.ctx, prepared, accountId: ACCOUNT, accountName: 'Tarjeta' }),
+    ).rejects.toThrow(ImportBlockedError);
+
+    expect(host.saveManyCalls).toHaveLength(0);
+  });
+
+  it('Caso B — foreign-currency-unsupported: el guard es general, no un parche de number-format; incluso con una fila forzada a willImport=true, cero escrituras', async () => {
+    const file = fromXlsxRows('mov-facturado-internacional.xlsx', [
+      ['Categoría', 'Fecha', 'Descripción', 'País', 'Monto Moneda Origen', 'Monto (USD)'],
+      ['VIAJES', '05/02/2026', 'HOTEL SINTETICO MIAMI', 'ESTADOS UNIDOS', '48,00', '52,30'],
+    ]);
+    const prepared = prepareImport({
+      file,
+      accountId: ACCOUNT,
+      parserId: 'banco-chile.tarjeta',
+      rules: defaultRules(),
+      duplicateIndex: buildDuplicateIndex([]),
+    });
+
+    expect(prepared.validation.ok).toBe(false);
+    expect(
+      prepared.statement.issues.some((issue) => issue.code === 'foreign-currency-unsupported'),
+    ).toBe(true);
+
+    // El layout internacional se bloquea antes de mapear ninguna fila, así que
+    // `prepared.rows` está vacío de por sí. Se trasplanta una fila REAL y
+    // completa (de otro import válido) con `willImport=true` para demostrar
+    // que el guard mira `validation.ok` del `prepared` que recibe, no el
+    // contenido de `rows` — ni siquiera una fila perfectamente formada e
+    // importable por sí sola puede colar una escritura si el statement que la
+    // trae no validó.
+    const realRow = prepare().rows.find((row) => row.willImport);
+    expect(realRow).toBeDefined();
+    const forced: PreparedImport = {
+      ...prepared,
+      rows: [{ ...(realRow as NonNullable<typeof realRow>), key: 'forced', willImport: true }],
+    };
+
+    const host = fakeHost();
+    await expect(
+      runImport({ ctx: host.ctx, prepared: forced, accountId: ACCOUNT, accountName: 'Tarjeta' }),
+    ).rejects.toThrow(ImportBlockedError);
+
+    expect(host.saveManyCalls).toHaveLength(0);
+  });
+
+  it('Caso C — statement válido sigue importando normalmente (no se rompe un import correcto)', async () => {
+    const host = fakeHost();
+    const prepared = prepare();
+    expect(prepared.validation.ok).toBe(true);
+
+    const result = await runImport({
+      ctx: host.ctx,
+      prepared,
+      accountId: ACCOUNT,
+      accountName: 'Cuenta corriente',
+    });
+
+    expect(result.status).toBe('completed');
+    expect(host.saveManyCalls.length).toBeGreaterThan(0);
+  });
+
+  it('Caso D — validación válida pero una fila legacy-source-conflict forzada a willImport=true: crossesWriteGate sigue filtrándola, sin depender del nuevo guard', async () => {
+    const prepared = prepare();
+    expect(prepared.validation.ok).toBe(true);
+    const firstSelectable = prepared.rows.find((row) => row.willImport);
+    expect(firstSelectable).toBeDefined();
+
+    const tampered: PreparedImport = {
+      ...prepared,
+      rows: prepared.rows.map((row) =>
+        row.key === firstSelectable?.key
+          ? { ...row, willImport: true, duplicate: { ...row.duplicate, reason_code: 'legacy-source-conflict' } }
+          : row,
+      ),
+    };
+
+    const host = fakeHost();
+    const result = await runImport({
+      ctx: host.ctx,
+      prepared: tampered,
+      accountId: ACCOUNT,
+      accountName: 'Cuenta corriente',
+    });
+
+    const createdFingerprints = host.saveManyCalls
+      .flatMap((call) => call.request.creates ?? [])
+      .map((create) => (create as { idempotencyKey?: string }).idempotencyKey);
+    expect(createdFingerprints).not.toContain(firstSelectable?.transaction.fingerprint);
+    expect(result.status).not.toBe('failed');
+  });
+});
+
 describe('la selección es por fila, no por huella', () => {
   it('marcar la segunda de dos filas iguales no marca la primera', () => {
     const prepared = prepareText(

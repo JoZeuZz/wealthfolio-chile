@@ -135,8 +135,43 @@ function withIdempotencyKeys(
   });
 }
 
+/**
+ * The UI's `canImport` is not a persistence boundary.
+ *
+ * `PreparationResult.canImport` mixes UX reasons — no rows selected, the
+ * duplicate check could not run — with the one financial fact `runImport`
+ * actually has to defend: whether the statement itself validated. A caller
+ * that bypasses the wizard (a future UI path, a script, a retried call built
+ * from a stale object) can hand back a `PreparedImport` whose rows still say
+ * `willImport: true` even though `validation.ok` is `false` — a spreadsheet
+ * cell format `evaluateStructuralSpreadsheetColumnNumberFormats` could not
+ * prove safe, or a layout `detectUnsupportedLayout` recognises but refuses,
+ * both surface as an error-level issue in `validation` while leaving the row
+ * itself unmarked. Nothing upstream of this function is trusted to have kept
+ * that promise, so it is checked again here, before anything is built for
+ * `saveMany` — never based on `willImport`, on the caller, or on
+ * `canImport`.
+ */
+export class ImportBlockedError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = 'ImportBlockedError';
+  }
+}
+
 export async function runImport(input: RunImportInput): Promise<RunImportResult> {
   const { ctx, prepared, accountId, accountName } = input;
+
+  if (!prepared.validation.ok) {
+    throw new ImportBlockedError(
+      'La cartola no pasó la validación y no se puede importar.',
+      'validation-failed',
+    );
+  }
+
   const logger = createRedactingLogger(ctx.api.logger, {
     verboseEnabled: input.verboseLogging ?? false,
   });
