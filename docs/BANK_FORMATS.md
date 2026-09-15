@@ -3,7 +3,7 @@
 Estado real del soporte por banco y formato, y **exactamente qué falta** para
 dar cada uno por validado.
 
-Última revisión: 2026-09-13.
+Última revisión: 2026-09-15.
 
 ---
 
@@ -33,7 +33,7 @@ como se infla el estado de un banco:
 | `banco-chile.cuenta-corriente` | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | `banco-chile.tarjeta` | ✅ | ✅ | ✅ | ✅ (3.8.0) | ⬜ |
 | `banco-estado.cuenta` | ✅ | ✅ | ✅ | ✅ | ⬜ |
-| `banco-falabella.cmr` | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| `banco-falabella.cmr` | ✅ | ✅ | ✅ | ⬜ (pendiente esta tranche) | ✅ parcial (XLSX, 2026-09) |
 | `banco-falabella.cuenta` | ✅ | ✅ | ✅ | ⬜ | ⬜ |
 
 «Validado en host» significa que una cartola **sintética** de ese perfil se
@@ -44,22 +44,99 @@ host varió por sesión — de `3.6.2` (validación inicial) a `3.8.0` (sesiones
 adelante, incluida `banco-chile.tarjeta`); ver `docs/HOST_VALIDATION.md` para la
 versión de cada sesión concreta.
 
-### Lo que sigue sin evidencia en CMR
+### Calibración real CMR (XLSX, 2026-09)
 
-La pregunta que decide todo el cálculo de deuda comprometida: en una fila en
-cuotas, **¿una columna `Monto` sin etiquetar es el valor de la cuota o el total
-de la compra?** Las dos lecturas difieren por un factor igual al largo del plan.
+4 exportaciones reales de **`Movimientos Facturados`** (XLSX), calibradas vía
+`pnpm calibrate -- <archivo> --parser banco-falabella.cmr` y
+`pnpm calibrate -- <archivoA> <archivoB> --compare` (130 filas en total).
+Nunca se leyó una fila real directamente — sólo el reporte sanitizado. Sin
+cartola real de `banco-falabella.cuenta` (cuenta corriente/vista) — sigue
+`⚠️ pendiente` sin cambios.
 
-Mientras no haya un estado de cuenta real:
+**Confirmado por evidencia real** (validationStatus sigue `pending-real-sample`
+a nivel de perfil porque no todas las semánticas tienen evidencia — ver abajo
+qué sí y qué no):
 
-- si el archivo trae una columna etiquetada (`Valor Cuota`, `Monto Cuota`), esa
-  manda y no hay ambigüedad;
-- si sólo trae `Monto` junto a un marcador de cuotas, la fila se marca
-  `ambiguous-installment-amount`, el plan baja a `suggested` y **no se deriva el
-  total de la compra**. Lo que sí se proyecta es lo que falta por pagar, porque
-  eso es el cargo repetido y no depende de cuál lectura sea la correcta.
+- **Firma de columnas real**: `FECHA`, `DESCRIPCION`, `TITULAR/ADICIONAL`,
+  `MONTO`, `CUOTAS PENDIENTES`, `VALOR CUOTA` — sin ninguna otra columna, y
+  **sin texto de marca** (ni "CMR" ni "FALABELLA") en ningún preámbulo. La
+  detección depende enteramente de esta firma estructural
+  (`recognizedLayoutSignatures`), no de branding.
+- **`MONTO` vs `VALOR CUOTA`**: coinciden en 128/130 filas reales. Difieren
+  sólo en las 2 filas con cuota activa observadas, donde `MONTO` es la compra
+  completa y `VALOR CUOTA` el cargo del ciclo — confirma la lectura que el
+  parser ya usaba cuando la columna viene etiquetada (`readAmount` prioriza
+  `VALOR CUOTA`), y sale de `pending-real-sample` para ese caso concreto.
+- **`CUOTAS PENDIENTES` no es un par `n de m`**: es un entero simple —
+  cuotas restantes tras este cargo, `0` cuando no hay plan abierto — presente
+  en el 100 % de las filas reales. `detectInstallment` (que sólo lee el
+  patrón `n de m`) no reconoció ningún plan en las 130 filas reales; nueva
+  lectura dedicada en `detectRemainingInstallments`
+  (`core/installments/detect.ts`), que nunca infiere un total.
+- **La fecha de una cuota activa no avanza entre ciclos**: comparación
+  cruzada de 2 estados de cuenta reales consecutivos mostró la misma `FECHA`
+  en la cuota 1 y la cuota 2 de la misma compra, con `CUOTAS PENDIENTES`
+  bajando en exactamente 1. Sin ajuste, el fingerprint (fecha+monto+glosa)
+  habría leído la segunda cuota como duplicado exacto de la primera —
+  corregido incorporando el conteo restante al fingerprint cuando existe.
+- **Pagos**: el 100 % de las filas `unknown`/`ambiguous-card-credit` (13 de
+  130) contenían la frase `PAGO TARJETA` — vocabulario propio del lado
+  tarjeta de CMR, distinto al de Banco de Chile. Agregado a
+  `CARD_SIDE_PAYMENT_MARKERS`.
+- **Devoluciones**: 2 filas reales clasificaron correctamente como `refund`
+  con los marcadores de reversa ya existentes — sin cambios necesarios.
 
-Falta también confirmar cómo CMR marca los avances en efectivo.
+**Sigue sin evidencia** (`pending-real-sample`, sin código nuevo):
+
+- servicio de administración / cargo del emisor — ninguna fila real lo
+  demostró en el XLSX;
+- avance en efectivo / súper avance;
+- interés, impuesto o cargo por mora en una fila real (sólo aparecen como
+  resumen, nunca como movimiento);
+- compra internacional distinguible en el XLSX — la firma de columnas no
+  tiene ninguna columna de moneda; una compra internacional, si existe en la
+  muestra, se importaría como compra CLP ordinaria sin metadata de moneda
+  original, porque el XLSX no la conserva (ver «PDF, evidencia sin import»
+  abajo).
+
+### PDF, evidencia sin import (2026-09)
+
+3 estados de cuenta PDF reales calibrados con un extractor **mínimo y
+separado del import** (`src/tooling/pdf-calibration.ts` +
+`pdf-extract.ts`, `pdfjs-dist` como devDependency — nunca en `dist/addon.js`,
+confirmado por tamaño de build). Reporta sólo conteos y booleanos — page
+count, capa de texto, marcadores, período, secciones con conteo de filas tipo
+movimiento — nunca una línea del estado de cuenta. Probado sólo contra PDF
+100 % sintéticos (`pdf-lib`); los 3 PDF reales sólo pasaron por ese reporte
+sanitizado.
+
+**Esta tranche NO importa PDF** — es demasiada arquitectura nueva para meter
+junto con XLSX real (extractor + parser + mapping completos). Se usa
+únicamente como evidencia adicional. Import PDF queda para una tranche
+siguiente; la arquitectura de dominio (mapping, installments, dedupe) ya
+está lista para que XLSX y PDF converjan cuando eso llegue.
+
+Hallazgos, consistentes en los 3 PDF:
+
+- capa de texto presente en los 3 (no hace falta OCR);
+- marcadores de producto encontrados: `CMR`, `ESTADO DE CUENTA`,
+  `CUPO COMPRAS`, `CUPO AVANCE`, `MONTO TOTAL FACTURADO` — el PDF sí trae
+  branding, al revés que el XLSX;
+- fecha de facturación, período facturado y fecha de vencimiento presentes
+  los 3;
+- secciones `COMPRAS NACIONALES` (25–32 filas tipo movimiento),
+  `COMPRAS INTERNACIONALES` (2–5 filas) y
+  `CARGOS COMISIONES IMPUESTOS Y ABONOS` (4–7 filas) encontradas y con filas
+  reales en los 3 — **compras internacionales sí son un hecho real en esta
+  cuenta**, y el PDF trae evidencia de moneda original (`USD`/`US$`, 1–8
+  coincidencias por archivo) que el XLSX no conserva;
+- 1 a 4 filas tipo movimiento por archivo no cayeron bajo ninguna sección
+  candidata reconocida — el vocabulario de secciones puede necesitar más
+  candidatos en la próxima calibración.
+
+Import PDF, cuando se aborde, tendrá que resolver la política de fuente dual
+(XLSX vs PDF del mismo ciclo) — sin resolver todavía, ver el informe técnico
+de esta tranche.
 
 ---
 
@@ -247,29 +324,20 @@ tiene.
 
 | Producto | Formato | Estado | Parser |
 | --- | --- | --- | --- |
-| Tarjeta CMR | CSV / XLSX | ⚠️ pendiente | `banco-falabella.cmr` |
-| Cuenta corriente | CSV / XLSX | ⚠️ pendiente | `banco-falabella.cuenta` |
-| Cualquiera | PDF | 🚫 | — |
+| Tarjeta CMR | XLSX (`Movimientos Facturados`) | ⚠️ pendiente, calibrado con evidencia real (2026-09) — ver arriba | `banco-falabella.cmr` |
+| Tarjeta CMR | PDF (estado de cuenta) | Evidencia real vía calibrador; **sin import** esta tranche | — (`pdf-calibration.ts`, sólo facts) |
+| Cuenta corriente / vista | CSV / XLSX | ⚠️ pendiente, sin cartola real | `banco-falabella.cuenta` |
 
-Mapeo asumido para CMR:
-
-| Rol | Encabezados esperados |
-| --- | --- |
-| fecha | `Fecha`, `Fecha Compra`, `Fecha Transaccion` |
-| descripción | `Descripcion`, `Comercio`, `Detalle Movimiento` |
-| monto | `Monto`, `Monto Total`, `Valor Cuota` |
-| cuotas | `Cuotas`, `Cuota`, `N Cuotas` |
-| tarjeta | `Tarjeta`, `N Tarjeta` |
-| rubro | `Rubro`, `Categoria` |
-
-**Para validarlo hace falta:** un estado de cuenta real de CMR. La pregunta
-crítica es una: **¿`Monto` es el valor de la cuota o el total de la compra?**
-De eso depende todo el cálculo de deuda comprometida. También hay que confirmar
-cómo se marcan los pagos recibidos y las anulaciones.
+Columnas reales del XLSX (confirmadas, no asumidas — ver «Calibración real
+CMR» arriba): `FECHA`, `DESCRIPCION`, `TITULAR/ADICIONAL` (sin mapear a
+ningún rol — sólo nombre del titular/adicional), `MONTO`,
+`CUOTAS PENDIENTES`, `VALOR CUOTA`. Nada más — no hay columna de tarjeta,
+rubro, ni moneda.
 
 Es el banco donde las cuotas más importan: en el retail chileno casi todo se
 vende en cuotas, y una importación CMR que se pierda los marcadores de cuota da
-una imagen muy equivocada de lo comprometido.
+una imagen muy equivocada de lo comprometido. La columna real de cuotas es un
+conteo restante, no un par `n de m` — ver `detectRemainingInstallments`.
 
 ---
 

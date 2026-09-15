@@ -449,3 +449,60 @@ emisor y exige saber por línea si cada cuota lleva interés.
 **Estado.** Arquitectura lista y probada contra fixtures sintéticos construidos
 con la redacción del reglamento. Ninguna cartola real de ningún banco ha pasado
 por esto. `BLOCKED: real-bank-sample`.
+
+---
+
+## D23 — Una cuota facturada es una Activity, una sola vez; el conteo restante nunca infiere un total
+
+**Fecha.** 2026-09-15 · `0.2.0-cmr-real-sample`
+
+**El problema.** Una compra en cuotas CMR reaparece en cada estado de cuenta
+mensual mientras el plan sigue abierto — no es una fila, son N filas a lo
+largo de N meses, cada una un hecho económico distinto (el cargo de *ese*
+ciclo). Wealthfolio 3.8.0 no tiene ningún concepto nativo de cuota: catorce
+`ActivityType` fijos, sin `relatedActivityId` ni ningún otro enlace entre
+Activities, y el SDK no expone `link`/`unlink`/`transfer-pair` (ver ADR 0005).
+Cualquier semántica de cuota tiene que vivir enteramente en cómo el addon
+mapea cada fila, no en algo que el host entienda.
+
+**Decisión — Activity por cuota facturada.** Cada fila importada de un ciclo
+es una Activity, exactamente una vez, con `amount` igual al cargo de *ese*
+ciclo (`VALOR CUOTA` cuando la columna existe — `readAmount` ya lo prioriza
+sobre `MONTO`, sin cambios). Importar el ciclo siguiente agrega una Activity
+nueva para el cargo de ese ciclo, no vuelve a escribir el total de la compra.
+Esto es lo que la arquitectura fila-por-fila ya produce; no hizo falta
+rediseñar el mapping, sólo confirmarlo con evidencia real (`docs/BANK_FORMATS.md`).
+
+Se descartaron: una Activity por el total de la compra (cuenta el consumo una
+vez pero de más — el dinero no salió todo ese día) y compra total + mecanismo
+de financiamiento separado (no hay dónde representarlo: sin subtype de cuota
+ni relación entre Activities en el host).
+
+**El conteo restante nunca infiere un total.** La columna real (`CUOTAS
+PENDIENTES`) es un entero simple — cuotas que faltan tras este cargo, no un
+par `n de m` — confirmado en el 100 % de 130 filas reales de 4 estados de
+cuenta. `detectRemainingInstallments` (`core/installments/detect.ts`) lo lee
+tal cual y nunca deriva `current`/`total` de él, ni de `MONTO ÷ VALOR CUOTA`
+(redondeo e interés lo invalidarían). Se guarda como
+`NormalizedTransaction.installmentRemaining`, separado de `installment`
+(`current`/`total`, para el patrón `n de m` de otros bancos) — nunca los dos
+a la vez, y el primero nunca alimenta `buildInstallmentPlans`, que sigue
+exigiendo un total. El costo es honesto: CMR no proyecta un outlook de
+cuotas comprometidas hasta tener evidencia real de un total (posible con PDF,
+`Número Cuotas` — pendiente, ver `docs/BANK_FORMATS.md`).
+
+**El fingerprint tuvo que incorporar el conteo.** Evidencia real (comparación
+cruzada de 2 estados de cuenta consecutivos) mostró que la `FECHA` de una
+cuota activa **no avanza** entre ciclos — la cuota 2 trae la misma fecha que
+la cuota 1. Sin ajuste, `computeFingerprint` (fecha+monto+glosa+cuenta)
+habría hasheado ambas cuotas igual, y la segunda se habría leído como
+duplicado exacto de la primera y perdido en el reimport. Se agregó el
+conteo restante al final de la lista de campos hasheados, **sólo cuando el
+campo existe** — así que cada fingerprint calculado antes de que este campo
+existiera (todo otro banco, y toda fila CMR sin columna de cuotas legible)
+queda byte a byte igual: sin bump de versión, sin hash legado dual, porque
+nada que se haya publicado produjo jamás este campo.
+
+**Estado.** Implementado y probado (`tests/cmr.test.ts`, `tests/host-authority.test.ts`,
+`tests/installments.test.ts`) contra evidencia real de 4 estados de cuenta XLSX.
+Sin validar contra host real todavía — ver `docs/HOST_VALIDATION.md`.
