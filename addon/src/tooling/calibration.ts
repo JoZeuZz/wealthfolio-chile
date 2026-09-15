@@ -7,7 +7,7 @@ import {
   type ParsedStatement,
   type ValidationResult,
 } from '../core/model/statement';
-import { ColumnRole, detectHeader, mapColumns } from '../core/parsing/columns';
+import { ColumnRole, detectHeader, mapColumns, normalizeHeader } from '../core/parsing/columns';
 import { describeColumnShape, type ColumnShape } from '../core/parsing/column-shape';
 import type { StatementProfile } from '../core/parsing/profile';
 import { readSpreadsheetCellFormats } from '../core/parsing/spreadsheet-cell-facts';
@@ -169,6 +169,18 @@ export interface HeaderFacts {
    * digit-run bucket, never a digit — see `core/parsing/column-shape.ts`.
    */
   unmapped: Array<{ column: number; shape: ColumnShape }>;
+  /**
+   * Whether the header row exactly matches a named, hard-coded candidate
+   * layout signature — never the header text itself.
+   *
+   * A candidate is proposed from something other than the file (a format
+   * spec, a description of the export) and this only ever answers "yes" or
+   * "no" to "is that guess right", the same shape as the vocabulary
+   * candidates in `unknownVocabulary`. It exists to turn a hypothesis about
+   * an exact header into evidence a `recognizedLayoutSignatures` entry can
+   * be built from, without the header ever appearing in the report.
+   */
+  signatureCandidates: Array<{ name: string; matched: boolean }>;
 }
 
 export interface RowFacts {
@@ -561,10 +573,10 @@ function detectionFacts(
 
 function headerFacts(sheet: Sheet | undefined, parserId: string): HeaderFacts {
   const profile = getParser(parserId)?.profile;
-  if (!sheet || !profile) return { row: -1, mapped: [], unmapped: [] };
+  if (!sheet || !profile) return { row: -1, mapped: [], unmapped: [], signatureCandidates: [] };
 
   const header = detectHeader(sheet);
-  if (header.headerRow < 0) return { row: -1, mapped: [], unmapped: [] };
+  if (header.headerRow < 0) return { row: -1, mapped: [], unmapped: [], signatureCandidates: [] };
 
   const cells = (sheet.rows[header.headerRow] ?? []).map((cell) => cell.trim());
   // The generic map, not the profile's merged one. A heading this shows as
@@ -586,8 +598,31 @@ function headerFacts(sheet: Sheet | undefined, parserId: string): HeaderFacts {
     else unmapped.push({ column, shape: columnShapeAt(sheet, header.firstDataRow, column) });
   });
 
-  return { row: header.headerRow, mapped, unmapped };
+  const normalizedCells = new Set(cells.filter((c) => c !== '').map(normalizeHeader));
+  const signatureCandidates = (LAYOUT_SIGNATURE_CANDIDATES[parserId] ?? []).map((candidate) => ({
+    name: candidate.name,
+    matched: candidate.headers.every((required) => normalizedCells.has(normalizeHeader(required))),
+  }));
+
+  return { row: header.headerRow, mapped, unmapped, signatureCandidates };
 }
+
+/**
+ * Named layout-signature hypotheses, proposed from outside the file (a
+ * description of an export, never a read of one), pending confirmation
+ * against a real statement. A match here is the evidence a
+ * `StatementProfile.recognizedLayoutSignatures` entry can be built from; the
+ * header text that would confirm or refute it never appears in the report,
+ * only whether the guess was right.
+ */
+const LAYOUT_SIGNATURE_CANDIDATES: Readonly<Record<string, ReadonlyArray<{ name: string; headers: readonly string[] }>>> = {
+  'banco-falabella.cmr': [
+    {
+      name: 'cmr-movimientos-facturados-v1',
+      headers: ['FECHA', 'DESCRIPCION', 'TITULAR ADICIONAL', 'MONTO', 'CUOTAS PENDIENTES', 'VALOR CUOTA'],
+    },
+  ],
+};
 
 /** The shape of one column's own values, read straight from the sheet. */
 function columnShapeAt(sheet: Sheet, firstDataRow: number, column: number): ColumnShape {
@@ -877,6 +912,9 @@ export function formatReport(report: CalibrationReport): string {
     for (const column of report.header.unmapped) {
       lines.push(`  [${column.column}] rol no reconocido — forma: ${column.shape}`);
     }
+  }
+  for (const candidate of report.header.signatureCandidates) {
+    lines.push(`  Firma candidata "${candidate.name}": ${candidate.matched ? 'coincide' : 'no coincide'}`);
   }
 
   lines.push('', '── Filas ─────────────────────────────────────────────────');

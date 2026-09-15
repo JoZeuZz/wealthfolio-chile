@@ -44,6 +44,28 @@ export const FALABELLA_CARD: StatementProfile = {
   // Sin una cartola real no hay evidencia de que la columna de saldo camine
   // exacta, así que un desajuste aislado se informa y no bloquea.
   balanceCheck: 'advisory',
+  // La exportación real de "Movimientos Facturados" no imprime ningún texto
+  // de marca — ni "CMR" ni "FALABELLA" aparecen en ninguna celda de
+  // preámbulo, confirmado contra 4 estados de cuenta reales (2026-09) — así
+  // que `strongMarkers` nunca dispara y el archivo perdía la detección
+  // contra `generico.tarjeta` (45 % vs 55 %). La cabecera completa de 6
+  // columnas es, para este layout, la única evidencia de producto que existe
+  // — el mismo principio que ya usa `banco-chile.tarjeta` para su tabla
+  // internacional. Confirmada exacta contra las 4 muestras reales vía
+  // `pnpm calibrate -- <archivo> --parser banco-falabella.cmr` (firma
+  // candidata `cmr-movimientos-facturados-v1`), nunca leída directamente.
+  recognizedLayoutSignatures: [
+    {
+      headers: [
+        'FECHA',
+        'DESCRIPCION',
+        'TITULAR/ADICIONAL',
+        'MONTO',
+        'CUOTAS PENDIENTES',
+        'VALOR CUOTA',
+      ],
+    },
+  ],
   validationStatus: 'pending-real-sample',
   validationNotes:
     'Falta un estado de cuenta real de CMR. Sigue sin confirmarse si una columna "Monto" sin etiquetar es el valor de la cuota o el total de la compra; mientras tanto la fila se marca con `ambiguous-installment-amount` y el plan no deriva el total de la compra. Falta también confirmar cómo se marcan los pagos, las anulaciones y los avances en efectivo.',

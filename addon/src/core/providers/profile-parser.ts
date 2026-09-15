@@ -166,7 +166,7 @@ function detectWithProfile(
   if (detectRecognizedLayoutSignatureInWorkbook(input.sheets, profile)) {
     score += 0.35;
     reasons.push(
-      'Se encontró la firma estructural completa del layout internacional de tarjeta reconocido por este perfil.',
+      'Se encontró la firma estructural completa de un layout reconocido por este perfil.',
     );
   }
 

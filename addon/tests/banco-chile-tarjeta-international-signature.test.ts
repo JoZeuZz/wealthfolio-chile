@@ -180,7 +180,7 @@ describe('reason sanitizada del boost de firma completa', () => {
     const detection = detectAll(inputForFile(file)).find((d) => d.parser === 'banco-chile.tarjeta');
     expect(detection).toBeDefined();
     expect(detection!.reasons).toContain(
-      'Se encontró la firma estructural completa del layout internacional de tarjeta reconocido por este perfil.',
+      'Se encontró la firma estructural completa de un layout reconocido por este perfil.',
     );
   });
 });
