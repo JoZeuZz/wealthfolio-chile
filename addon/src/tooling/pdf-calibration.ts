@@ -93,6 +93,11 @@ export async function calibratePdf(
   bytes: Uint8Array,
   extractor: PdfTextExtractor,
 ): Promise<PdfCalibrationReport> {
+  // Captured before extraction, not after: a PDF engine can take ownership
+  // of a typed array passed in as page data and detach it once parsing
+  // starts, and a detached array reports `length` 0 — read after the await
+  // below, `bytes.length` silently became the wrong fact instead of an error.
+  const byteCount = bytes.length;
   const pages = await extractor.extractPages(bytes);
   const allLines = pages.flat();
   const textLayer = allLines.some((line) => line.trim() !== '');
@@ -116,7 +121,7 @@ export async function calibratePdf(
   const { sections, unknownRowLikeLines } = sectionRowCounts(allLines);
 
   return {
-    file: { bytes: bytes.length, pages: pages.length },
+    file: { bytes: byteCount, pages: pages.length },
     textLayer,
     markers,
     statementFacts,

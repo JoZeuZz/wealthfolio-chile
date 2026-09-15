@@ -64,6 +64,18 @@ describe('pdfjsTextExtractor + calibratePdf, end to end on a synthetic PDF', () 
     expect(report.currencyEvidence.find((c) => c.name === 'USD')?.rows).toBe(1);
   });
 
+  it('reports the real byte count, not zero', async () => {
+    // pdfjs-dist takes ownership of a typed array passed as `data` and can
+    // detach it once parsing starts — reading `bytes.length` after awaiting
+    // extraction read the now-detached array's length back as 0. This pins
+    // the fix: capture the length before extraction ever runs.
+    const bytes = await syntheticStatementPdf();
+    const expectedBytes = bytes.length;
+    const report = await calibratePdf(bytes, pdfjsTextExtractor);
+    expect(report.file.bytes).toBe(expectedBytes);
+    expect(report.file.bytes).toBeGreaterThan(0);
+  });
+
   it('reports no text layer for a PDF with an empty page', async () => {
     const doc = await PDFDocument.create();
     doc.addPage([200, 200]);
