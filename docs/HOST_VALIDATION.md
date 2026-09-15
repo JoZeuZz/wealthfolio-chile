@@ -1586,3 +1586,143 @@ Commit: `fix(detection): recognize Banco Chile international card layouts`.
 
 Ninguna cartola real tocó el host en esta sesión. Todo lo subido fue XLSX
 sintético generado localmente y descartado al cerrar.
+
+### Re-review OpenCode — dos hallazgos bloqueantes corregidos (misma Sesión 9)
+
+Una re-review final de OpenCode sobre el estado de arriba encontró dos
+problemas, uno de ellos en la corrección de detección documentada en esta
+misma sesión.
+
+**P0 — `runImport` podía escribir un `PreparedImport` con
+`validation.ok=false`.** Reproducción independiente confirmada: un XLSX
+sintético con una celda de monto nativa (`12450000`) cuyo formato Excel es
+`#,##0,` (coma de escala, no una de las formas que
+`spreadsheetColumnStructuralEvidence` acepta) produce
+`spreadsheet-number-format-conflict` → `validation.ok=false` → `canImport=
+false` en `prepareImportFromHost`, pero la fila sigue con `willImport=true`
+en `prepared.rows` — `prepareImport` nunca borra una fila sólo porque la
+validación general falló, sólo la UI decide no ofrecer el botón de confirmar.
+Llamando `runImport({ prepared, ... })` directamente (bypass programático de
+la UI, sin checkbox ni wizard de por medio) se llegaba a `saveMany`, `1`
+Activity creada, monto mal escalado (`$12.450` en vez de `$12.450.000`). El
+mismo patrón se reprodujo con `foreign-currency-unsupported` (Internacional),
+demostrando que el problema no era específico de number-format sino que
+`runImport` nunca miraba `prepared.validation.ok` en absoluto — sólo
+`crossesWriteGate` (willImport + no legacy-source-conflict), que filtra por
+fila, nunca por el statement completo.
+
+**Corrección:** `runImport` (`addon/src/services/import-runner.ts`) ahora
+rechaza el `PreparedImport` completo con una nueva `ImportBlockedError` en
+cuanto `prepared.validation.ok` es `false`, antes de construir ninguna
+Activity o de tocar `saveMany` — independiente de `willImport`, del caller o
+de `canImport` (que mezcla razones de UX, como "sin filas seleccionadas", con
+la única que importa aquí). `crossesWriteGate` sigue existiendo sin cambios
+para su propio trabajo, el filtrado por fila de `legacy-source-conflict`. La
+UI (`ImportWizardPage.tsx`) ya envolvía la llamada en `try/catch` y muestra
+cualquier error como alerta + toast, así que no requirió cambios — el guard
+nuevo es una frontera de escritura genuina, no cosmética de UI.
+
+**Nota de arquitectura:** la UI (`canImport`) nunca fue una frontera de
+persistencia suficiente por sí sola. `runImport` ahora la aplica de nuevo, en
+la frontera real — antes de `saveMany` — para que ningún caller futuro pueda
+saltársela.
+
+**RED → GREEN:** `addon/tests/import-runner.test.ts`, describe `runImport
+rechaza un PreparedImport con validation.ok=false`, 4 casos —
+spreadsheet-number-format-conflict con preparación real (no un objeto
+fabricado: la fila se demuestra `willImport=true` antes de exigir el
+rechazo), foreign-currency-unsupported con una fila real trasplantada de otro
+import válido para probar que el guard es general y no depende del contenido
+de `rows`, un import válido que sigue completando normalmente, y una fila
+`legacy-source-conflict` forzada que `crossesWriteGate` sigue filtrando sin
+depender del guard nuevo. Los primeros dos, corridos ANTES del fix,
+reprodujeron la escritura real (`saveMany` llamado, `1` Activity, `status:
+completed`) — confirmando el bug con la infraestructura de test existente
+antes de tocar el código de producción.
+
+**P1 — la corrección de detección de la sección anterior sobreajustó.**
+La explicación de arriba ("Corrección de detección — empate 75/75 resuelto")
+decía que reutilizar `unsupportedLayoutHeaders`/`detectUnsupportedLayoutInWorkbook`
+— cuya evidencia es una sola columna, `Monto (USD)` — como boost de
+detección (`+0.35`) era "evidencia de producto, no sólo de marca". La
+re-review de OpenCode reprodujo el sobreajuste: un archivo genérico, SIN
+ningún branding de Banco de Chile, con la cabecera mínima `Fecha |
+Descripción | Monto (USD)` (o con `Categoría` añadida) ganaba igual el
+`+0.35`, quedaba autodetectado como `banco-chile.tarjeta` y terminaba
+bloqueado con `foreign-currency-unsupported` — un mensaje sobre Banco de
+Chile para un archivo que no lo es. Confirmado antes del fix: `detectAll`
+devolvía sólo `banco-chile.tarjeta` (score `0.6`) para ese fixture mínimo,
+ningún otro perfil por encima del piso de detección.
+
+Tres estados, en orden:
+
+1. **Primera implementación** (banco-chile.tarjeta@0.2.0, sesiones
+   previas): resolvió 75/75 en la calibración original, cero regresiones en
+   ese momento.
+2. **Corrección de detección** (esta misma Sesión 9, sección de arriba):
+   resolvió el empate 75/75 documentado, pero sobreajustó al usar una sola
+   columna genérica (`Monto (USD)`) como si fuera evidencia de emisor.
+3. **Re-review**: encontró el falso issuer en USD genérico — este hallazgo.
+4. **Corrección final** (este commit): la detección exige la firma completa
+   del layout Internacional, nunca una columna aislada.
+
+**Corrección:** nuevo campo declarativo `recognizedLayoutSignatures` en
+`StatementProfile` (`addon/src/core/parsing/profile.ts`) — evidencia
+estructural SÓLO para puntaje de detección, deliberadamente separada de
+`unsupportedLayoutHeaders` (que sigue siendo el bloqueo de parseo, sin
+cambios, porque para cuando ese bloqueo corre el parser ya fue elegido por
+otra vía). Una firma declara TODOS los encabezados normalizados que deben
+aparecer juntos en la MISMA fila de cabecera plausible. `banco-chile.tarjeta`
+declara una sola firma, la forma real confirmada de "Movimientos
+Internacionales": `Categoría | Fecha | Descripción | País | Monto Moneda
+Origen | Monto (USD)`. Nueva función
+`detectRecognizedLayoutSignatureInWorkbook` (`core/providers/profile-parser.ts`),
+hermana de `detectUnsupportedLayoutInWorkbook` pero exigiendo el conjunto
+completo, reutiliza `findHeaderRows` igual que la anterior (cada cabecera
+plausible de cada hoja, no sólo la que `pickDataSheet` elige — necesario para
+que el multi-tabla invertido siga funcionando). La razón sanitizada nueva:
+*"Se encontró la firma estructural completa del layout internacional de
+tarjeta reconocido por este perfil."* — sin exponer ningún valor de celda.
+
+**RED → GREEN:**
+`addon/tests/banco-chile-tarjeta-international-signature.test.ts` (nuevo), 10
+tests: genérico USD mínimo sin branding (NO banco-chile.tarjeta), genérico
+con `Categoría` añadida (NO banco-chile.tarjeta), genérico con `País` pero
+sin `Monto Moneda Origen` — firma incompleta (NO banco-chile.tarjeta), firma
+completa real-shaped (SÍ banco-chile.tarjeta, score mayor a cuenta-corriente,
+bloquea `foreign-currency-unsupported`), firma completa en multi-tabla
+invertido (mismo resultado), CMR/Falabella explícito descalifica aunque la
+firma USD esté completa, cuenta corriente real-shaped sin regresión, Nacional
+sin regresión, glosas de movimiento sin aportar evidencia de issuer, y la
+razón sanitizada exacta. Los 3 primeros y el de la razón, corridos ANTES del
+fix, reprodujeron el falso positivo real (`banco-chile.tarjeta` con score
+`0.6` para un archivo sin ningún branding).
+
+Los 8 tests preexistentes de
+`banco-chile-tarjeta-international-detection.test.ts` (empate 75/75, sección
+anterior) siguen en verde sin modificarlos: su fixture ya incluye la firma
+completa, así que quedan cubiertos por la firma nueva sin cambios.
+
+**`pnpm verify` completo tras ambos fixes:** **1533/1533 tests**, typecheck,
+lint y build verdes — 14 tests nuevos sobre el baseline anterior de esta
+sesión (1519), cero regresiones.
+
+**Host smoke puntual (evidencia service-level, sin UI):** el P0 exige bypass
+programático de `runImport` — no hay forma honesta de reproducirlo con un
+checkbox de la UI, así que la evidencia correcta es el test de servicio con
+`fakeHost` (arriba), no una UI inventada. Para el P1, los mismos 3
+escenarios que pide la re-review corrieron contra el pipeline real (sin
+`fakeHost`, sin `runImport` — sólo `detectAll`/`prepareImport`, que es lo que
+la detección ejercita): USD genérico sin branding (`detectAll` no devuelve
+`banco-chile.tarjeta`), Banco de Chile Internacional firma completa
+(`Banco de Chile — tarjeta de crédito`, bloquea `foreign-currency-unsupported`)
+y multi-tabla invertido con la firma completa (mismo bloqueo específico). Los
+tres, cero Activities — ninguno de los tres invoca `saveMany`. No se repitió
+contra el contenedor Docker real (`infra/compose.yml`): el cambio es puro
+`core`/`services`, sin tocar la frontera del SDK ni el mapeo hacia
+`ActivityCreate`, así que no hay superficie nueva que un host real pudiera
+contradecir — pendiente de validación de host si se quiere esa confirmación
+adicional, no declarado como hecho.
+
+Commits: `fix(import): enforce validation at write boundary`,
+`fix(detection): require full Banco Chile international signature`.

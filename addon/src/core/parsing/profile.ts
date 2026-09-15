@@ -57,6 +57,27 @@ export interface StatementProfile {
   unsupportedLayoutHeaders?: Array<{ header: string; code: string; message: string }>;
 
   /**
+   * Structural evidence, for DETECTION scoring only, that a workbook is this
+   * profile's own product — never a persuasion that it should be imported.
+   *
+   * `unsupportedLayoutHeaders` is a parse-time blocker: it only has to prove
+   * enough to refuse a layout the profile already recognizes, so a single
+   * column name (`Monto (USD)`) is deliberately enough for it — by the time
+   * it runs, some parser has already been chosen. Reusing that same
+   * single-column check as detection scoring (`score += 0.35`) is a
+   * different claim — "this workbook was issued by this institution" — and
+   * one generic column is not proof of an issuer: a USD statement from any
+   * bank, or no bank at all, can print "Monto (USD)" without ever being a
+   * Banco de Chile export. `recognizedLayoutSignatures` names the FULL
+   * header row this profile's own real layout is confirmed to have — every
+   * listed header must appear together in the same plausible header row —
+   * which is the same specificity `strongMarkers` gets from bank-name text,
+   * expressed structurally for a layout whose real file never prints the
+   * bank's name as readable text.
+   */
+  recognizedLayoutSignatures?: Array<{ headers: readonly string[] }>;
+
+  /**
    * Bank-specific statement-period pattern, matched against one preamble line
    * at a time. Capture groups one and two must contain complete dates.
    */

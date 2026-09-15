@@ -140,6 +140,21 @@ export const BANCO_CHILE_CARD: StatementProfile = {
         'Este archivo contiene movimientos internacionales facturados en USD. Wealthfolio Chile todavía no puede importar movimientos USD dentro de una tarjeta cuya cuenta se modela en CLP sin perder la separación entre moneda de cuenta y moneda de movimiento.',
     },
   ],
+  // P1 (re-review OpenCode): "Monto (USD)" sola no es evidencia de que el
+  // archivo lo emitió Banco de Chile — cualquier tarjeta en USD, de
+  // cualquier emisor, puede traer esa columna. La firma completa
+  // Categoría/Fecha/Descripción/País/Monto Moneda Origen/Monto (USD), vista
+  // TODA en la misma fila de cabecera, es la forma real de "Movimientos
+  // Internacionales" confirmada en las muestras calibradas — evidencia de
+  // producto sólo cuando aparece completa. Usada únicamente para el puntaje
+  // de detección; el bloqueo de parseo sigue mirando sólo `Monto (USD)` vía
+  // `unsupportedLayoutHeaders`, porque para cuando ese bloqueo corre el
+  // parser ya fue elegido por esta firma (o por el usuario a mano).
+  recognizedLayoutSignatures: [
+    {
+      headers: ['Categoría', 'Fecha', 'Descripción', 'País', 'Monto Moneda Origen', 'Monto (USD)'],
+    },
+  ],
   // Sin una cartola real no hay evidencia de que la columna de saldo camine
   // exacta, así que un desajuste aislado se informa y no bloquea.
   balanceCheck: 'advisory',

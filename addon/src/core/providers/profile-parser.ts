@@ -150,19 +150,23 @@ function detectWithProfile(
   // declares `unsupportedLayoutHeaders` (today only `banco-chile.tarjeta`,
   // for "Movimientos Internacionales") can name that table's exact column
   // precisely even though it will later refuse to import it. That is
-  // product-specific structural evidence in its own right — the same
-  // evidence `detectUnsupportedLayoutInWorkbook` already uses at parse time
-  // to block the file — so detection reuses it too, scanning every header
-  // row of every sheet via `findHeaderRows` rather than only the single
-  // header `pickDataSheet`/`detectHeader` happened to pick. Without this, a
+  // product-specific structural evidence — but only when the evidence is the
+  // FULL header row this profile's own layout is confirmed to have
+  // (`recognizedLayoutSignatures`), never a single generic column name.
+  // `unsupportedLayoutHeaders` alone (e.g. "Monto (USD)") is enough to block
+  // once a parser is already chosen, but it is not enough to prove which
+  // parser should be chosen: any USD statement, from any issuer, can print
+  // that one column. Scanning every header row of every sheet via
+  // `findHeaderRows`, rather than only the single header
+  // `pickDataSheet`/`detectHeader` happened to pick, still matters — a
   // workbook whose only visible header (by pick order) is the card's own
-  // unsupported table scored identically to `banco-chile.cuenta-corriente`
-  // (no balance/debit-credit/installment column either way) and lost the
-  // tie to registry order.
-  if (detectUnsupportedLayoutInWorkbook(input.sheets, profile)) {
+  // unsupported table scores identically to `banco-chile.cuenta-corriente`
+  // (no balance/debit-credit/installment column either way) and loses the
+  // tie to registry order without it.
+  if (detectRecognizedLayoutSignatureInWorkbook(input.sheets, profile)) {
     score += 0.35;
     reasons.push(
-      'Se encontró la cabecera exacta del layout de tarjeta que este perfil reconoce pero no puede importar (evidencia de producto, no sólo de marca).',
+      'Se encontró la firma estructural completa del layout internacional de tarjeta reconocido por este perfil.',
     );
   }
 
@@ -730,6 +734,38 @@ function detectUnsupportedLayoutInWorkbook(
     }
   }
   return undefined;
+}
+
+/**
+ * Detection-time evidence only — see `StatementProfile.recognizedLayoutSignatures`.
+ *
+ * A signature matches a header row when every one of its required, normalized
+ * headers is present in that SAME plausible header row (not scattered across
+ * the sheet, not one cell alone). Scanning every header row of every sheet
+ * via `findHeaderRows` mirrors `detectUnsupportedLayoutInWorkbook`, for the
+ * same reason: a workbook can stack a second real table further down the
+ * same sheet, or on a different sheet than the one `pickDataSheet` happens to
+ * choose.
+ */
+function detectRecognizedLayoutSignatureInWorkbook(
+  sheets: readonly Sheet[],
+  profile: StatementProfile,
+): boolean {
+  const signatures = profile.recognizedLayoutSignatures;
+  if (!signatures || signatures.length === 0) return false;
+
+  for (const candidate of sheets) {
+    if (candidate.rows.every((row) => isBlankRow(row))) continue;
+
+    for (const header of findHeaderRows(candidate)) {
+      const normalizedCells = new Set(header.headers.map(normalizeHeader));
+      const matches = signatures.some((signature) =>
+        signature.headers.every((required) => normalizedCells.has(normalizeHeader(required))),
+      );
+      if (matches) return true;
+    }
+  }
+  return false;
 }
 
 /** Render a marker pattern as something a person can read in the UI. */
