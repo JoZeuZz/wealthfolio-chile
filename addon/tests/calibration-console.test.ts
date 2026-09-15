@@ -16,7 +16,7 @@ vi.mock('../src/core/parsing/workbook', async (importOriginal) => {
 import { runCalibration, type CalibrationIo } from '../src/tooling/cli';
 
 describe('salida lateral de librerías', () => {
-  it('silencia console durante la decodificación y lo restaura después', () => {
+  it('silencia console durante la decodificación y lo restaura después', async () => {
     const bytes = new TextEncoder().encode(
       ['Fecha;Descripcion;Cargo', '03/02/2026;COMPRA;1.000'].join('\n'),
     );
@@ -32,7 +32,7 @@ describe('salida lateral de librerías', () => {
     const error = vi.spyOn(globalThis['console'], 'error').mockImplementation(() => undefined);
     workbookProbe.message = 'JOSE RODRIGUEZ CUENTA 12345678';
 
-    runCalibration(['/tmp/cartola.csv'], io);
+    await runCalibration(['/tmp/cartola.csv'], io);
     globalThis['console'].error('visible después');
 
     expect(error).toHaveBeenCalledTimes(1);

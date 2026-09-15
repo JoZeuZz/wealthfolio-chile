@@ -40,7 +40,7 @@ const io: CalibrationIo = {
   stderr: (text) => process.stderr.write(text),
 };
 
-process.exitCode = runCalibration(process.argv.slice(2), io);
+process.exitCode = await runCalibration(process.argv.slice(2), io);
 
 /**
  * Whether Git ignores this path.

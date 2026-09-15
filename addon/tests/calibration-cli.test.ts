@@ -11,7 +11,8 @@ import { runCalibration, type CalibrationIo } from '../src/tooling/cli';
  *
  * La lógica vive en `src/tooling/cli` con su E/S inyectada precisamente para
  * que estas preguntas se puedan hacer en milisegundos y sin un archivo real a
- * la vista.
+ * la vista. `runCalibration` es async desde que el camino PDF necesita E/S
+ * real de un motor de PDF — ver `calibration-cli-pdf.test.ts`.
  */
 
 const REPO = '/home/usuario/wealthfolio-chile';
@@ -51,18 +52,18 @@ function textOf(capture: Capture): string {
 }
 
 describe('el camino feliz', () => {
-  it('lee el archivo en su sitio y escribe el informe en stdout', () => {
+  it('lee el archivo en su sitio y escribe el informe en stdout', async () => {
     const context = io();
-    const code = runCalibration(['/home/usuario/Descargas/cartola.csv'], context);
+    const code = await runCalibration(['/home/usuario/Descargas/cartola.csv'], context);
 
     expect(code).toBe(0);
     expect(context.capture.out.join('\n')).toContain('Detección');
     expect(context.capture.reads).toEqual(['/home/usuario/Descargas/cartola.csv']);
   });
 
-  it('no escribe ningún archivo: la E/S inyectada no tiene con qué', () => {
+  it('no escribe ningún archivo: la E/S inyectada no tiene con qué', async () => {
     const context = io();
-    runCalibration(['/home/usuario/Descargas/cartola.csv'], context);
+    await runCalibration(['/home/usuario/Descargas/cartola.csv'], context);
 
     // La superficie completa de E/S del comando. Si algún día aparece aquí una
     // operación de escritura, este test es el que lo dice.
@@ -79,16 +80,16 @@ describe('el camino feliz', () => {
 });
 
 describe('fallar seguro', () => {
-  it('sin argumentos explica el uso', () => {
+  it('sin argumentos explica el uso', async () => {
     const context = io();
-    expect(runCalibration([], context)).toBe(1);
+    expect(await runCalibration([], context)).toBe(1);
     expect(textOf(context.capture)).toContain('Uso:');
     expect(textOf(context.capture)).toContain('pnpm --silent calibrate');
   });
 
-  it('un archivo que no existe no repite su nombre', () => {
+  it('un archivo que no existe no repite su nombre', async () => {
     const context = io({ stat: () => undefined });
-    const code = runCalibration(['/home/usuario/CartolaRut12345678.csv'], context);
+    const code = await runCalibration(['/home/usuario/CartolaRut12345678.csv'], context);
 
     expect(code).toBe(1);
     expect(textOf(context.capture)).toContain('no existe');
@@ -96,33 +97,33 @@ describe('fallar seguro', () => {
     expect(textOf(context.capture)).not.toContain('12345678');
   });
 
-  it('un directorio se rechaza como directorio', () => {
+  it('un directorio se rechaza como directorio', async () => {
     const context = io({ stat: () => ({ isDirectory: true, size: 4096 }) });
-    expect(runCalibration(['/home/usuario/Descargas'], context)).toBe(1);
+    expect(await runCalibration(['/home/usuario/Descargas'], context)).toBe(1);
     expect(textOf(context.capture)).toContain('un directorio');
   });
 
-  it('un archivo vacío se rechaza antes de intentar leerlo', () => {
+  it('un archivo vacío se rechaza antes de intentar leerlo', async () => {
     const context = io({ stat: () => ({ isDirectory: false, size: 0 }) });
-    expect(runCalibration(['/tmp/vacio.csv'], context)).toBe(1);
+    expect(await runCalibration(['/tmp/vacio.csv'], context)).toBe(1);
     expect(textOf(context.capture)).toContain('vacío');
     expect(context.capture.reads).toEqual([]);
   });
 
-  it('un archivo enorme se rechaza sin leerlo, diciendo el límite', () => {
+  it('un archivo enorme se rechaza sin leerlo, diciendo el límite', async () => {
     const context = io({ stat: () => ({ isDirectory: false, size: 41 * 1024 * 1024 }) });
-    expect(runCalibration(['/tmp/enorme.xlsx'], context)).toBe(1);
+    expect(await runCalibration(['/tmp/enorme.xlsx'], context)).toBe(1);
     expect(textOf(context.capture)).toContain('MB');
     expect(context.capture.reads).toEqual([]);
   });
 
-  it('un archivo ilegible da un diagnóstico, no un stack', () => {
+  it('un archivo ilegible da un diagnóstico, no un stack', async () => {
     const context = io({
       readFile: () => {
         throw new Error("EACCES: permission denied, open '/home/usuario/CartolaRut12345678.csv'");
       },
     });
-    const code = runCalibration(['/home/usuario/CartolaRut12345678.csv'], context);
+    const code = await runCalibration(['/home/usuario/CartolaRut12345678.csv'], context);
 
     expect(code).toBe(1);
     expect(textOf(context.capture)).not.toContain('CartolaRut');
@@ -130,69 +131,69 @@ describe('fallar seguro', () => {
     expect(textOf(context.capture)).not.toMatch(/\bat\s+\w+\s+\(/);
   });
 
-  it('un código de error arbitrario tampoco se refleja', () => {
+  it('un código de error arbitrario tampoco se refleja', async () => {
     const context = io({
       readFile: () => {
         throw { code: 'RUT-JUAN-PEREZ-12345678' };
       },
     });
-    runCalibration(['/tmp/cartola.csv'], context);
+    await runCalibration(['/tmp/cartola.csv'], context);
 
     expect(textOf(context.capture)).not.toMatch(/JUAN|PEREZ|12345678/);
   });
 
-  it('un error del parser no refleja nombre de archivo ni texto de librería', () => {
+  it('un error del parser no refleja nombre de archivo ni texto de librería', async () => {
     const context = io();
-    runCalibration(['/tmp/Jose-Rodriguez-Cuenta.pdf'], context);
+    await runCalibration(['/tmp/Jose-Rodriguez-Cuenta.pdf'], context);
 
     expect(textOf(context.capture)).not.toMatch(/Jose|Rodriguez|Cuenta\.pdf/i);
     expect(textOf(context.capture)).toContain('No se pudo interpretar');
   });
 
-  it('un contenido que ningún perfil reconoce nombra los perfiles disponibles', () => {
+  it('un contenido que ningún perfil reconoce nombra los perfiles disponibles', async () => {
     const context = io({
       readFile: () => new TextEncoder().encode('esto no es una cartola\nni de lejos\n'),
     });
-    const code = runCalibration(['/tmp/cualquiera.csv'], context);
+    const code = await runCalibration(['/tmp/cualquiera.csv'], context);
 
     expect(code).toBe(1);
     expect(textOf(context.capture)).toContain('--parser');
     expect(textOf(context.capture)).toContain('generico.cuenta');
   });
 
-  it('un perfil inexistente se dice como tal y lista los válidos', () => {
+  it('un perfil inexistente se dice como tal y lista los válidos', async () => {
     const context = io();
-    const code = runCalibration(['/tmp/c.csv', '--parser', 'banco-inventado'], context);
+    const code = await runCalibration(['/tmp/c.csv', '--parser', 'banco-inventado'], context);
 
     expect(code).toBe(1);
     expect(textOf(context.capture)).not.toContain('banco-inventado');
     expect(textOf(context.capture)).toContain('generico.cuenta');
   });
 
-  it('--parser sin valor es un error de uso, no un perfil indefinido', () => {
+  it('--parser sin valor es un error de uso, no un perfil indefinido', async () => {
     const context = io();
-    expect(runCalibration(['/tmp/c.csv', '--parser'], context)).toBe(1);
+    expect(await runCalibration(['/tmp/c.csv', '--parser'], context)).toBe(1);
     expect(textOf(context.capture)).toContain('--parser');
   });
 
-  it('el separador -- que deja pasar pnpm no es una opción', () => {
+  it('el separador -- que deja pasar pnpm no es una opción', async () => {
     const context = io();
-    expect(runCalibration(['--', '/tmp/c.csv'], context)).toBe(0);
+    expect(await runCalibration(['--', '/tmp/c.csv'], context)).toBe(0);
   });
 
-  it('una bandera desconocida no se ignora en silencio', () => {
+  it('una bandera desconocida no se ignora en silencio', async () => {
     const context = io();
-    expect(runCalibration(['/tmp/c.csv', '--volcar-todo'], context)).toBe(1);
+    expect(await runCalibration(['/tmp/c.csv', '--volcar-todo'], context)).toBe(1);
     expect(textOf(context.capture)).toContain('opción desconocida');
     expect(textOf(context.capture)).not.toContain('--volcar-todo');
   });
 
-  it('el id del perfil no se confunde con el archivo', () => {
+  it('el id del perfil no se confunde con el archivo', async () => {
     // `--parser generico.cuenta /tmp/c.csv`: el id no empieza por `--`, así que
     // una búsqueda ingenua del primer argumento suelto lo toma como el archivo
     // y calibra un perfil contra su propio nombre.
     const context = io();
-    const code = runCalibration(['--parser', 'generico.cuenta', '/tmp/c.csv'], context);
+    const code = await runCalibration(['--parser', 'generico.cuenta', '/tmp/c.csv'], context);
 
     expect(code).toBe(0);
     expect(context.capture.reads).toEqual(['/tmp/c.csv']);
@@ -200,59 +201,59 @@ describe('fallar seguro', () => {
 });
 
 describe('dónde puede vivir una cartola', () => {
-  it('fuera del repositorio, sin preguntar nada', () => {
+  it('fuera del repositorio, sin preguntar nada', async () => {
     const context = io({
       isIgnored: () => {
         throw new Error('no se debería preguntar a Git por un archivo de fuera');
       },
     });
-    expect(runCalibration(['/home/usuario/Descargas/cartola.csv'], context)).toBe(0);
+    expect(await runCalibration(['/home/usuario/Descargas/cartola.csv'], context)).toBe(0);
   });
 
-  it('dentro del repositorio, sólo en samples/private/', () => {
+  it('dentro del repositorio, sólo en samples/private/', async () => {
     const context = io();
-    expect(runCalibration([`${REPO}/samples/private/cartola.csv`], context)).toBe(0);
+    expect(await runCalibration([`${REPO}/samples/private/cartola.csv`], context)).toBe(0);
   });
 
-  it('un directorio ignorado que no es samples/private/ ya no basta', () => {
+  it('un directorio ignorado que no es samples/private/ ya no basta', async () => {
     // `.ai/` está ignorado y es justo donde se acumulan informes que se pegan
     // en otros sitios. "Ignorado" y "es el lugar de las cartolas" no son la
     // misma propiedad.
     const context = io();
-    const code = runCalibration([`${REPO}/.ai/cartola.csv`], context);
+    const code = await runCalibration([`${REPO}/.ai/cartola.csv`], context);
 
     expect(code).toBe(1);
     expect(textOf(context.capture)).toContain('samples/private/');
   });
 
-  it('samples/private/ deja de bastar si alguien lo saca del .gitignore', () => {
+  it('samples/private/ deja de bastar si alguien lo saca del .gitignore', async () => {
     const context = io({ isIgnored: () => false });
-    expect(runCalibration([`${REPO}/samples/private/cartola.csv`], context)).toBe(1);
+    expect(await runCalibration([`${REPO}/samples/private/cartola.csv`], context)).toBe(1);
   });
 
-  it('un enlace simbólico no es una puerta lateral', () => {
+  it('un enlace simbólico no es una puerta lateral', async () => {
     // El enlace vive fuera; su destino está dentro del repositorio y sin
     // ignorar. Comparar la ruta escrita en vez de la resuelta lo aceptaría.
     const context = io({
       realpath: () => `${REPO}/addon/src/cartola.csv`,
       isIgnored: () => false,
     });
-    const code = runCalibration(['/home/usuario/enlace.csv'], context);
+    const code = await runCalibration(['/home/usuario/enlace.csv'], context);
 
     expect(code).toBe(1);
     expect(textOf(context.capture)).toContain('samples/private/');
   });
 
-  it('una ruta relativa con .. se juzga por donde termina', () => {
+  it('una ruta relativa con .. se juzga por donde termina', async () => {
     const context = io({ realpath: (path) => path.replace('/samples/private/../..', '') });
-    const code = runCalibration([`${REPO}/samples/private/../../addon/cartola.csv`], context);
+    const code = await runCalibration([`${REPO}/samples/private/../../addon/cartola.csv`], context);
 
     expect(code).toBe(1);
   });
 
-  it('el rechazo no repite ni siquiera la ruta relativa', () => {
+  it('el rechazo no repite ni siquiera la ruta relativa', async () => {
     const context = io();
-    runCalibration([`${REPO}/addon/cartola.csv`], context);
+    await runCalibration([`${REPO}/addon/cartola.csv`], context);
 
     expect(textOf(context.capture)).not.toContain('addon/cartola.csv');
     expect(textOf(context.capture)).not.toContain('/home/usuario');
@@ -284,12 +285,12 @@ describe('privacidad del informe', () => {
   ];
 
   for (const [what, needle] of FORBIDDEN) {
-    it(`el informe no contiene ${what}`, () => {
+    it(`el informe no contiene ${what}`, async () => {
       const context = io({
         readFile: () => new TextEncoder().encode(PRIVATE),
         stat: () => ({ isDirectory: false, size: PRIVATE.length }),
       });
-      runCalibration(['/home/usuario/CartolaRut_12345678_9.csv'], context);
+      await runCalibration(['/home/usuario/CartolaRut_12345678_9.csv'], context);
 
       expect(textOf(context.capture)).not.toContain(needle);
     });

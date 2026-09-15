@@ -8,6 +8,8 @@ import {
   formatReport,
   type CalibrationInput,
 } from './calibration';
+import { calibratePdf, formatPdfReport } from './pdf-calibration';
+import { pdfjsTextExtractor } from './pdf-extract';
 import { guardPrivateSample } from './sample-guard';
 
 /**
@@ -60,24 +62,39 @@ const USAGE = [
   'El archivo tiene que estar fuera del repositorio, o en samples/private/.',
   'Se lee en su sitio: no se copia, no se guarda y no se deja ningún rastro.',
   '--compare no imprime ninguna fila: sólo coincidencias, ausencias y',
-  'continuidad de cuotas entre los dos archivos.',
+  'continuidad de cuotas entre los dos archivos. Un PDF sólo admite',
+  'calibración de un archivo — no --compare, todavía.',
 ].join('\n');
 
 /** Runs one calibration, or a two-file comparison. Returns the process exit code. */
-export function runCalibration(argv: readonly string[], io: CalibrationIo): number {
+export async function runCalibration(argv: readonly string[], io: CalibrationIo): Promise<number> {
   const parsed = parseArguments(argv);
   if ('error' in parsed) return fail(io, `${parsed.error}\n\n${USAGE}`);
 
   if (parsed.compare) {
     const second = parsed.files[1];
     if (second === undefined) return fail(io, `--compare necesita dos archivos.\n\n${USAGE}`);
-    return runComparison(parsed.files[0] as string, second, parsed.parserId, io);
+    const first = parsed.files[0] as string;
+    if (isPdf(first) || isPdf(second)) {
+      return fail(io, `--compare todavía no admite PDF.\n\n${USAGE}`);
+    }
+    return runComparison(first, second, parsed.parserId, io);
   }
 
-  return runSingle(parsed.files[0] as string, parsed.parserId, io);
+  const file = parsed.files[0] as string;
+  if (isPdf(file)) return runSinglePdf(file, io);
+  return runSingle(file, parsed.parserId, io);
 }
 
-function runSingle(file: string, parserId: string | undefined, io: CalibrationIo): number {
+function isPdf(file: string): boolean {
+  return file.toLowerCase().endsWith('.pdf');
+}
+
+async function runSingle(
+  file: string,
+  parserId: string | undefined,
+  io: CalibrationIo,
+): Promise<number> {
   const loaded = loadCalibrationInput(file, parserId, io);
   if ('error' in loaded) return fail(io, loaded.error);
 
@@ -96,12 +113,28 @@ function runSingle(file: string, parserId: string | undefined, io: CalibrationIo
   return 0;
 }
 
-function runComparison(
+async function runSinglePdf(file: string, io: CalibrationIo): Promise<number> {
+  const loaded = loadGuardedBytes(file, io);
+  if ('error' in loaded) return fail(io, loaded.error);
+
+  let report: string;
+  try {
+    report = formatPdfReport(await calibratePdf(loaded.bytes, pdfjsTextExtractor));
+  } catch {
+    return fail(io, 'No se pudo interpretar el PDF. ¿Es realmente un PDF?');
+  }
+
+  io.stdout(`${report}\n`);
+  io.stderr(`\nLeído en su sitio. No se copió el archivo a ninguna parte.\n`);
+  return 0;
+}
+
+async function runComparison(
   fileA: string,
   fileB: string,
   parserId: string | undefined,
   io: CalibrationIo,
-): number {
+): Promise<number> {
   const loadedA = loadCalibrationInput(fileA, parserId, io);
   if ('error' in loadedA) return fail(io, loadedA.error);
   const loadedB = loadCalibrationInput(fileB, parserId, io);
@@ -122,12 +155,15 @@ function runComparison(
   return 0;
 }
 
-/** Every gate a single file goes through before it can be parsed at all. */
-function loadCalibrationInput(
+/**
+ * Every gate a file goes through before its bytes can be read at all —
+ * shared by the spreadsheet path and the PDF path, which diverge only in
+ * what they do with the bytes once they have them.
+ */
+function loadGuardedBytes(
   file: string,
-  parserId: string | undefined,
   io: CalibrationIo,
-): { input: CalibrationInput } | { error: string } {
+): { bytes: Uint8Array; name: string } | { error: string } {
   const resolved = io.realpath(file);
   if (resolved === undefined) return { error: 'El archivo indicado no existe.' };
 
@@ -157,10 +193,6 @@ function loadCalibrationInput(
     };
   }
 
-  if (parserId !== undefined && getParser(parserId) === undefined) {
-    return { error: `El perfil indicado no existe.\n\n${parserList()}` };
-  }
-
   let bytes: Uint8Array;
   try {
     bytes = io.readFile(resolved);
@@ -168,7 +200,23 @@ function loadCalibrationInput(
     return { error: 'No se pudo leer el archivo.' };
   }
 
-  const name = baseName(file);
+  return { bytes, name: baseName(file) };
+}
+
+/** Every gate a single spreadsheet file goes through before it can be parsed. */
+function loadCalibrationInput(
+  file: string,
+  parserId: string | undefined,
+  io: CalibrationIo,
+): { input: CalibrationInput } | { error: string } {
+  const guarded = loadGuardedBytes(file, io);
+  if ('error' in guarded) return guarded;
+  const { bytes, name } = guarded;
+
+  if (parserId !== undefined && getParser(parserId) === undefined) {
+    return { error: `El perfil indicado no existe.\n\n${parserList()}` };
+  }
+
   let workbook: ReturnType<typeof loadWorkbook>;
   try {
     workbook = withoutThirdPartyConsole(() => loadWorkbook({ name, bytes }));
