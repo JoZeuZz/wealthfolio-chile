@@ -1810,3 +1810,79 @@ No validado en este smoke (fuera de alcance de esta tranche): PDF import
 (no existe — sólo calibrador, ver `docs/BANK_FORMATS.md`), avance en
 efectivo, cargo de servicio del emisor, interés/impuesto en fila real,
 compra internacional — todos siguen `pending-real-sample`.
+
+---
+
+## Sesión 11 — P1 de review independiente sobre la tranche CMR real-sample
+
+**Ejecutada el 2026-09-15** contra la misma instancia persistente
+`wealthfolio/wealthfolio:3.8.0` (healthy, `Up 3 days` antes del redeploy).
+Objetivo: confirmar en UI real, con login real (`agent-browser`), los dos
+P1 de clasificación de esta ronda (marcador de pago anclado, cuota del
+ciclo siguiente vs. duplicado exacto) sobre los 3 fixes ya validados en
+Sesión 10. El P1 de transición histórica de fingerprint y el de privacidad
+del calibrador PDF quedan probados por `fakeHost`/unit tests
+(`tests/dedupe-legacy-cmr-transition.test.ts`,
+`tests/pdf-console-privacy.test.ts`) — no hay Activity legacy real que
+migrar en este host de pruebas, así que no hay nada que un smoke de UI
+demuestre ahí que el test de servicio no demuestre ya.
+
+### Preflight
+
+- `docker compose ps`: `healthy`, `Up 2 hours` antes del redeploy.
+- `./scripts/deploy-addon.sh`: build (`dist/addon.js` 934.12 kB, idéntico
+  al build de `pnpm verify`) + redeploy + restart del contenedor.
+- Login real vía formulario.
+- Baseline: `CMR Test` en `0 activities` (restaurado al final de Sesión 10).
+  `Banco Chile Test` y `BancoEstado Test` sin tocar.
+
+### Fixtures sintéticos (nunca comiteados, generados con `xlsx` en el
+scratchpad de sesión y borrados al terminar)
+
+Misma firma real de 6 columnas que Sesión 10
+(`FECHA;DESCRIPCION;TITULAR/ADICIONAL;MONTO;CUOTAS PENDIENTES;VALOR CUOTA`):
+
+- **Mes 1** (4 filas): compra normal, `PAGO TARJETA` (glosa real de pago),
+  **`COMERCIO PAGO TARJETA EXPRESS`** (comercio inventado cuyo nombre
+  CONTIENE la frase de pago — el caso exacto que la review reprodujo) y una
+  cuota activa (`MONTO` 300.000, `VALOR CUOTA` 50.000, `CUOTAS PENDIENTES`
+  5).
+- **Mes 2** (2 filas): otra compra normal, y la misma cuota un ciclo
+  después — misma fecha/monto/glosa que en Mes 1, `CUOTAS PENDIENTES` 4.
+
+### Resultados
+
+| Smoke | Resultado |
+| --- | --- |
+| Detección sin branding | Autodetección `Banco Falabella / CMR — tarjeta` **95%**, top de la lista — sin cambios respecto a Sesión 10 |
+| A. Pago CMR (`PAGO TARJETA`) | `Pago tarjeta` / `Pago de tarjeta`, `+$150.000` — `Transfer In` en Activities, no spending |
+| B. Comercio con la frase (`COMERCIO PAGO TARJETA EXPRESS`) | **`Compra tarjeta`**, `-$19.990` — `Withdrawal` en Activities, SÍ spending. Antes del fix de esta ronda esta fila habría salido `Pago tarjeta` por el substring matching libre — este es el caso que la review reprodujo, confirmado corregido en UI real, no sólo en unit test |
+| Cuota — monto correcto | `-$50.000` (`VALOR CUOTA`), nunca `-$300.000` |
+| Import Mes 1 | `4 detectados · 4 seleccionados · 4 creados · 0 fallaron · 0 duplicados exactos · 0 posibles duplicados` |
+| E. Reimport exacto de Mes 1 | Las 4 filas `Duplicado`, desmarcadas, botón "Confirmar e importar **0** movimientos" deshabilitado |
+| C/D. Import Mes 2 (cuota ciclo 2, remaining 5→4) | Compra nueva → `Nuevo` (seleccionada). Cuota (misma fecha/monto/glosa, remaining 4) → **`Posible duplicado`** (no `Duplicado` exacto), desmarcada por defecto — mismo comportamiento conservador que Sesión 10, sin regresión del fix de fingerprint |
+| Confirmación Mes 2 | `2 detectados · 1 seleccionado · 1 creado · 0 duplicados exactos · 1 posible duplicado` |
+| Estado final `CMR Test` | 5 activities: `Comercio Ficticio Uno` (Withdrawal 29.990), `Pago Tarjeta` (Transfer In 150.000), `Comercio Pago Tarjeta Express` (Withdrawal 19.990), `Tienda Ficticia Dos` (Withdrawal 50.000), `Comercio Ficticio Tres` (Withdrawal 15.000) |
+
+**Confirma en host real, no sólo en unit tests:** el fix de anclaje del
+marcador de pago (P1 #3) — sin él, `COMERCIO PAGO TARJETA EXPRESS` habría
+salido `Pago tarjeta`/`Transfer In` y desaparecido de spending, exactamente
+el falso positivo que reprodujo la review independiente.
+
+### Limpieza
+
+Las 5 activities de `CMR Test` se borraron una por una (menú `Open` →
+`Delete` → confirmar) hasta `0 activities` — baseline exacto restaurado.
+Los 2 XLSX sintéticos se borraron del scratchpad de sesión. `curl
+.../api/v1/healthz` → `ok`; `docker compose ps` → `healthy`. Ninguna otra
+cuenta fue tocada.
+
+Commits validados: `fix(falabella): require explicit CMR payment
+descriptions`, `fix(installments): scope remaining count to CMR semantics`
+(indirectamente, vía la fila de cuota sin contaminación).
+
+No validado en este smoke: la transición histórica de fingerprint (P1 #1
+— no hay Activity legacy real que reproducir en este host; evidencia es
+`tests/dedupe-legacy-cmr-transition.test.ts`) y el fix de privacidad del
+calibrador PDF (P1 #4 — el calibrador no importa ni escribe Activities;
+evidencia es `tests/pdf-console-privacy.test.ts`).
