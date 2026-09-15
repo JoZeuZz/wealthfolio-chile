@@ -504,6 +504,8 @@ describe('el informe y las cuotas', () => {
       unparsed: 0,
       ambiguousPlan: 0,
       ambiguousAmount: 0,
+      bareIntegerZero: 0,
+      bareIntegerPositive: 0,
     });
   });
 });

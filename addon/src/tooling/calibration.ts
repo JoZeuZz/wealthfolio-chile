@@ -1,4 +1,4 @@
-import { add, compare, negate, type Money } from '../core/money';
+import { abs, add, compare, negate, parseAmount, MoneyError, type Money } from '../core/money';
 import { Confidence, TransactionKind } from '../core/model/kinds';
 import type { NormalizedTransaction } from '../core/model/transaction';
 import {
@@ -9,18 +9,25 @@ import {
 } from '../core/model/statement';
 import { ColumnRole, detectHeader, mapColumns } from '../core/parsing/columns';
 import { describeColumnShape, type ColumnShape } from '../core/parsing/column-shape';
+import type { StatementProfile } from '../core/parsing/profile';
 import { readSpreadsheetCellFormats } from '../core/parsing/spreadsheet-cell-facts';
 import type { NativeCellType, NumberFormatShape } from '../core/parsing/spreadsheet-format';
 import type { Sheet } from '../core/parsing/tabular';
 import { pickDataSheet } from '../core/parsing/workbook';
 import { redactSensitive } from '../core/privacy';
+import { normalizeDescription } from '../core/text';
+import {
+  CARD_REVERSAL_MARKERS,
+  CARD_SIDE_PAYMENT_MARKERS,
+  CASH_SIDE_CARD_PAYMENT_MARKERS,
+} from '../core/classify/card-semantics';
 import {
   cardFactLabel,
   factPresence,
   type FactPresence,
 } from '../core/model/statement-facts';
 import { detectAll, getParser } from '../core/providers/registry';
-import type { ParserInput } from '../core/providers/parser';
+import type { ParserInput, StatementParser } from '../core/providers/parser';
 import { mergeSynonyms } from '../core/providers/profile-parser';
 
 /**
@@ -87,6 +94,40 @@ export interface CalibrationReport {
    * bank guess.
    */
   rowFailureReasons: Array<{ reason: string; count: number }>;
+  /**
+   * How the general amount column relates to the labelled instalment column,
+   * on rows where both are present.
+   *
+   * Never the values, only whether they agree. The question this answers is
+   * exactly the ambiguity `banco-falabella.cmr` is marked `pending-real-sample`
+   * over (see its `validationNotes`), and it can be answered from a
+   * relationship between two columns without ever reading either one.
+   */
+  amountRelationship?: AmountRelationshipFacts;
+  /**
+   * Candidate vocabulary hits among rows the classifier left `unknown`.
+   *
+   * Every marker here is either an existing production list from
+   * `core/classify/card-semantics` (to show *none* of them matched, which is
+   * exactly why the row is unknown) or a plausible addition proposed for
+   * calibration, never yet compiled into a classifier. A boolean per
+   * category, counted — never the row's own text.
+   */
+  unknownVocabulary: VocabularyFacts[];
+}
+
+export interface AmountRelationshipFacts {
+  /** Both columns parsed to the same magnitude. */
+  equal: number;
+  /** Both present, magnitudes differ. */
+  different: number;
+  /** One or both columns were empty or unparseable. */
+  oneMissing: number;
+}
+
+export interface VocabularyFacts {
+  category: string;
+  rows: number;
 }
 
 export interface FileFacts {
@@ -219,6 +260,18 @@ export interface InstallmentFacts {
   ambiguousPlan: number;
   /** Rows carrying `ambiguous-installment-amount` (plan certain, amount role unclear). */
   ambiguousAmount: number;
+  /**
+   * Of `unparsed`, how many are a bare integer — not an `n de m` pair.
+   *
+   * `detectInstallment` only reads a `current/total` pair; a column that
+   * prints a single remaining-cuotas count (never a plan) is invisible to it
+   * and lands entirely in `unparsed` with no further signal. This is the one
+   * count that separates "the column uses a format nothing reads yet" from
+   * "the column is genuinely unparseable" — never the count's own value,
+   * only whether it read as zero (no plan open) or a positive remainder.
+   */
+  bareIntegerZero: number;
+  bareIntegerPositive: number;
 }
 
 /**
@@ -296,7 +349,126 @@ export function calibrate(input: CalibrationInput): CalibrationReport {
     })(),
     issues: issueFacts(validation),
     rowFailureReasons: rowFailureReasonFacts(statement),
+    ...(() => {
+      const facts = amountRelationshipFacts(statement.transactions, parser.profile);
+      return facts ? { amountRelationship: facts } : {};
+    })(),
+    unknownVocabulary: unknownVocabularyFacts(statement.transactions),
   };
+}
+
+/**
+ * Compares the `amount` and `installmentAmount` columns row by row, on
+ * whichever rows carry both. Absent entirely when the profile has neither
+ * column mapped, or when no row carries both filled in — there is nothing to
+ * relate.
+ */
+function amountRelationshipFacts(
+  transactions: readonly NormalizedTransaction[],
+  profile: StatementProfile,
+): AmountRelationshipFacts | undefined {
+  let equal = 0;
+  let different = 0;
+  let oneMissing = 0;
+  let sawEitherColumn = false;
+
+  for (const transaction of transactions) {
+    const amountText = transaction.rawMetadata[ColumnRole.amount];
+    const installmentText = transaction.rawMetadata[ColumnRole.installmentAmount];
+    if (amountText === undefined && installmentText === undefined) continue;
+    sawEitherColumn = true;
+
+    const a = tryParseAmount(amountText, profile);
+    const b = tryParseAmount(installmentText, profile);
+    if (!a || !b) {
+      oneMissing += 1;
+      continue;
+    }
+    if (compare(abs(a), abs(b)) === 0) equal += 1;
+    else different += 1;
+  }
+
+  return sawEitherColumn ? { equal, different, oneMissing } : undefined;
+}
+
+function tryParseAmount(text: string | undefined, profile: StatementProfile): Money | undefined {
+  if (text === undefined || text.trim() === '') return undefined;
+  try {
+    return parseAmount(text, {
+      currency: profile.defaultCurrency,
+      format: profile.numberFormat,
+      allowDebitCreditSuffix: true,
+    }).money;
+  } catch (error) {
+    if (error instanceof MoneyError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Candidate description vocabulary, probed only against rows the classifier
+ * already gave up on (`TransactionKind.unknown`).
+ *
+ * The three production lists are included so a calibration run can show that
+ * *none* of them matched — the reason the row is unknown in the first place.
+ * The rest are calibration-only candidates: plausible Chilean card wording
+ * that has never been confirmed against a real statement, proposed here so a
+ * hit can promote it to a production marker with evidence behind it, never
+ * as a guess compiled straight into the classifier.
+ */
+const VOCABULARY_CANDIDATES: Readonly<Record<string, readonly string[]>> = {
+  'production: cash-side card payment': CASH_SIDE_CARD_PAYMENT_MARKERS,
+  'production: card-side payment': CARD_SIDE_PAYMENT_MARKERS,
+  'production: reversal': CARD_REVERSAL_MARKERS,
+  'candidate: issuer service charge': [
+    'SERVICIO DE ADMINISTRACION',
+    'COMISION ADMINISTRACION',
+    'ADMINISTRACION TARJETA',
+    'MANTENCION TARJETA',
+    'CARGO MANTENCION',
+  ],
+  'candidate: payment channel': [
+    'PAGO SUCURSAL',
+    'PAGO CAJA',
+    'PAGO PORTAL',
+    'PAGO WEB',
+    'PAGO SERVIPAG',
+    'PAGO ONLINE',
+    'PAGO APP',
+  ],
+  'candidate: international marker': ['INTERNACIONAL', 'EXTRANJERO', 'EXTERIOR'],
+};
+
+/**
+ * Per-marker, not per-category: knowing *one* candidate in a list of nine
+ * matched every unknown row does not say which phrase to add to production.
+ * A marker string is fixed reference vocabulary the tool ships with — not
+ * text read out of the private file — so naming it in the report is no
+ * different from naming the category it came from.
+ */
+function unknownVocabularyFacts(transactions: readonly NormalizedTransaction[]): VocabularyFacts[] {
+  const unknown = transactions.filter((transaction) => transaction.kind === TransactionKind.unknown);
+  const facts: VocabularyFacts[] = [];
+  for (const [category, markers] of Object.entries(VOCABULARY_CANDIDATES)) {
+    for (const marker of markers) {
+      const rows = unknown.filter((transaction) => mentionsAny(transaction.description, [marker])).length;
+      if (rows > 0) facts.push({ category: `${category}: ${marker}`, rows });
+    }
+  }
+  // Categories with zero hits still matter — they are why calibration was
+  // needed — so report one summary line per category even when every one of
+  // its markers scored zero.
+  for (const category of Object.keys(VOCABULARY_CANDIDATES)) {
+    if (!facts.some((fact) => fact.category.startsWith(`${category}:`))) {
+      facts.push({ category, rows: 0 });
+    }
+  }
+  return facts;
+}
+
+function mentionsAny(description: string, markers: readonly string[]): boolean {
+  const text = normalizeDescription(description ?? '');
+  return markers.some((marker) => text.includes(normalizeDescription(marker)));
 }
 
 /**
@@ -602,9 +774,12 @@ function installmentFacts(transactions: readonly NormalizedTransaction[]): Insta
   let unparsed = 0;
   let ambiguousPlan = 0;
   let ambiguousAmount = 0;
+  let bareIntegerZero = 0;
+  let bareIntegerPositive = 0;
 
   for (const transaction of transactions) {
-    const cellPresent = transaction.rawMetadata[ColumnRole.installment] !== undefined;
+    const rawCell = transaction.rawMetadata[ColumnRole.installment];
+    const cellPresent = rawCell !== undefined;
     if (cellPresent) cellsPresent += 1;
     else cellsEmpty += 1;
 
@@ -614,6 +789,10 @@ function installmentFacts(transactions: readonly NormalizedTransaction[]): Insta
       if (transaction.installment.confidence === Confidence.suggested) suggested += 1;
     } else if (cellPresent) {
       unparsed += 1;
+      if (rawCell !== undefined && /^\d{1,3}$/.test(rawCell.trim())) {
+        if (Number(rawCell.trim()) === 0) bareIntegerZero += 1;
+        else bareIntegerPositive += 1;
+      }
     }
 
     for (const warning of transaction.warnings) {
@@ -622,7 +801,18 @@ function installmentFacts(transactions: readonly NormalizedTransaction[]): Insta
     }
   }
 
-  return { cellsPresent, cellsEmpty, parsed, confirmed, suggested, unparsed, ambiguousPlan, ambiguousAmount };
+  return {
+    cellsPresent,
+    cellsEmpty,
+    parsed,
+    confirmed,
+    suggested,
+    unparsed,
+    ambiguousPlan,
+    ambiguousAmount,
+    bareIntegerZero,
+    bareIntegerPositive,
+  };
 }
 
 function issueFacts(validation: ValidationResult): CalibrationReport['issues'] {
@@ -755,6 +945,8 @@ export function formatReport(report: CalibrationReport): string {
   add('Plan reconocido', report.installments.parsed);
   add('  confirmado / sugerido', `${report.installments.confirmed} / ${report.installments.suggested}`);
   add('Celda presente sin plan', report.installments.unparsed);
+  add('  entero simple en 0 / >0',
+    `${report.installments.bareIntegerZero} / ${report.installments.bareIntegerPositive}`);
   add('Aviso: lectura incierta', report.installments.ambiguousPlan);
   add('Aviso: monto de cuota incierto', report.installments.ambiguousAmount);
 
@@ -764,6 +956,193 @@ export function formatReport(report: CalibrationReport): string {
       lines.push(`  ${String(issue.count).padStart(5)}  [${issue.level}] ${issue.code}`);
     }
   }
+
+  if (report.amountRelationship) {
+    lines.push('', '── Monto vs. cuota ───────────────────────────────────────');
+    add('Iguales / distintos / incompletos',
+      `${report.amountRelationship.equal} / ${report.amountRelationship.different} / ${report.amountRelationship.oneMissing}`);
+  }
+
+  if (report.unknownVocabulary.some((entry) => entry.rows > 0) || report.classification.unknown > 0) {
+    lines.push('', '── Vocabulario en filas sin clasificar ──────────────────');
+    for (const entry of report.unknownVocabulary) {
+      lines.push(`  ${String(entry.rows).padStart(5)}  ${entry.category}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Cross-statement comparison, entirely in memory.
+ *
+ * Two exports of the same product — two months, or a PDF and an XLSX of the
+ * same cycle — can describe the same movement twice. The question a policy
+ * decision needs answered is never "what do these movements say" but "how
+ * many are the same one": matched, unmatched, and — for an open instalment
+ * plan specifically — whether the remaining-cuotas count decreases the way a
+ * continuing plan should and whether the date the row carries moves between
+ * statements or stays fixed. The last of those is load-bearing for dedupe: a
+ * fingerprint keyed on a date that does not advance between cycles would
+ * treat the second cuota as a repeat of the first.
+ *
+ * The match key is the normalised description and the resolved amount —
+ * never printed, only counted — so nothing in this report is a movement's
+ * own text.
+ */
+export interface CompareInput {
+  a: CalibrationInput;
+  b: CalibrationInput;
+}
+
+export interface ComparisonReport {
+  parserA: string;
+  parserB: string;
+  rowsA: number;
+  rowsB: number;
+  matched: number;
+  onlyA: number;
+  onlyB: number;
+  /** Of matched pairs, how many carry the exact same `date` in both files. */
+  sameDate: number;
+  differentDate: number;
+  installmentContinuity: {
+    /** Matched pairs where either side's bare instalment cell is positive. */
+    candidates: number;
+    /** B's remaining count is exactly one less than A's — a plan advancing normally. */
+    remainingDecreasedByOne: number;
+    /** Present on both sides but not a clean one-step decrease — worth a manual look. */
+    remainingOther: number;
+    /** Of `candidates`, how many keep the exact same `date` across both files. */
+    sameDate: number;
+    differentDate: number;
+  };
+}
+
+export function compareStatements(input: CompareInput): ComparisonReport {
+  const { parser: parserA, statement: statementA } = parseForComparison(input.a);
+  const { parser: parserB, statement: statementB } = parseForComparison(input.b);
+
+  const poolB = new Map<string, NormalizedTransaction[]>();
+  for (const transaction of statementB.transactions) {
+    const key = matchKey(transaction);
+    const bucket = poolB.get(key);
+    if (bucket) bucket.push(transaction);
+    else poolB.set(key, [transaction]);
+  }
+
+  let matched = 0;
+  let onlyA = 0;
+  let sameDate = 0;
+  let differentDate = 0;
+  let candidates = 0;
+  let remainingDecreasedByOne = 0;
+  let remainingOther = 0;
+  let candidateSameDate = 0;
+  let candidateDifferentDate = 0;
+
+  for (const a of statementA.transactions) {
+    const bucket = poolB.get(matchKey(a));
+    const match = bucket?.shift();
+    if (!match) {
+      onlyA += 1;
+      continue;
+    }
+    matched += 1;
+    const isSameDate = a.date === match.date;
+    if (isSameDate) sameDate += 1;
+    else differentDate += 1;
+
+    const bareA = bareInstallmentValue(a);
+    const bareB = bareInstallmentValue(match);
+    if ((bareA !== undefined && bareA > 0) || (bareB !== undefined && bareB > 0)) {
+      candidates += 1;
+      if (isSameDate) candidateSameDate += 1;
+      else candidateDifferentDate += 1;
+      if (bareA !== undefined && bareB !== undefined && bareB === bareA - 1) {
+        remainingDecreasedByOne += 1;
+      } else {
+        remainingOther += 1;
+      }
+    }
+  }
+  const onlyB = [...poolB.values()].reduce((sum, bucket) => sum + bucket.length, 0);
+
+  return {
+    parserA: parserA.id,
+    parserB: parserB.id,
+    rowsA: statementA.transactions.length,
+    rowsB: statementB.transactions.length,
+    matched,
+    onlyA,
+    onlyB,
+    sameDate,
+    differentDate,
+    installmentContinuity: {
+      candidates,
+      remainingDecreasedByOne,
+      remainingOther,
+      sameDate: candidateSameDate,
+      differentDate: candidateDifferentDate,
+    },
+  };
+}
+
+function parseForComparison(input: CalibrationInput): {
+  parser: StatementParser;
+  statement: ParsedStatement;
+} {
+  const parserInput: ParserInput = {
+    file: { name: input.fileName, bytes: input.bytes },
+    sheets: input.sheets,
+    fileHash: input.fileHash,
+    accountId: input.accountId,
+  };
+  const detections = detectAll(parserInput);
+  const chosenId = input.parserId ?? detections[0]?.parser;
+  const parser = chosenId ? getParser(chosenId) : undefined;
+  if (!parser) {
+    throw new Error(
+      'Ningún perfil reconoció uno de los archivos. Indica --parser <id> para ambos.',
+    );
+  }
+  return { parser, statement: parser.parse(parserInput) };
+}
+
+function matchKey(transaction: NormalizedTransaction): string {
+  return [
+    transaction.normalizedDescription,
+    transaction.amount.currency,
+    String(transaction.amount.minor),
+    String(transaction.amount.scale),
+  ].join('::');
+}
+
+/** A bare remaining-cuotas integer the column carries but `detectInstallment` did not parse. */
+function bareInstallmentValue(transaction: NormalizedTransaction): number | undefined {
+  if (transaction.installment !== undefined) return undefined;
+  const raw = transaction.rawMetadata[ColumnRole.installment];
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  return /^\d{1,3}$/.test(trimmed) ? Number(trimmed) : undefined;
+}
+
+export function formatComparisonReport(report: ComparisonReport): string {
+  const lines: string[] = [];
+  const add = (label: string, value: string | number) => lines.push(`${label.padEnd(28)}${value}`);
+
+  lines.push('── Comparación entre dos archivos ───────────────────────');
+  add('Perfil A / B', `${report.parserA} / ${report.parserB}`);
+  add('Filas A / B', `${report.rowsA} / ${report.rowsB}`);
+  add('Coincidencias', report.matched);
+  add('Sólo en A / sólo en B', `${report.onlyA} / ${report.onlyB}`);
+  add('  misma fecha / distinta', `${report.sameDate} / ${report.differentDate}`);
+
+  lines.push('', '── Continuidad de cuotas ─────────────────────────────────');
+  add('Candidatas (cuota activa)', report.installmentContinuity.candidates);
+  add('  misma fecha / distinta', `${report.installmentContinuity.sameDate} / ${report.installmentContinuity.differentDate}`);
+  add('  bajó en exactamente 1', report.installmentContinuity.remainingDecreasedByOne);
+  add('  otro patrón', report.installmentContinuity.remainingOther);
 
   return lines.join('\n');
 }
