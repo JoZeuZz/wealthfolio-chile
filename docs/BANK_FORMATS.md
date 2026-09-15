@@ -72,7 +72,17 @@ qué sí y qué no):
   en el 100 % de las filas reales. `detectInstallment` (que sólo lee el
   patrón `n de m`) no reconoció ningún plan en las 130 filas reales; nueva
   lectura dedicada en `detectRemainingInstallments`
-  (`core/installments/detect.ts`), que nunca infiere un total.
+  (`core/installments/detect.ts`), que nunca infiere un total. **Sólo esta
+  columna alimenta `installmentRemaining`** (review independiente, P1):
+  `ColumnRole.installment` se resuelve por un encabezado genérico (`CUOTA`,
+  `CUOTAS`, ...) compartido por todos los bancos, así que una columna
+  `Cuotas` de Banco de Chile o de un perfil genérico caía en el mismo rol de
+  columna sin ser un conteo restante — `Cuotas = 6` (total del plan) se leía
+  como "quedan 6 cuotas", cambiando el fingerprint de esa fila sin ninguna
+  evidencia detrás. `StatementProfile.remainingInstallmentHeaders` ahora
+  declara explícitamente qué encabezado exacto tiene esa semántica; sólo
+  `banco-falabella.cmr` lo declara (`CUOTAS PENDIENTES`). Recalibrado contra
+  las 4 muestras reales tras el fix: mismos conteos que antes.
 - **La fecha de una cuota activa no avanza entre ciclos**: comparación
   cruzada de 2 estados de cuenta reales consecutivos mostró la misma `FECHA`
   en la cuota 1 y la cuota 2 de la misma compra, con `CUOTAS PENDIENTES`
@@ -82,7 +92,13 @@ qué sí y qué no):
 - **Pagos**: el 100 % de las filas `unknown`/`ambiguous-card-credit` (13 de
   130) contenían la frase `PAGO TARJETA` — vocabulario propio del lado
   tarjeta de CMR, distinto al de Banco de Chile. Agregado a
-  `CARD_SIDE_PAYMENT_MARKERS`.
+  `CARD_SIDE_PAYMENT_MARKERS`. El matcher es **anclado al inicio de la
+  glosa normalizada**, no substring libre (review independiente, P1): un
+  comercio real llamado, por ejemplo, "COMERCIO PAGO TARJETA EXPRESS" trae
+  la misma frase en medio de su propio nombre y no debe leerse como pago —
+  sólo la glosa que el banco emite como PROPIA línea de pago, que empieza
+  con el marcador, cuenta. Recalibrado contra las 4 muestras reales tras el
+  fix: mismos conteos de `credit_card_payment` que antes (0 regresiones).
 - **Devoluciones**: 2 filas reales clasificaron correctamente como `refund`
   con los marcadores de reversa ya existentes — sin cambios necesarios.
 
@@ -137,6 +153,18 @@ Hallazgos, consistentes en los 3 PDF:
 Import PDF, cuando se aborde, tendrá que resolver la política de fuente dual
 (XLSX vs PDF del mismo ciclo) — sin resolver todavía, ver el informe técnico
 de esta tranche.
+
+**Frontera de privacidad del calibrador PDF, cerrada (review independiente,
+P1).** `pdfjs-dist` escribe texto derivado del propio documento a
+`console.log`/`warn` por su cuenta (confirmado leyendo el paquete: `info()`/
+`warn()` interpolan, entre otras cosas, nombres de fuente del PDF) — un canal
+lateral que la sanitización de `calibratePdf`/`formatPdfReport` nunca toca,
+porque sólo ve las líneas ya reconstruidas, no la salida cruda de pdfjs.
+`pdfjsTextExtractor` ahora envuelve todo el ciclo de vida del documento
+(`getDocument` → `getPage`/`getTextContent` → `destroy`) en una supresión de
+consola local a ese módulo, siempre restaurada en `finally`, sin ocultar el
+error que el calibrador convierte en código fijo. Cerrado antes de ejecutar
+`pnpm calibrate` contra cualquier PDF real de este ciclo.
 
 ---
 

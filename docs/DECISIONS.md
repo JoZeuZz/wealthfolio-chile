@@ -506,3 +506,47 @@ nada que se haya publicado produjo jamás este campo.
 **Estado.** Implementado y probado (`tests/cmr.test.ts`, `tests/host-authority.test.ts`,
 `tests/installments.test.ts`) contra evidencia real de 4 estados de cuenta XLSX.
 Sin validar contra host real todavía — ver `docs/HOST_VALIDATION.md`.
+
+**Addendum (review independiente, P1 — 2026-09-15).** Cuatro correcciones
+sobre lo de arriba, cada una con commit y tests propios:
+
+1. **El conteo restante quedó contaminando otros bancos.**
+   `ColumnRole.installment` se resuelve por un encabezado genérico (`CUOTA`,
+   `CUOTAS`, ...), así que una columna `Cuotas` de Banco de Chile o de un
+   perfil genérico — que nombra el TOTAL de un plan, no lo que falta —
+   alimentaba `installmentRemaining` igual que la `CUOTAS PENDIENTES` real
+   de CMR. `StatementProfile.remainingInstallmentHeaders` ahora declara
+   explícitamente qué encabezado exacto tiene esa semántica; sólo
+   `banco-falabella.cmr` lo declara. Ver `tests/installment-remaining-scope.test.ts`.
+
+2. **La transición histórica de fingerprint necesitaba guardia, no sólo
+   comentario.** El párrafo "El fingerprint tuvo que incorporar el conteo"
+   de arriba es correcto sobre fingerprints NUEVOS, pero no decía qué pasa
+   con una Activity que este mismo parser escribió ANTES de ese cambio: su
+   fingerprint no incluye el conteo, así que reimportar el mismo archivo la
+   dejaba fuera de ambas búsquedas (fuerte y débil) y la fila salía `new`.
+   `FALABELLA_CARD.parserVersion` subió a `0.2.0` y
+   `core/dedupe/classify.ts#isLegacyIncompatibleCmrSource` extiende el mismo
+   guard `legacy-source-conflict` que ya existía para
+   `banco-chile.tarjeta` — estrecho a `sourceFileHash` igual, para no
+   bloquear la cuota del ciclo siguiente (archivo distinto). Ver
+   `tests/dedupe-legacy-cmr-transition.test.ts`. No se migran Activities
+   antiguas automáticamente; el guard sólo bloquea el reimport para revisión
+   manual.
+
+3. **El marcador de pago era substring libre.** `PAGO TARJETA` como
+   substring convertía cualquier comercio cuyo nombre lo contuviera (p. ej.
+   "COMERCIO PAGO TARJETA EXPRESS") en `credit_card_payment`. El matcher
+   ahora exige que el marcador ABRA la glosa normalizada. Ver
+   `tests/card-payment-anchoring.test.ts`.
+
+4. **El calibrador PDF filtraba texto del documento por consola.**
+   `pdfjs-dist` escribe internamente a `console.log`/`warn`, un canal que
+   la sanitización propia del calibrador no controla. Cerrado con una
+   supresión de consola local al ciclo de vida del documento en
+   `pdf-extract.ts`. Ver `tests/pdf-console-privacy.test.ts`.
+
+Las cuatro se recalibraron contra las 4 muestras XLSX reales de CMR y una
+muestra real de Banco de Chile tarjeta (canal `pnpm calibrate` únicamente):
+mismos conteos de clasificación y de cuotas que antes de estos fixes — cero
+regresión observada.
