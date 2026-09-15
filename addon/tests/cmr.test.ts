@@ -32,7 +32,7 @@ import { fromText } from './fixtures';
  * distingue cuotas consecutivas» más abajo.
  */
 
-function prepareCmr(rows: string[], header = 'Fecha;Descripcion;Monto;Cuotas') {
+function prepareCmr(rows: string[], header = 'Fecha;Descripcion;Monto;Cuotas Pendientes') {
   return prepareImport({
     file: fromText(
       'cmr.csv',

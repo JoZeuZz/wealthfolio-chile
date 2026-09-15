@@ -94,6 +94,19 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
       ? normalizeHeader((sheet.rows[firstDataRow - 1] as string[] | undefined)?.[map.directionFlag] ?? '')
       : undefined;
 
+  // `ColumnRole.installment` is resolved from a bank-agnostic header list, so
+  // it can point at a column that is NOT a remaining-cuotas count on this
+  // profile (Banco de Chile's own `Cuotas` names a plan's total length, not
+  // what remains). Only a header this profile explicitly lists as such may
+  // feed `installmentRemaining` — see `StatementProfile.remainingInstallmentHeaders`.
+  const remainingInstallmentHeaders = (profile.remainingInstallmentHeaders ?? []).map(normalizeHeader);
+  const installmentColumnIsRemainingCount =
+    map.installment !== undefined &&
+    firstDataRow > 0 &&
+    remainingInstallmentHeaders.includes(
+      normalizeHeader((sheet.rows[firstDataRow - 1] as string[] | undefined)?.[map.installment] ?? ''),
+    );
+
   const transactions: NormalizedTransaction[] = [];
   const issues: StatementIssue[] = [...describeDateOrder(dateOrder, profile)];
   let dataRows = 0;
@@ -126,6 +139,7 @@ export function mapRows(input: MapRowsInput): MapRowsResult {
         accountRef,
         dateOrder: dateOrder.order,
         ...(directionFlagHeader !== undefined ? { directionFlagHeader } : {}),
+        installmentColumnIsRemainingCount,
         ...(profile.dateOmitsYear ? { yearHint } : {}),
         ...(columnNumberFormats !== undefined ? { columnNumberFormats } : {}),
       });
@@ -164,6 +178,8 @@ interface MapRowInput {
   dateOrder: StatementProfile['dateOrder'];
   /** The direction column's heading, normalised. See {@link readDirectionFlag}. */
   directionFlagHeader?: string;
+  /** Whether this profile's `installment` column is a declared remaining-count. See {@link MapRowsInput}. */
+  installmentColumnIsRemainingCount: boolean;
   /** The period declared by the file, for a date cell that names no year. */
   yearHint?: DateYearHint;
   /** Resolved per-column `numberFormat` overrides. See {@link MapRowsInput}. */
@@ -277,9 +293,13 @@ function mapRow(input: MapRowInput): NormalizedTransaction | null {
   // A dedicated column that prints only a running remaining-cuotas count —
   // never a `current/total` pair — is invisible to `detectInstallment`
   // above, which only reads that shape. Confirmed against real CMR Banco
-  // Falabella statements (2026-09): see `detectRemainingInstallments`.
+  // Falabella statements (2026-09): see `detectRemainingInstallments`. Read
+  // only when THIS profile declares its `installment` column to actually
+  // carry that semantics — see `installmentColumnIsRemainingCount`.
   const installmentRemaining =
-    installment === undefined ? detectRemainingInstallments(installmentColumnText) : undefined;
+    installment === undefined && input.installmentColumnIsRemainingCount
+      ? detectRemainingInstallments(installmentColumnText)
+      : undefined;
 
   // The row says it is part of a plan, and the amount came from a column the
   // statement did not label. `MONTO` next to `2 de 6` is either this month's

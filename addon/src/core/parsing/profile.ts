@@ -173,6 +173,25 @@ export interface StatementProfile {
   ignoreRowPatterns?: RegExp[];
 
   /**
+   * Exact header text (matched via {@link normalizeHeader}) whose column
+   * carries a remaining-cuotas COUNT — never a `current/total` pair — for
+   * `core/installments/detect.ts#detectRemainingInstallments`.
+   *
+   * `ColumnRole.installment` is resolved from a bank-agnostic header list
+   * (`CUOTA`, `CUOTAS`, ...), so any bank whose export happens to have a
+   * column named `Cuotas` maps to that role — including Banco de Chile,
+   * where the same header names the plan's TOTAL length, not what remains.
+   * Header syntax is not financial semantics: without this gate, `Cuotas =
+   * 6` on a Banco de Chile row was read as "6 cuotas remaining", a claim
+   * with no evidence behind it, and it changed that row's fingerprint for
+   * no CMR-shaped reason. Only a header listed here — CMR's own `CUOTAS
+   * PENDIENTES` — may feed `installmentRemaining`; every other profile
+   * leaves the field undefined regardless of what its `installment` column
+   * contains.
+   */
+  remainingInstallmentHeaders?: string[];
+
+  /**
    * How much the running-balance column can be trusted to prove the parse.
    *
    * `authoritative` — the balance column is known to walk exactly, so a single

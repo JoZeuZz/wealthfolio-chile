@@ -40,6 +40,11 @@ export const FALABELLA_CARD: StatementProfile = {
     [ColumnRole.card]: ['Tarjeta', 'N Tarjeta'],
     [ColumnRole.category]: ['Rubro', 'Categoria'],
   },
+  // Confirmado contra 4 estados de cuenta reales (2026-09): la columna real
+  // se llama "CUOTAS PENDIENTES" y porta un conteo restante, nunca un par
+  // n/m. Ningún otro banco declara este campo, así que ningún otro profile
+  // puede alimentar `installmentRemaining` — ver `StatementProfile.remainingInstallmentHeaders`.
+  remainingInstallmentHeaders: ['CUOTAS PENDIENTES'],
   ignoreRowPatterns: [/^TOTAL/i, /^CUPO/i, /^PAGO\s+M[IÍ]NIMO/i],
   // Sin una cartola real no hay evidencia de que la columna de saldo camine
   // exacta, así que un desajuste aislado se informa y no bloquea.
