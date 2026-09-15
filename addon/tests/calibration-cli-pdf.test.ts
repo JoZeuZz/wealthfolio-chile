@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runCalibration, type CalibrationIo } from '../src/tooling/cli';
 
 /**
@@ -76,6 +76,55 @@ describe('calibración de un PDF', () => {
 
     expect(textOf(context.capture)).not.toContain('SUPERMERCADO SECRETO');
     expect(textOf(context.capture)).not.toContain('987.654');
+  });
+
+  /**
+   * P1 (review independiente) — el mismo camino productivo del CLI, con los
+   * sentinels exactos de la review, capturando TODOS los canales que un
+   * proceso real puede escribir: `console.log/warn/error` además de
+   * stdout/stderr. El leak reportado era en `console`, no en `io.stdout`, así
+   * que un test que sólo mirara `textOf(context.capture)` no lo habría
+   * detectado — ver `pdf-console-privacy.test.ts` para el mecanismo aislado.
+   */
+  it('P1: ningún sentinel llega a ningún canal (console incluido), extremo a extremo', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([420, 300]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const sentinels = [
+      'JOSE PRIVATE PERSON',
+      '11111111-1',
+      'SECRET MERCHANT XYZ',
+      '9999201234567890',
+      'PRIVATE ADDRESS',
+    ];
+    let y = 260;
+    for (const sentinel of sentinels) {
+      page.drawText(sentinel, { x: 20, y, size: 10, font });
+      y -= 20;
+    }
+    const bytes = await doc.save();
+    const context = io(bytes);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const code = await runCalibration(['/tmp/estado-sentinel.pdf'], context);
+      expect(code).toBe(0);
+
+      const consoleText = [...log.mock.calls, ...warn.mock.calls, ...error.mock.calls]
+        .map((call) => call.map(String).join(' '))
+        .join('\n');
+      const everything = `${textOf(context.capture)}\n${consoleText}`;
+
+      for (const sentinel of sentinels) {
+        expect(everything).not.toContain(sentinel);
+      }
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+      error.mockRestore();
+    }
   });
 
   it('un PDF corrupto da un diagnóstico, no un stack', async () => {

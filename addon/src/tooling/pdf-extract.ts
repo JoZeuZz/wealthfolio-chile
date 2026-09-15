@@ -9,25 +9,66 @@ import type { PdfTextExtractor } from './pdf-calibration';
  */
 export const pdfjsTextExtractor: PdfTextExtractor = {
   async extractPages(bytes: Uint8Array): Promise<string[][]> {
-    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    const doc = await getDocument({ data: bytes, isEvalSupported: false }).promise;
-    try {
-      const pages: string[][] = [];
-      for (let i = 1; i <= doc.numPages; i += 1) {
-        const page = await doc.getPage(i);
-        try {
-          const content = await page.getTextContent();
-          pages.push(reconstructLines(content.items));
-        } finally {
-          page.cleanup();
+    return withoutPdfjsConsole(async () => {
+      const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+      // `verbosity: 0` (`ERRORS` only) is pdfjs-dist's own switch for its
+      // internal `info`/`warn` logging — both write through `console.log`,
+      // gated by this level. Lowering it is not the whole guarantee: at
+      // least one internal path (`console.log("Deprecated API usage: ...")`)
+      // is not gated by verbosity at all, so `withoutPdfjsConsole` below is
+      // what actually closes the leak; this is defense in depth.
+      const doc = await getDocument({ data: bytes, isEvalSupported: false, verbosity: 0 }).promise;
+      try {
+        const pages: string[][] = [];
+        for (let i = 1; i <= doc.numPages; i += 1) {
+          const page = await doc.getPage(i);
+          try {
+            const content = await page.getTextContent();
+            pages.push(reconstructLines(content.items));
+          } finally {
+            page.cleanup();
+          }
         }
+        return pages;
+      } finally {
+        await doc.destroy();
       }
-      return pages;
-    } finally {
-      await doc.destroy();
-    }
+    });
   },
 };
+
+/**
+ * Suppresses `console.log`/`warn`/`error` for the full lifetime of a pdfjs
+ * document — `getDocument` through `getPage`/`getTextContent` to `destroy`.
+ *
+ * pdfjs-dist can print document-derived text through its own `console.log`
+ * calls (font names, structure warnings) that never pass through this
+ * project's redaction — a channel `calibratePdf`'s own privacy contract
+ * cannot see or control, because it never touches raw pdfjs output itself.
+ * Scoped to this one call, not the addon globally, and always restored in
+ * `finally` so a throw still tears the suppression down — the error itself
+ * still propagates, so `calibratePdf`'s caller can still turn it into a
+ * fixed diagnostic code.
+ */
+async function withoutPdfjsConsole<T>(operation: () => Promise<T>): Promise<T> {
+  const runtimeConsole = globalThis['console'];
+  const original = {
+    log: runtimeConsole.log,
+    warn: runtimeConsole.warn,
+    error: runtimeConsole.error,
+  };
+  const discard = () => undefined;
+  runtimeConsole.log = discard;
+  runtimeConsole.warn = discard;
+  runtimeConsole.error = discard;
+  try {
+    return await operation();
+  } finally {
+    runtimeConsole.log = original.log;
+    runtimeConsole.warn = original.warn;
+    runtimeConsole.error = original.error;
+  }
+}
 
 interface PositionedItem {
   str: string;
