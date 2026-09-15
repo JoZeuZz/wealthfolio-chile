@@ -134,12 +134,33 @@ function mentions(description: string, markers: readonly string[]): boolean {
   return markers.some((marker) => text.includes(normalizeDescription(marker)));
 }
 
+/**
+ * Like {@link mentions}, but the marker must OPEN the description, not just
+ * appear somewhere in it.
+ *
+ * A payment marker is the bank's own glosa for the movement, and every real
+ * example seen so far — CMR's own credit, Banco de Chile's cash-side line —
+ * IS the description, at most followed by more of the same glosa (`PAGO
+ * TARJETA CMR`, `PAGO TARJETA DE CREDITO CMR`). A merchant whose trade name
+ * happens to contain the same words (`COMERCIO PAGO TARJETA EXPRESS`) has
+ * them in the middle, prefixed by the merchant's own name — free substring
+ * matching read that as a payment too, turning a real purchase into
+ * `credit_card_payment` and pulling it out of spending. `CARD_REVERSAL_MARKERS`
+ * is deliberately NOT changed to this: `DEVOLUCION`/`ANULA` legitimately
+ * appear mid-glosa (`ABONO A TARJETA POR DEVOLUCION COMERCIO`), so that
+ * matching stays on {@link mentions}.
+ */
+function mentionsAnchored(description: string, markers: readonly string[]): boolean {
+  const text = normalizeDescription(description ?? '');
+  return markers.some((marker) => text.startsWith(normalizeDescription(marker)));
+}
+
 export function mentionsCashSideCardPayment(movement: DescribedMovement): boolean {
-  return mentions(movement.description, CASH_SIDE_CARD_PAYMENT_MARKERS);
+  return mentionsAnchored(movement.description, CASH_SIDE_CARD_PAYMENT_MARKERS);
 }
 
 export function mentionsCardSidePayment(movement: DescribedMovement): boolean {
-  return mentions(movement.description, CARD_SIDE_PAYMENT_MARKERS);
+  return mentionsAnchored(movement.description, CARD_SIDE_PAYMENT_MARKERS);
 }
 
 export type CardInflowKind = 'payment' | 'reversal' | 'ambiguous';
@@ -165,7 +186,7 @@ export type CardInflowKind = 'payment' | 'reversal' | 'ambiguous';
  * safe enough to act on without asking.
  */
 export function classifyCardInflow(description: string): CardInflowKind {
-  if (mentions(description, CARD_SIDE_PAYMENT_MARKERS)) return 'payment';
+  if (mentionsAnchored(description, CARD_SIDE_PAYMENT_MARKERS)) return 'payment';
   if (mentions(description, CARD_REVERSAL_MARKERS)) {
     return normalizeDescription(description ?? '').includes('PAGO') ? 'ambiguous' : 'reversal';
   }
