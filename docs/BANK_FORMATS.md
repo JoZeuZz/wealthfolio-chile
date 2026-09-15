@@ -33,7 +33,7 @@ como se infla el estado de un banco:
 | `banco-chile.cuenta-corriente` | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | `banco-chile.tarjeta` | ✅ | ✅ | ✅ | ✅ (3.8.0) | ⬜ |
 | `banco-estado.cuenta` | ✅ | ✅ | ✅ | ✅ | ⬜ |
-| `banco-falabella.cmr` | ✅ | ✅ | ✅ | ⬜ (pendiente esta tranche) | ✅ parcial (XLSX, 2026-09) |
+| `banco-falabella.cmr` | ✅ | ✅ | ✅ | ✅ (3.8.0, Sesión 10) | ✅ parcial (XLSX, 2026-09) |
 | `banco-falabella.cuenta` | ✅ | ✅ | ✅ | ⬜ | ⬜ |
 
 «Validado en host» significa que una cartola **sintética** de ese perfil se

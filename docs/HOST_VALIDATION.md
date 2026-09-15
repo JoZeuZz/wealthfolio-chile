@@ -1726,3 +1726,87 @@ adicional, no declarado como hecho.
 
 Commits: `fix(import): enforce validation at write boundary`,
 `fix(detection): require full Banco Chile international signature`.
+
+---
+
+## Sesión 10 — CMR real-sample tranche (`fase-0.2.0-cmr-real-sample`)
+
+**Ejecutada el 2026-09-15** contra la misma instancia persistente
+`wealthfolio/wealthfolio:3.8.0` (healthy, `Up 3 days` antes del redeploy).
+Objetivo: validar en UI real, con login real (`agent-browser`), los 3 fixes
+productivos de esta tranche derivados de calibrar 4 XLSX y 3 PDF reales de
+CMR Banco Falabella (`docs/BANK_FORMATS.md`, `docs/DECISIONS.md` D23) — nunca
+tocó una cartola real, sólo 2 fixtures XLSX 100% sintéticos (SheetJS, fuera
+del repo, borrados al terminar).
+
+### Preflight
+
+- `./scripts/stack.sh status`: `healthy`.
+- `./scripts/deploy-addon.sh`: build (`dist/addon.js` 932.53 kB, idéntico al
+  build de `pnpm verify`) + redeploy + restart del contenedor — necesario
+  porque los 3 fixes tocan código empaquetado (`card-semantics.ts`,
+  `banco-falabella.ts`, `profile-parser.ts`, `installments/detect.ts`,
+  `dedupe/fingerprint.ts`, `mapping/activities.ts`, `parsing/rows.ts`).
+- Login real vía formulario — OK, sesión sobrevivió al restart del contenedor.
+- Baseline: 3 cuentas (`Banco Chile Test`, `BancoEstado Test`, `CMR Test`,
+  todas CLP). `CMR Test` (Credit Card, confirmado en el diálogo de edición)
+  partía en `0 activities` — no se creó cuenta nueva.
+
+### Fixtures sintéticos (nunca comiteados)
+
+Dos XLSX con la firma real de 6 columnas (`FECHA;DESCRIPCION;TITULAR/ADICIONAL;MONTO;CUOTAS PENDIENTES;VALOR CUOTA`),
+representando 2 ciclos de facturación consecutivos:
+
+- **Mes 1** (3 filas): compra normal, `PAGO TARJETA` (glosa real confirmada
+  por calibración), y una cuota activa (`MONTO` 300.000, `VALOR CUOTA`
+  50.000, `CUOTAS PENDIENTES` 5).
+- **Mes 2** (2 filas): otra compra normal, y la misma cuota un ciclo después
+  — **misma fecha, mismo monto, misma glosa que en Mes 1**, sólo
+  `CUOTAS PENDIENTES` bajó a 4 — reproduciendo a propósito el hallazgo real
+  de continuidad de fecha (`docs/BANK_FORMATS.md`).
+
+### Resultados
+
+| Smoke | Resultado |
+| --- | --- |
+| Detección sin branding | Subida del XLSX Mes 1 sin forzar perfil: autodetección `Banco Falabella / CMR — tarjeta` **95%**, top de la lista (confirmado por captura), `generico.tarjeta` no aparece como top. Confirma en UI real el fix de `recognizedLayoutSignatures` — el archivo no trae ningún texto "CMR"/"FALABELLA" |
+| Compra normal | `Comercio Ficticio UNO`, `-$29.990`, tipo `Compra tarjeta`, categoría `Sin categoría` — correcto |
+| Pago CMR (`PAGO TARJETA`) | `+$150.000`, tipo `Pago tarjeta`, categoría `Pago de tarjeta` — clasificado como pago, no como ingreso. Excluido de Ingresos/Egresos del resumen (`Ingresos $0 · Egresos $79.990` sobre 3 filas, el pago no cuenta) — confirma `payment != spending` en UI real |
+| Cuota — monto correcto | Fila de cuota mostrada en `-$50.000` (`VALOR CUOTA`), nunca `-$300.000` (`MONTO`/total) — confirma que `readAmount` ya prioriza la columna etiquetada, en UI real |
+| Import Mes 1 | `3 detectados · 3 seleccionados · 3 creados en Wealthfolio · 0 fallaron · 0 duplicados exactos · 0 posibles duplicados` |
+| Reimport exacto de Mes 1 | Las 3 filas se muestran `Duplicado`, desmarcadas por defecto, `3 duplicados exactos`, botón dice "Confirmar e importar **0** movimientos" |
+| Import Mes 2 (cuota ciclo 2) | La compra nueva se detecta `Nuevo` (1 de 2). La fila de cuota (misma fecha/monto/glosa que Mes 1, `CUOTAS PENDIENTES` 4) se marca **`Posible duplicado`** — "Coincide en fecha y monto con un movimiento existente" — **no** `Duplicado` exacto, y queda desmarcada por defecto para revisión humana. Al marcarla y confirmar: `2 detectados · 2 seleccionados · 2 creados · 0 duplicados exactos · 0 posibles duplicados` (el conteo final es post-confirmación) |
+| Estado final `CMR Test` | 5 activities: `Comercio Ficticio Tres` (Withdrawal 15.000), `Tienda Ficticia Dos` × 2 (Withdrawal 50.000 cada una, **ambas presentes, no fusionadas ni perdidas**), `Pago Tarjeta` (Transfer In 150.000), `Comercio Ficticio Uno` (Withdrawal 29.990) |
+
+**Confirma en host real, no sólo en unit tests:** el fix del fingerprint
+(D23) — sin él, la cuota del ciclo 2 habría aparecido como `Duplicado`
+exacto, quedado desmarcada, y la segunda cuota se habría perdido
+silenciosamente en un reimport real. En cambio aparece como `Posible
+duplicado`, visible y accionable.
+
+**Observación de display, no un bug de datos:** las fechas se muestran un
+día antes de lo escrito en el XLSX (`12/09/2026` en el archivo → "Sep 11,
+2026 9:00:00 PM" en la tabla de Activities). Consistente en las 5 filas,
+consistente con el ajuste UTC/timezone que `docs/UPSTREAM.md` y
+`services/activity-index.ts` ya documentan para `activities.search` — no
+investigado más a fondo porque no afecta identidad (`IsoDate` civil enviado
+es correcto) ni el fingerprint (que usa el `IsoDate` interno, no lo que la
+tabla renderiza).
+
+### Limpieza
+
+Las 5 activities de `CMR Test` se borraron una por una (menú `⋮` → `Delete`
+→ confirmar) hasta `0/0 activities` — baseline exacto restaurado. Los 2
+XLSX sintéticos se borraron del scratchpad de sesión. `curl
+.../api/v1/healthz` → `ok` tras la limpieza; `docker compose ps` → `healthy`.
+Ninguna otra cuenta (`Banco Chile Test`, `BancoEstado Test`) fue tocada.
+
+Commits validados: `fix(falabella): recognize CMR's own "PAGO TARJETA"
+card-side payment glosa`, `fix(falabella): detect CMR from its structural
+layout, not branding text`, `fix(falabella): handle CMR's remaining-cuotas
+count without duplicating consumption`.
+
+No validado en este smoke (fuera de alcance de esta tranche): PDF import
+(no existe — sólo calibrador, ver `docs/BANK_FORMATS.md`), avance en
+efectivo, cargo de servicio del emisor, interés/impuesto en fila real,
+compra internacional — todos siguen `pending-real-sample`.
