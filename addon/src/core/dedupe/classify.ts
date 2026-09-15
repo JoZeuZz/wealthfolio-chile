@@ -154,6 +154,47 @@ function isLegacyIncompatibleCardSource(
   return existing.parser === 'banco-chile.tarjeta' && existing.parserVersion === '0.1.0';
 }
 
+/**
+ * Whether `existing` was written under `banco-falabella.cmr` semantics this
+ * project knows is incompatible with the current parser, for the *same
+ * source file*.
+ *
+ * `computeFingerprint` started folding `installmentRemaining` into the hash
+ * when present (see `core/dedupe/fingerprint.ts`), with no
+ * `FINGERPRINT_VERSION` bump — deliberate, because the field is only
+ * appended when present, so every fingerprint that never produced it stays
+ * byte-for-byte unchanged. That holds for every OTHER profile. It does not
+ * hold for `banco-falabella.cmr`'s own history: an Activity this parser
+ * wrote before that change, for a row that DOES carry a cuota, now hashes
+ * differently on reimport — the strong fingerprint changed and the weak one
+ * still points at the same row, so without this guard the row comes back
+ * `new` and can duplicate.
+ *
+ * Before this parser's own structural detection existed, the same 6-column
+ * CMR layout could also have been imported via `generico.tarjeta` — the same
+ * transition Banco de Chile already guards against, here for a different
+ * source parser. `FALABELLA_CARD.parserVersion` was bumped to `0.2.0`
+ * alongside this guard so `0.1.0` names a real version boundary instead of
+ * every Activity this parser ever wrote.
+ *
+ * Deliberately narrow: only this one known transition, scoped to the exact
+ * source file. A cuota from the NEXT billing cycle — same date/amount/glosa,
+ * different `sourceFileHash`, different `installmentRemaining` — is a
+ * different file and must never trip this guard; that is what keeps it from
+ * blocking the real "next month's charge" case.
+ */
+function isLegacyIncompatibleCmrSource(
+  candidateParser: string,
+  existing: Pick<ExistingMovement, 'parser' | 'parserVersion'>,
+): boolean {
+  if (candidateParser !== 'banco-falabella.cmr') return false;
+  if (existing.parser === 'generico.tarjeta') return true;
+  return existing.parser === 'banco-falabella.cmr' && existing.parserVersion === '0.1.0';
+}
+
+/** Every known legacy-source transition this project guards against. */
+const LEGACY_SOURCE_TRANSITIONS = [isLegacyIncompatibleCardSource, isLegacyIncompatibleCmrSource];
+
 export interface ClassifyOptions {
   /** Description similarity at or above which a weak match becomes `probable`. */
   similarityThreshold?: number;
@@ -250,7 +291,7 @@ export function classifyDuplicate(
   if (candidate.sourceFileHash) {
     const sameFile = index.byFileHash.get(candidate.sourceFileHash) ?? [];
     const legacyConflict = sameFile.find((movement) =>
-      isLegacyIncompatibleCardSource(candidate.sourceParser, movement),
+      LEGACY_SOURCE_TRANSITIONS.some((isLegacyTransition) => isLegacyTransition(candidate.sourceParser, movement)),
     );
     if (legacyConflict) {
       return {

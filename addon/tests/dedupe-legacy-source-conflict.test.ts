@@ -143,10 +143,13 @@ describe('sin regresión — casos que deben seguir igual', () => {
     expect(finding.verdict).not.toBe('probable');
   });
 
-  it('un parser distinto de banco-chile.tarjeta no dispara el guard (alcance estrecho a esta transición)', () => {
-    const index = buildDuplicateIndex([legacyMovement({ parser: 'banco-falabella.cmr', parserVersion: '0.1.0' })]);
+  it('un parser sin transición conocida no dispara el guard (alcance estrecho a esta transición)', () => {
+    // `banco-falabella.cmr` ya no sirve como "parser cualquiera" aquí: tiene su
+    // propia transición conocida (ver `dedupe-legacy-cmr-transition.test.ts`).
+    // Éste usa uno sin ninguna transición registrada.
+    const index = buildDuplicateIndex([legacyMovement({ parser: 'banco-estado.cuenta', parserVersion: '0.1.0' })]);
     const finding = classifyDuplicate(
-      currentCandidate({ sourceParser: 'banco-falabella.cmr' }),
+      currentCandidate({ sourceParser: 'banco-estado.cuenta' }),
       index,
       SCOPE,
       new Map(),

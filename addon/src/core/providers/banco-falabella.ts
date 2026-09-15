@@ -20,7 +20,17 @@ export const FALABELLA_CARD: StatementProfile = {
   institution: 'banco-falabella',
   institutionLabel: 'Banco Falabella / CMR — tarjeta',
   parserId: 'banco-falabella.cmr',
-  parserVersion: '0.1.0',
+  // Bumped from 0.1.0: `computeFingerprint` started folding in
+  // `installmentRemaining` (see `core/dedupe/fingerprint.ts`) without a
+  // version bump at the time, because the field is only appended when
+  // present and every fingerprint that never produced it stays unchanged.
+  // That is true for every OTHER profile, but not for this one's own
+  // history: an Activity this parser wrote before that change, for a row
+  // that DOES carry a cuota, now hashes differently on reimport. The bump
+  // gives `core/dedupe/classify.ts#isLegacyIncompatibleCmrSource` a real
+  // version boundary to guard against, the same pattern already used for
+  // `banco-chile.tarjeta`.
+  parserVersion: '0.2.0',
   product: StatementProduct.credit_card,
   defaultCurrency: 'CLP',
   numberFormat: 'es-CL',
