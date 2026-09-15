@@ -47,7 +47,20 @@ export const CASH_SIDE_CARD_PAYMENT_MARKERS: readonly string[] = [
   'PAGO ESTADO DE CUENTA',
 ];
 
-/** Wording printed on the card statement itself for an incoming payment. */
+/**
+ * Wording printed on the card statement itself for an incoming payment.
+ *
+ * `PAGO TARJETA` is here even though the identical phrase also appears in
+ * {@link CASH_SIDE_CARD_PAYMENT_MARKERS}: that list describes the *other*
+ * account's glosa for money leaving it to pay the card, and this one
+ * describes the card's own glosa for the payment landing — two different
+ * statements happening to use the same words, confirmed against four real
+ * CMR Banco Falabella statements (2026-09), where it was the only marker
+ * behind every credit the classifier otherwise left `unknown`. It is listed
+ * separately, not shared, so a future change to one side cannot silently
+ * change the other — see the `ABONO A TARJETA` note above for why that
+ * coupling already burned this module once.
+ */
 export const CARD_SIDE_PAYMENT_MARKERS: readonly string[] = [
   'PAGO RECIBIDO',
   'SU PAGO',
@@ -57,6 +70,7 @@ export const CARD_SIDE_PAYMENT_MARKERS: readonly string[] = [
   'GRACIAS POR SU PAGO',
   'PAGO PAT',
   'PAGO PAC',
+  'PAGO TARJETA',
 ];
 
 /**

@@ -161,6 +161,18 @@ describe('vocabulario en un solo lugar', () => {
     expect(classifyCardInflow('ABONO')).toBe('ambiguous');
     expect(classifyCardInflow('')).toBe('ambiguous');
   });
+
+  it('"PAGO TARJETA" en el lado de la tarjeta es un pago, no queda ambiguo', () => {
+    // Calibración contra 4 estados de cuenta reales de CMR (2026-09): el 100%
+    // de los abonos que el clasificador dejaba `unknown` contenían esta frase.
+    // CMR imprime su propio lado del pago con la misma glosa que
+    // `CASH_SIDE_CARD_PAYMENT_MARKERS` usa para el lado de la cuenta corriente
+    // — bancos distintos, misma palabra, lado distinto — así que hace falta
+    // como marcador propio del lado de la tarjeta, no tomado prestado de esa
+    // lista (eso reabriría el bug que `ABONO A TARJETA` ya dejó documentado).
+    expect(classifyCardInflow('PAGO TARJETA')).toBe('payment');
+    expect(classifyCardInflow('PAGO TARJETA AUTOMATICO CMR')).toBe('payment');
+  });
 });
 
 /**
