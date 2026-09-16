@@ -163,6 +163,70 @@ describe('sin regresión — casos que deben seguir igual', () => {
   });
 });
 
+describe('cuota del ciclo siguiente: installmentRemaining distinto no es "similar" (P1 release-readiness)', () => {
+  it('misma fecha/monto/glosa pero remaining 5->4 en archivo distinto -> verdict none, no probable', () => {
+    // Real CMR (2026-09): la fecha de una cuota facturada no avanza entre
+    // ciclos, así que fecha+monto+glosa del ciclo N y N+1 son indistinguibles
+    // para la huella débil. `installmentRemaining` es la única señal que
+    // prueba que son cargos distintos — sin usarla, este caso sale `similar`
+    // y nace desmarcado: cada cuota del ciclo siguiente de un plan abierto se
+    // deja de importar por defecto.
+    const previousCycle = currentCandidate({
+      installmentRemaining: 5,
+      sourceFileHash: 'archivo-ciclo-1',
+      fingerprint: 'cmr-ciclo-1-fp',
+    });
+    const storedWeak = computeWeakFingerprint(previousCycle, SCOPE);
+    const index = buildDuplicateIndex([
+      legacyMovement({
+        parser: 'banco-falabella.cmr',
+        parserVersion: '0.2.0',
+        fingerprint: 'cmr-ciclo-1-stored-fp',
+        weakFingerprint: storedWeak,
+        installmentRemaining: 5,
+      }),
+    ]);
+
+    const nextCycle = currentCandidate({
+      installmentRemaining: 4,
+      sourceFileHash: 'archivo-ciclo-2',
+      fingerprint: 'cmr-ciclo-2-fp',
+    });
+    const finding = classifyDuplicate(nextCycle, index, SCOPE, new Map());
+
+    expect(finding.verdict).toBe('none');
+    expect(finding.reason_code).toBe('new');
+  });
+
+  it('sigue marcando "similar" cuando ninguno de los dos trae installmentRemaining (sin regresión)', () => {
+    const previousCycle = currentCandidate({
+      installmentRemaining: undefined,
+      sourceFileHash: 'archivo-a',
+      fingerprint: 'sin-cuota-a-fp',
+    });
+    const storedWeak = computeWeakFingerprint(previousCycle, SCOPE);
+    const index = buildDuplicateIndex([
+      legacyMovement({
+        parser: 'banco-falabella.cmr',
+        parserVersion: '0.2.0',
+        fingerprint: 'sin-cuota-a-stored-fp',
+        weakFingerprint: storedWeak,
+        installmentRemaining: undefined,
+      }),
+    ]);
+
+    const repeatedRow = currentCandidate({
+      installmentRemaining: undefined,
+      sourceFileHash: 'archivo-b',
+      fingerprint: 'sin-cuota-b-fp',
+    });
+    const finding = classifyDuplicate(repeatedRow, index, SCOPE, new Map());
+
+    expect(finding.verdict).toBe('probable');
+    expect(finding.reason_code).toBe('similar');
+  });
+});
+
 describe('precedencia: legacy-source-conflict antes que similarity (CMR)', () => {
   it('fileHash legacy incompatible + match similar existente -> sigue siendo legacy-source-conflict', () => {
     const candidate = currentCandidate({ fingerprint: 'current-cmr-fp-precedencia' });

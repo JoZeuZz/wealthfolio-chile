@@ -87,6 +87,18 @@ export interface ExistingMovement {
   parser?: string;
   parserVersion?: string;
   fileHash?: string;
+  /**
+   * Remaining-installment count this addon recorded for the row, straight
+   * from `ChileMetadata.cuotaRem` — never derived, never guessed.
+   *
+   * Real CMR statements (2026-09): a billed cuota's own `date` does not
+   * advance between statement cycles, so date+amount+description of cycle N
+   * and cycle N+1 are indistinguishable to the weak-fingerprint match below.
+   * When both sides carry this field and it differs, that is the proof the
+   * candidate is a different charge — not a coincidence to score by
+   * description similarity. See {@link classifyDuplicate}.
+   */
+  installmentRemaining?: number;
 }
 
 export interface DuplicateIndex {
@@ -315,6 +327,17 @@ export function classifyDuplicate(
   for (const movement of sameDayAmount) {
     if (Math.abs(daysBetween(movement.date, candidate.date)) > dateTolerance) continue;
     if (!equals(movement.amount, candidate.amount)) continue;
+    // Both sides know their remaining-installment count and disagree: this is
+    // a different cycle of the same plan, not a candidate for "similar", no
+    // matter how identical the date/amount/description look. See the field
+    // doc on `ExistingMovement.installmentRemaining`.
+    if (
+      movement.installmentRemaining !== undefined &&
+      candidate.installmentRemaining !== undefined &&
+      movement.installmentRemaining !== candidate.installmentRemaining
+    ) {
+      continue;
+    }
     const score = similarity(candidateKey, descriptionKey(movement.description));
     if (!best || score > best.score) best = { movement, score };
   }

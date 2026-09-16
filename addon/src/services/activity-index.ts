@@ -126,6 +126,10 @@ export async function loadDuplicateIndexResult(
         ...(metadata?.parser ? { parser: metadata.parser } : {}),
         ...(metadata?.parserVersion ? { parserVersion: metadata.parserVersion } : {}),
         ...(metadata?.fileHash ? { fileHash: metadata.fileHash } : {}),
+        // Straight from our own metadata, like `parser`/`fileHash` above — see
+        // `ExistingMovement.installmentRemaining` for why the dedupe classifier
+        // needs it.
+        ...(metadata?.cuotaRem !== undefined ? { installmentRemaining: metadata.cuotaRem } : {}),
       });
     }
 
