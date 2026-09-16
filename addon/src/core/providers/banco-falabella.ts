@@ -83,7 +83,7 @@ export const FALABELLA_CARD: StatementProfile = {
   ],
   validationStatus: 'pending-real-sample',
   validationNotes:
-    'Falta un estado de cuenta real de CMR. Sigue sin confirmarse si una columna "Monto" sin etiquetar es el valor de la cuota o el total de la compra; mientras tanto la fila se marca con `ambiguous-installment-amount` y el plan no deriva el total de la compra. Falta también confirmar cómo se marcan los pagos, las anulaciones y los avances en efectivo.',
+    'Confirmado contra 4 estados de cuenta reales de "Movimientos Facturados" (2026-09, 130 filas): firma de columnas, "MONTO" vs "VALOR CUOTA", "CUOTAS PENDIENTES" como conteo restante, glosa propia de pago ("PAGO TARJETA") y devoluciones. Sigue sin evidencia real: servicio de administración / cargo del emisor, avance en efectivo, interés/impuesto/mora como movimiento, compra internacional (sin columna de moneda en el XLSX). El PDF de CMR sólo es calibrable, no se importa en esta tranche — ver docs/BANK_FORMATS.md.',
 };
 
 export const FALABELLA_ACCOUNT: StatementProfile = {

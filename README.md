@@ -5,22 +5,27 @@ en Chile: importa cartolas de bancos chilenos, concilia transferencias entre tus
 cuentas, detecta compras en cuotas y responde en qué se te va el sueldo.
 
 > **Estado: 0.2.0-rc.5 — validado contra Wealthfolio v3.7.0 y v3.8.0 reales,
-> todavía sin cartolas reales.** 1301 tests cubren el motor, la capa de
-> servicios y la interfaz sobre un DOM. El addon se ha ejecutado dentro de un
-> Wealthfolio corriendo en varias sesiones de validación —3.6.2, 3.7.0 y
-> 3.8.0— y todas encontraron errores que ningún test unitario podía ver,
-> porque estaban en la frontera con el host: entre ellos, que la clave de
-> idempotencia del host no coincidía con la nuestra y rechazaba lotes enteros,
-> y que un `INTEREST` crudo en una cuenta de tarjeta se leía siempre como
-> ingreso sin importar la versión del host. Todos corregidos y reverificados.
+> con calibración estructural contra cartolas reales para 3 de 4 bancos.**
+> 1607 tests cubren el motor, la capa de servicios y la interfaz sobre un DOM.
+> El addon se ha ejecutado dentro de un Wealthfolio corriendo en varias
+> sesiones de validación —3.6.2, 3.7.0 y 3.8.0— y todas encontraron errores
+> que ningún test unitario podía ver, porque estaban en la frontera con el
+> host: entre ellos, que la clave de idempotencia del host no coincidía con la
+> nuestra y rechazaba lotes enteros, y que un `INTEREST` crudo en una cuenta de
+> tarjeta se leía siempre como ingreso sin importar la versión del host. Todos
+> corregidos y reverificados.
 >
-> Sigue siendo un *release candidate* por una razón concreta: los adaptadores de
-> Banco de Chile, BancoEstado y Falabella/CMR están construidos sobre
-> documentación pública, no sobre cartolas reales, y hasta que eso cambie
-> ninguno puede llamarse verificado.
+> Sigue siendo un *release candidate* por una razón concreta: Banco de Chile
+> (8 cartolas XLS de cuenta corriente, 4 de tarjeta), BancoEstado (1 XLSX
+> CuentaRUT) y Falabella/CMR (4 XLSX de Movimientos Facturados) ya calibraron
+> estructura, formato numérico, signo y detección contra cartolas reales — pero
+> el calibrador (`pnpm calibrate`) nunca expone glosas reales por diseño de
+> privacidad, así que la clasificación de cada movimiento (`kind`) sigue sin
+> confirmarse contra un banco real. Falabella/cuenta corriente no tiene ninguna
+> cartola real todavía.
 >
-> Evidencia en [docs/HOST_VALIDATION.md](docs/HOST_VALIDATION.md); matriz en
-> [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md).
+> Evidencia en [docs/HOST_VALIDATION.md](docs/HOST_VALIDATION.md) y
+> [docs/BANK_FORMATS.md](docs/BANK_FORMATS.md).
 
 ### Cómo leer los estados en esta documentación
 
@@ -33,8 +38,11 @@ Cuatro niveles, y no se mezclan:
 | **validado en host** | Se ejecutó contra un Wealthfolio v3.7.0/v3.8.0 corriendo |
 | **validado con banco real** | Se ejecutó contra una cartola real de ese banco |
 
-Hoy el proyecto llega a **validado en host**. Ningún banco llega a
-**validado con banco real**.
+Hoy el proyecto llega a **validado en host** para todos los bancos, y a
+**validado con banco real** en estructura/formato/detección para Banco de
+Chile, BancoEstado y Falabella/CMR. Ningún banco llega a validado con banco
+real en la clasificación (`kind`) de cada movimiento — el calibrador no
+expone glosas reales por diseño.
 
 ---
 
@@ -81,15 +89,18 @@ ingreso en la otra.
 
 | Banco | Producto | Formatos | Estado |
 | --- | --- | --- | --- |
-| Banco de Chile | Cuenta corriente, tarjeta | CSV, XLSX | ⚠️ pendiente de calibrar |
-| BancoEstado | CuentaRUT, cuenta corriente | CSV, XLSX | ⚠️ pendiente de calibrar |
-| Banco Falabella / CMR | Tarjeta, cuenta corriente | CSV, XLSX | ⚠️ pendiente de calibrar |
+| Banco de Chile | Cuenta corriente, tarjeta (Internacional no soportada) | XLS real, CSV/XLSX sintético | ⚠️ estructura calibrada real, clasificación pendiente |
+| BancoEstado | CuentaRUT | XLSX real, CSV sintético | ⚠️ estructura calibrada real, clasificación pendiente |
+| Banco Falabella / CMR | Tarjeta (XLSX real; PDF sólo calibrable, no importable) | XLSX real, CSV sintético | ⚠️ estructura calibrada real, clasificación pendiente |
+| Banco Falabella | Cuenta corriente | CSV, XLSX (sólo sintético) | ⚠️ pendiente de calibrar |
 | Genérico | Cualquiera con fecha, glosa y monto | CSV, TXT, XLSX, XLS | ✅ |
 
-⚠️ significa que el adaptador está completo y testeado, pero el mapeo de
-columnas se dedujo de documentación pública. El wizard te lo advierte. Calibrar
-uno es editar strings en un perfil — ver
-[docs/BANK_FORMATS.md](docs/BANK_FORMATS.md).
+⚠️ significa que el adaptador está completo y testeado. Donde dice "estructura
+calibrada real", el mapeo de columnas, formato numérico y signo ya se
+confirmaron contra cartolas reales — lo que falta es verificar la
+clasificación (`kind`) de cada movimiento, porque el calibrador nunca expone
+glosas reales por diseño de privacidad. El wizard lo advierte en cada
+importación. Ver [docs/BANK_FORMATS.md](docs/BANK_FORMATS.md).
 
 PDF no se soporta a propósito: si existe un archivo tabular, esa es la fuente.
 
