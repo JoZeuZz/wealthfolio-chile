@@ -792,6 +792,30 @@ describe('P1: cuotaRem stale no participa en dedupe tras una edición del host',
     expect(finding.reason_code).toBe('similar');
     expect(finding.existingActivityId).toBe('stale-unknown');
   });
+
+  it('proj malformado ("") se trata como stale, no como legacy ausente — mismo consumer que activityToTransaction', async () => {
+    // Divergencia real que encontró la review independiente:
+    // `metadataCacheIsCurrent` (core/mapping/activities.ts) y
+    // `wasModifiedAfterImport` (aquí) tenían dos copias de la regla de
+    // frescura que sólo diferían para un `proj` malformado. Ahora ambas usan
+    // `isActivityMetadataCurrent`, así que este índice tiene que fallar
+    // cerrado exactamente igual que `activityToTransaction`.
+    const original = cuotaTransaction(5);
+    const stored = writeAsAddonWould(original);
+    const namespace = 'wealthfolioChile';
+    const rawMetadata = stored.metadata as unknown as Record<string, Record<string, unknown>>;
+    const malformed = {
+      ...stored,
+      metadata: { [namespace]: { ...rawMetadata[namespace], proj: '' } },
+    };
+
+    const { index } = await loadDuplicateIndexResult(fakeHost({ activities: [malformed] }).ctx, {
+      accountId: ACCOUNT,
+    });
+
+    expect(index.byFingerprint.get(original.fingerprint)?.installmentRemaining).toBeUndefined();
+    expect(index.byFingerprint.get(original.fingerprint)?.hostModified).toBe(true);
+  });
 });
 
 describe('compatibilidad con las huellas de 0.1.x', () => {

@@ -1025,8 +1025,47 @@ export function activityToTransaction(
 
 /** Whether cached classifications still describe the activity stored by the host. */
 function metadataCacheIsCurrent(activity: HostActivity, metadata: ChileMetadata): boolean {
-  if (metadata.proj) return activityProjection(activity) === metadata.proj;
-  return activity.isUserModified !== true;
+  return isActivityMetadataCurrent(activity, metadata.proj);
+}
+
+/**
+ * The one definition of metadata freshness, shared by every reader of a stored
+ * activity — `activityToTransaction` here and `ActivityIndex`
+ * (`services/activity-index.ts`) alike. Before this existed the two carried
+ * separate copies that agreed on every projection a real writer produces but
+ * diverged on a malformed one (`proj: ''`): one read it as "no projection,
+ * fall back to `isUserModified`", the other as "projection present, compare
+ * and fail closed". Two readers of the same activity disagreeing on freshness
+ * is exactly the kind of gap a stale cache slips through.
+ *
+ * `recordedProjection` is typed `unknown`, not `string | undefined`, on
+ * purpose: `readChileMetadata` validates `fp`, `fc` and `kc`, but not `proj`,
+ * so a hand-edited or foreign metadata blob can hand this a number, an
+ * object, or an empty string despite what `ChileMetadata.proj` declares at
+ * compile time.
+ *
+ * Three cases:
+ *
+ * - **Absent** (`undefined`) — metadata written before schema 3 (0.1.x). No
+ *   witness exists to compare, so the host's own `isUserModified` is the only
+ *   signal there is. This is the one case a missing witness is trusted.
+ * - **Valid** (non-empty string) — compared against a freshly computed
+ *   {@link activityProjection}. Equal means untouched since we wrote it;
+ *   anything else means the host holds an edit our cache does not know about.
+ * - **Present but malformed** (anything else: `''`, a number, an object) — an
+ *   Activity a normal writer never produces (this addon's writer always emits
+ *   either a non-empty string or omits the field). Never treated as "absent
+ *   legacy": a malformed witness cannot be trusted to mean "no witness", and
+ *   letting it fall back to `isUserModified` would let a corrupted or
+ *   hand-edited blob resurrect a stale cache. Fails closed: not current.
+ */
+export function isActivityMetadataCurrent(
+  activity: ProjectableActivity & { isUserModified?: boolean },
+  recordedProjection: unknown,
+): boolean {
+  if (recordedProjection === undefined) return activity.isUserModified !== true;
+  if (typeof recordedProjection !== 'string' || recordedProjection === '') return false;
+  return activityProjection(activity) === recordedProjection;
 }
 
 /** Drop the marker `buildComment` appends, leaving the glosa the bank printed. */

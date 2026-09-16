@@ -6,6 +6,7 @@ import {
   METADATA_VERSION,
   readChileMetadata,
   toActivityCreate,
+  type ChileMetadata,
 } from '../src/core/mapping/activities';
 import { Direction, TransactionKind } from '../src/core/model/kinds';
 import { FinancialCostKind } from '../src/core/model/financial-cost';
@@ -442,5 +443,36 @@ describe('una edición invalida refinamientos cacheados aunque conserve el tipo'
     );
 
     expect(edited?.installmentRemaining).toBeUndefined();
+  });
+
+  it('proj malformado ("") no cuenta como legacy ausente: la cuota cacheada no participa', () => {
+    // El writer real nunca produce `proj: ''` — `activityProjection` siempre
+    // hashea algo no vacío. Esto sólo llega vía metadata editada a mano o de
+    // otro esquema; el punto del fix es que `isActivityMetadataCurrent` no
+    // confunda "presente pero malformado" con "ausente, fila legacy" y deje
+    // pasar `cuotaRem` cacheado como si la fila no hubiera sido tocada.
+    const original = makeTransaction({
+      amount: -49990,
+      date: '2026-09-04',
+      description: 'FALABELLA RETAIL PLAZA VESPUCIO',
+      kind: TransactionKind.credit_card_purchase,
+      installmentRemaining: 5,
+    });
+    const create = toActivityCreate(original, { accountId: ACCOUNT, runId: 'run-cuota-malformed' });
+    const metadata = readChileMetadata(create.metadata as string) as ChileMetadata;
+
+    const malformed = activityToTransaction(
+      ourActivity({
+        activityType: create.activityType,
+        amount: String(create.amount),
+        date: String(create.activityDate),
+        comment: create.comment as string,
+        metadata: { ...metadata, proj: '' },
+      }),
+    );
+
+    expect(malformed?.installmentRemaining).toBeUndefined();
+    expect(malformed?.category).toBeUndefined();
+    expect(malformed?.tags).toEqual([]);
   });
 });
