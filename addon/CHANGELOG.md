@@ -17,9 +17,11 @@ banco real, y Falabella/cuenta corriente no tiene ninguna cartola real todavía.
 - **Calibrador (`pnpm calibrate`)**: reporta hechos sanitizados de una cartola
   real sin exponer glosas — forma de columnas no mapeadas, formato numérico
   por celda, evidencia de cuotas, y ahora también evidencia de estados de
-  cuenta PDF (`pdf-lib`/`pdfjs-dist`, sólo devDependency, nunca en
-  `dist/addon.js`). PDF de CMR es **sólo calibrable, no importable** esta
-  tranche — demasiada arquitectura nueva para resolver junto con el resto.
+  cuenta PDF vía `pdfjs-dist` (extracción de texto, devDependency, nunca en
+  `dist/addon.js`; `pdf-lib` no participa del calibrador, sólo genera PDFs
+  sintéticos para tests). PDF de CMR es **sólo calibrable, no importable**
+  esta tranche — demasiada arquitectura nueva para resolver junto con el
+  resto.
 - Fechas civiles `dd/mm` sin año, resueltas contra el período declarado por la
   propia cartola (`SALDO INICIAL`/`SALDO FINAL` en Banco de Chile cuenta
   corriente).
@@ -59,9 +61,12 @@ banco real, y Falabella/cuenta corriente no tiene ninguna cartola real todavía.
 - Se exige que la descripción de pago de tarjeta sea explícita: una coincidencia
   parcial ya no basta para clasificar un movimiento como pago.
 - Cuotas: `VALOR CUOTA` (cargo del ciclo) distinguido de `MONTO` (compra
-  completa) — confirmado 128/130 filas reales; una Activity por cuota
-  facturada, no por compra. `CUOTAS PENDIENTES` se lee como el conteo de
-  cuotas restantes, no como un par `n de m`.
+  completa). De 130 filas calibradas, en 128 ambos campos coinciden; en las 2
+  filas de cuotas activas difieren, y esa diferencia — junto con la
+  repetición longitudinal del mismo plan — confirmó que `MONTO` es el total
+  original de la compra y `VALOR CUOTA` el cargo facturado del ciclo. Una
+  Activity por cuota facturada, no por compra. `CUOTAS PENDIENTES` se lee
+  como el conteo de cuotas restantes, no como un par `n de m`.
 - El siguiente ciclo de una cuota ya no se confunde con un duplicado exacto de
   la cuota anterior: `installmentRemaining` distingue ambos ciclos aunque el
   resto de la fila coincida.
@@ -82,8 +87,9 @@ banco real, y Falabella/cuenta corriente no tiene ninguna cartola real todavía.
 ### Cambiado
 
 - Ningún cambio de `minWealthfolioVersion` (se mantiene en 3.7.0) ni de
-  dependencias runtime. `pdf-lib`/`pdfjs-dist` entran sólo como
-  devDependency del calibrador.
+  dependencias runtime. `pdfjs-dist` entra sólo como devDependency del
+  calibrador; `pdf-lib` entra sólo como devDependency de tests, para generar
+  fixtures PDF sintéticos. Ninguna de las dos entra a `dist/addon.js`.
 
 ### Validación
 

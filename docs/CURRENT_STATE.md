@@ -17,9 +17,14 @@ Cuatro niveles distintos, que esta documentación no mezcla:
 | **validado en host** | Se ejecutó contra un Wealthfolio v3.7.0 corriendo |
 | **validado con banco real** | Se ejecutó contra una cartola real de ese banco |
 
-**El proyecto está en *validado en host* contra 3.7.0 y 3.8.0.** Falta el
-último nivel: ninguna cartola real ha tocado este código, y por eso la versión
-es un release candidate y no un `0.2.0`.
+**El proyecto está en *validado en host* contra 3.7.0 y 3.8.0**, y además
+alcanza calibración estructural real (formato, signo, detección) para Banco
+de Chile, BancoEstado y Falabella/CMR — ver *Calibración estructural contra
+cartolas reales* más abajo. Falta el último nivel completo: ninguna cartola
+real fue importada a un Wealthfolio corriendo, y la clasificación (`kind`) de
+cada movimiento no está confirmada contra ningún banco real (el calibrador
+nunca expone glosas). Por eso la versión es un release candidate y no un
+`0.2.0`.
 
 ---
 
@@ -165,10 +170,12 @@ Ver [HOST_VALIDATION.md](HOST_VALIDATION.md) § *Sesión 6*.
 | Genérico — cuenta | ✅ | n/a | ✅ | ✅ (indirecto) | n/a |
 | Genérico — tarjeta | ✅ | n/a | ✅ | ⬜ | n/a |
 | Banco de Chile — cuenta corriente | ✅ | ✅ | ✅ | ✅ | ⬜ |
-| Banco de Chile — tarjeta | ✅ | ✅ | ✅ | ⬜ | ⬜ |
+| Banco de Chile — tarjeta | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | BancoEstado — CuentaRUT | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | Falabella / CMR — tarjeta | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | Falabella — cuenta corriente | ✅ | ✅ | ✅ | ⬜ | ⬜ |
+
+"Validado en host" es siempre contra fixtures sintéticos (ver [HOST_VALIDATION.md](HOST_VALIDATION.md) § *Sesión 7* para Banco de Chile tarjeta, Nacional e Internacional) — no implica que una cartola real haya sido importada; esa distinción vive en la columna "Cartola real".
 
 `samples/private/` está vacío (gitignorado, nunca versionado). **Ninguna
 institución tiene validación de `kind` con cartola real**, y los cinco
@@ -188,7 +195,7 @@ exponer glosas. Confirma estructura/formato/signo/detección, no `kind`.
 | Banco de Chile tarjeta — Nacional | ✅ XLS real | formato numérico por celda, write boundary y dedupe endurecidos |
 | Banco de Chile tarjeta — Internacional | 🚫 **no soportado** | detección fail-closed; tablas internacionales bloqueadas explícitamente, no importadas |
 | Falabella/CMR — Movimientos Facturados | ✅ XLSX real | `PAGO TARJETA` separado de gasto; cuotas vía `VALOR CUOTA`; `CUOTAS PENDIENTES` como remaining count |
-| Falabella/CMR — PDF | ⚠️ sólo evidencia del calibrador, **no importable** esta tranche | `pdf-lib`/`pdfjs-dist` son devDependency, nunca entran a `dist/addon.js` |
+| Falabella/CMR — PDF | ⚠️ sólo evidencia del calibrador, **no importable** esta tranche | El calibrador usa `pdfjs-dist` para extraer texto; `pdf-lib` no participa del calibrador, sólo genera PDFs sintéticos para tests. Ambas son devDependency, nunca entran a `dist/addon.js` |
 | Falabella — cuenta corriente | ⬜ sin muestra real | sigue `pending-real-sample` |
 
 Ninguna cartola real fue importada al host: la calibración corre fuera del
@@ -290,7 +297,8 @@ enlazar los dos tramos, y construir un ledger de pares propio es justo lo que
 
 | Qué | Por qué |
 | --- | --- |
-| **Perfiles bancarios validados** | No hay cartolas reales. Los cinco perfiles bancarios siguen `pending-real-sample` |
+| **Clasificación (`kind`) validada con banco real** | El calibrador nunca expone glosas reales; ningún perfil confirmó `kind` contra una cartola real todavía — los cinco siguen `pending-real-sample` en ese eje |
+| **Falabella / cuenta corriente — calibración estructural real** | Sin muestra real todavía; el resto de los perfiles (Banco de Chile, BancoEstado, Falabella/CMR) ya calibraron estructura contra cartolas reales |
 | **Aplicar una conciliación** | El SDK sigue sin exponer `link`/`transfer-pair`, tampoco en 3.8. Ver ADR 0005 |
 | **Conversión de moneda** | 3.8 publicó `ExchangeRatesAPI.getRatesForDates` (histórico real); evaluado y diferido a propósito — ver [UPSTREAM.md](UPSTREAM.md) § *veredicto de APIs nuevas* |
 | **Servicio importador, IA/MCP propio, Fintoc** | Decisiones D10-D12; ver [DECISIONS.md](DECISIONS.md) |
@@ -300,11 +308,20 @@ enlazar los dos tramos, y construir un ledger de pares propio es justo lo que
 
 ## Siguiente paso recomendado
 
-Calibrar los perfiles con cartolas reales privadas, siguiendo
-[BANK_FORMATS.md](BANK_FORMATS.md) § *Cómo calibrar un perfil*. Es lo único que
-separa este release candidate de un `0.2.0`.
+Conseguir una cartola real de Falabella/cuenta corriente (el único perfil sin
+calibración estructural real, ver tabla arriba) y confirmar la clasificación
+(`kind`) contra cartola real para los cinco perfiles, siguiendo
+[BANK_FORMATS.md](BANK_FORMATS.md) § *Cómo calibrar un perfil*. Es lo único
+que separa este release candidate de un `0.2.0`.
 
-Para CMR sigue abierta la pregunta que decide todo el cálculo de deuda
-comprometida: si una columna `Monto` sin etiquetar es el valor de la cuota o el
-total de la compra. Mientras no haya evidencia, la fila se marca
-`ambiguous-installment-amount` y el plan no deriva el total de la compra.
+Para CMR/Falabella, la pregunta sobre `MONTO` vs. `VALOR CUOTA` ya se resolvió
+para el XLSX real `Movimientos Facturados`: `MONTO` es el total/original de
+la compra, `VALOR CUOTA` es el cargo facturado del ciclo, `CUOTAS PENDIENTES`
+es el conteo de cuotas restantes, y el total de cuotas nunca se infiere
+dividiendo montos — una Activity por cargo facturado. Siguen abiertos, sin
+evidencia estructural suficiente para un mapping concreto en este workflow:
+`Servicio Administración`/cargos del emisor, avances en efectivo, interés e
+impuesto/mora como movimientos CMR, la columna de moneda ausente en
+Internacional, y el import de PDF (sigue sólo calibrable, no importable). Una
+fila sin evidencia suficiente se sigue marcando `ambiguous-installment-amount`
+en vez de fabricar el total de la compra.
