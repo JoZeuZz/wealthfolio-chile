@@ -2,7 +2,7 @@
 
 Qué funciona **hoy**, verificado, y qué no.
 
-Actualizado: 2026-09-10 · Wealthfolio v3.7.0 (mínimo) / v3.8.0 (también validado) · addon 0.2.0-rc.5
+Actualizado: 2026-09-16 · Wealthfolio v3.7.0 (mínimo) / v3.8.0 (también validado) · addon 0.2.0-rc.6
 
 ---
 
@@ -28,9 +28,9 @@ es un release candidate y no un `0.2.0`.
 ```
 typecheck   ✅  tsc --noEmit, strict + noUncheckedIndexedAccess
 lint        ✅  eslint, 0 errores, 0 warnings, sin `any`
-tests       ✅  1325 pasando (65 archivos)
-build       ✅  dist/addon.js — un solo archivo, 908.81 KB (238.55 KB gzip)
-coverage    ✅  95.91 % de líneas y 91.31 % de ramas en todo `src/`; 93.66 % / 88.66 % en `src/core/`
+tests       ✅  1627 pasando (88 archivos)
+build       ✅  dist/addon.js — un solo archivo, 935.15 KB (247.03 KB gzip)
+coverage    ✅  96.27 % de líneas y 91.53 % de ramas en todo `src/`; 94.13 % / 90.11 % en `src/core/`
 ```
 
 `pnpm verify` corre typecheck, lint, tests y build.
@@ -170,10 +170,30 @@ Ver [HOST_VALIDATION.md](HOST_VALIDATION.md) § *Sesión 6*.
 | Falabella / CMR — tarjeta | ✅ | ✅ | ✅ | ✅ | ⬜ |
 | Falabella — cuenta corriente | ✅ | ✅ | ✅ | ⬜ | ⬜ |
 
-`samples/private/` está vacío. **Ninguna institución tiene validación con
-cartola real**, y los cinco perfiles bancarios siguen `pending-real-sample`: el
-wizard lo advierte y el historial lo registra. Ver
-[BANK_FORMATS.md](BANK_FORMATS.md).
+`samples/private/` está vacío (gitignorado, nunca versionado). **Ninguna
+institución tiene validación de `kind` con cartola real**, y los cinco
+perfiles bancarios siguen `pending-real-sample` en ese eje: el wizard lo
+advierte y el historial lo registra. Ver [BANK_FORMATS.md](BANK_FORMATS.md).
+
+### Calibración estructural contra cartolas reales (2026-09)
+
+Distinto del eje anterior: el calibrador (`pnpm calibrate`) corrió contra
+cartolas reales privadas fuera de Git, sin escribir nada al host y sin
+exponer glosas. Confirma estructura/formato/signo/detección, no `kind`.
+
+| Banco / producto | Calibración estructural real | Notas |
+| --- | --- | --- |
+| BancoEstado CuentaRUT | ✅ XLSX real | fechas sin año, coma/punto de miles |
+| Banco de Chile cuenta corriente | ✅ XLS real | período vía SALDO INICIAL/FINAL, canal/sucursal |
+| Banco de Chile tarjeta — Nacional | ✅ XLS real | formato numérico por celda, write boundary y dedupe endurecidos |
+| Banco de Chile tarjeta — Internacional | 🚫 **no soportado** | detección fail-closed; tablas internacionales bloqueadas explícitamente, no importadas |
+| Falabella/CMR — Movimientos Facturados | ✅ XLSX real | `PAGO TARJETA` separado de gasto; cuotas vía `VALOR CUOTA`; `CUOTAS PENDIENTES` como remaining count |
+| Falabella/CMR — PDF | ⚠️ sólo evidencia del calibrador, **no importable** esta tranche | `pdf-lib`/`pdfjs-dist` son devDependency, nunca entran a `dist/addon.js` |
+| Falabella — cuenta corriente | ⬜ sin muestra real | sigue `pending-real-sample` |
+
+Ninguna cartola real fue importada al host: la calibración corre fuera del
+addon, y la validación contra el host (arriba en este documento) sigue
+usando fixtures sintéticos con forma idéntica a lo observado.
 
 ---
 

@@ -4,7 +4,7 @@ Addon de [Wealthfolio](https://wealthfolio.app) para gestión financiera persona
 en Chile: importa cartolas de bancos chilenos, concilia transferencias entre tus
 cuentas, detecta compras en cuotas y responde en qué se te va el sueldo.
 
-> **Estado: 0.2.0-rc.5 — validado contra Wealthfolio v3.7.0 y v3.8.0 reales,
+> **Estado: 0.2.0-rc.6 — validado contra Wealthfolio v3.7.0 y v3.8.0 reales,
 > con calibración estructural contra cartolas reales para 3 de 4 bancos.**
 > 1627 tests cubren el motor, la capa de servicios y la interfaz sobre un DOM.
 > El addon se ha ejecutado dentro de un Wealthfolio corriendo en varias

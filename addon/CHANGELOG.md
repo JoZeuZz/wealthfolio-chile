@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.2.0-rc.6 — 2026-09-16
+
+Calibración estructural contra cartolas reales para BancoEstado, Banco de
+Chile (cuenta corriente y tarjeta nacional) y Falabella/CMR, más el
+endurecimiento que salió de esa calibración. "Calibración estructural real"
+significa que el calibrador (`pnpm calibrate`) corrió fuera del host contra
+cartolas privadas y nunca expuso glosas — **ningún archivo bancario real fue
+importado a un Wealthfolio corriendo**; la validación contra el host sigue
+usando fixtures sintéticos con la misma forma. Sigue siendo release candidate:
+la clasificación (`kind`) de cada movimiento no está confirmada contra ningún
+banco real, y Falabella/cuenta corriente no tiene ninguna cartola real todavía.
+
+### Añadido
+
+- **Calibrador (`pnpm calibrate`)**: reporta hechos sanitizados de una cartola
+  real sin exponer glosas — forma de columnas no mapeadas, formato numérico
+  por celda, evidencia de cuotas, y ahora también evidencia de estados de
+  cuenta PDF (`pdf-lib`/`pdfjs-dist`, sólo devDependency, nunca en
+  `dist/addon.js`). PDF de CMR es **sólo calibrable, no importable** esta
+  tranche — demasiada arquitectura nueva para resolver junto con el resto.
+- Fechas civiles `dd/mm` sin año, resueltas contra el período declarado por la
+  propia cartola (`SALDO INICIAL`/`SALDO FINAL` en Banco de Chile cuenta
+  corriente).
+
+### Corregido
+
+**Banco de Chile — cuenta corriente**
+- Período derivado de las filas `SALDO INICIAL`/`SALDO FINAL`; saldo recorrido
+  como evidencia, sumando cada movimiento desde el último saldo declarado.
+- Formato numérico y canal/sucursal confirmados contra XLS real.
+
+**Banco de Chile — tarjeta**
+- Detección Nacional vs. Internacional endurecida: exige firma internacional
+  completa antes de tratar una cartola como tal, prefiere branding explícito
+  del emisor sobre pistas de layout, y usa el preámbulo del workbook como
+  evidencia adicional. Las tablas de movimientos internacionales se bloquean
+  explícitamente en cualquier hoja del workbook — **Internacional no se
+  soporta**, no se importa nunca, sólo se detecta para bloquear con la razón
+  correcta.
+- Formato numérico resuelto desde metadata de celda en vez de asumir
+  convención regional; falla cerrado ante un formato de planilla inseguro en
+  vez de adivinar el monto.
+- Boundary de escritura endurecido: la validación se aplica también ahí, no
+  sólo en el preview.
+- Dedupe endurecido contra conflictos de fuente legacy (huellas de una versión
+  anterior del fingerprint): se tratan como no importables en vez de
+  colisionar en silencio, y el resumen de importación reporta el conflicto
+  filtrado con precisión.
+- Errores de dirección y de parseo de monto sanitizados: nunca filtran el
+  valor crudo de la celda hacia logs o mensajes.
+
+**Falabella / CMR**
+- Firma estructural propia (layout, no sólo texto de marca) para detectar CMR
+  sin depender de branding.
+- `PAGO TARJETA` (glosa propia del lado tarjeta de un pago) reconocido y
+  separado de gasto — antes podía contarse como consumo.
+- Se exige que la descripción de pago de tarjeta sea explícita: una coincidencia
+  parcial ya no basta para clasificar un movimiento como pago.
+- Cuotas: `VALOR CUOTA` (cargo del ciclo) distinguido de `MONTO` (compra
+  completa) — confirmado 128/130 filas reales; una Activity por cuota
+  facturada, no por compra. `CUOTAS PENDIENTES` se lee como el conteo de
+  cuotas restantes, no como un par `n de m`.
+- El siguiente ciclo de una cuota ya no se confunde con un duplicado exacto de
+  la cuota anterior: `installmentRemaining` distingue ambos ciclos aunque el
+  resto de la fila coincida.
+- Metadata de cuota obsoleta ya no puede ganarle a una edición del usuario en
+  el host: el dedupe ignora la metadata de cuotas que el host contradice en
+  vez de confiar en la caché.
+- Reimportar exactamente el mismo archivo sigue siendo idempotente en todos
+  estos casos — verificado con tests de regresión, no sólo con el caso feliz.
+
+**Transversal**
+- Freshness de metadata unificada entre todos los lectores del host: la
+  pregunta "¿esto sigue siendo lo que escribimos, o el usuario lo cambió?" se
+  resuelve una sola vez, no una vez por lector.
+- Consola de `pdfjs-dist` suprimida durante la calibración: el propio texto
+  del documento podía llegar a `warn()`/`error()` sin pasar por el
+  redactor de logs del addon.
+
+### Cambiado
+
+- Ningún cambio de `minWealthfolioVersion` (se mantiene en 3.7.0) ni de
+  dependencias runtime. `pdf-lib`/`pdfjs-dist` entran sólo como
+  devDependency del calibrador.
+
+### Validación
+
+- Host validation adicional documentada para Banco de Chile (cuenta y
+  tarjeta) y Falabella/CMR tras cada tranche de hardening — sobre fixtures
+  sintéticos, nunca con la cartola real que motivó el fix. Detalle sesión por
+  sesión en [docs/HOST_VALIDATION.md](../docs/HOST_VALIDATION.md).
+- Review independiente (P0/P1) sobre el estado real-sample de README y CMR:
+  0 P0 nuevos, 0 P1 nuevos tras las correcciones de esta tranche.
+
 ## 0.2.0-rc.5 — 2026-09-09
 
 ### Corregido
