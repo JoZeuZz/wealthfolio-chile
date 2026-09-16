@@ -228,10 +228,15 @@ validación se enterara.
 
 El recorrido de saldos es evidencia, no dogma. Un desajuste aislado es error
 sólo en un perfil que declara su columna de saldo `authoritative` —hoy ninguno
-de los bancarios, porque nadie ha visto una exportación real—. Un desajuste
-**sistemático** (≥50 % de los pasos, con un mínimo de 4) es error en cualquier
-perfil: a esa proporción no es una rareza del banco, es que el archivo se está
-leyendo mal.
+lo hace, y no por falta de exportaciones reales: ya existen, calibradas vía
+`pnpm calibrate`, para Banco de Chile, BancoEstado y Falabella/CMR (ver
+`docs/BANK_FORMATS.md`). La razón real es que ningún perfil se promovió a
+`authoritative` todavía: Banco de Chile cuenta corriente es el único donde el
+recorrido reconcilió sin un solo descuadre en 96 pasos sobre 8 cartolas
+reales; BancoEstado y Falabella aún no tienen esa misma confirmación de
+recorrido contra una cartola real—. Un desajuste **sistemático** (≥50 % de los
+pasos, con un mínimo de 4) es error en cualquier perfil: a esa proporción no
+es una rareza del banco, es que el archivo se está leyendo mal.
 
 ---
 
@@ -311,8 +316,11 @@ enlazar los dos tramos, y construir un ledger de pares propio es justo lo que
 Conseguir una cartola real de Falabella/cuenta corriente (el único perfil sin
 calibración estructural real, ver tabla arriba) y confirmar la clasificación
 (`kind`) contra cartola real para los cinco perfiles, siguiendo
-[BANK_FORMATS.md](BANK_FORMATS.md) § *Cómo calibrar un perfil*. Es lo único
-que separa este release candidate de un `0.2.0`.
+[BANK_FORMATS.md](BANK_FORMATS.md) § *Cómo calibrar un perfil*. Estas son las
+principales validaciones con datos reales que siguen pendientes antes de
+evaluar la promoción de este release candidate a `0.2.0` — no es un gate
+exhaustivo ni una decisión ya tomada de que, resueltas, el `0.2.0` final quede
+aprobado.
 
 Para CMR/Falabella, la pregunta sobre `MONTO` vs. `VALOR CUOTA` ya se resolvió
 para el XLSX real `Movimientos Facturados`: `MONTO` es el total/original de
