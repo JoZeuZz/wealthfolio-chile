@@ -128,8 +128,15 @@ export async function loadDuplicateIndexResult(
         ...(metadata?.fileHash ? { fileHash: metadata.fileHash } : {}),
         // Straight from our own metadata, like `parser`/`fileHash` above — see
         // `ExistingMovement.installmentRemaining` for why the dedupe classifier
-        // needs it.
-        ...(metadata?.cuotaRem !== undefined ? { installmentRemaining: metadata.cuotaRem } : {}),
+        // needs it. Gated by `!modified`, the same freshness rule
+        // `metadataCacheIsCurrent` applies in `activityToTransaction`
+        // (`core/mapping/activities.ts`): a host edit invalidates the whole
+        // cache, and `cuotaRem` is no exception. Without this gate, a stale
+        // remaining count from before the edit could tell `classifyDuplicate`
+        // two identical rows are different installment cycles.
+        ...(!modified && metadata?.cuotaRem !== undefined
+          ? { installmentRemaining: metadata.cuotaRem }
+          : {}),
       });
     }
 

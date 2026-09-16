@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyDuplicate } from '../src/core/dedupe/classify';
+import { buildDuplicateIndex, classifyDuplicate, type ExistingMovement } from '../src/core/dedupe/classify';
 import { hashFields } from '../src/core/hash';
 import { descriptionKey } from '../src/core/text';
 import { computeFingerprint, computeWeakFingerprint } from '../src/core/dedupe/fingerprint';
@@ -624,6 +624,176 @@ describe('movimientos que no escribió este addon', () => {
  * El resultado es `nuevo`, marcado por defecto: una segunda copia completa de
  * cada cartola con céntimos.
  */
+/**
+ * P1 (review independiente): `installmentRemaining` stale viola host
+ * authority en `ActivityIndex`/dedupe.
+ *
+ * `loadDuplicateIndexResult` ya calcula `modified` (via `wasModifiedAfterImport`,
+ * la misma regla de frescura que `activityToTransaction` aplica con
+ * `metadataCacheIsCurrent`/`activityProjection`) y lo usa para decidir si el
+ * MONTO cacheado sigue siendo de fiar. Pero `metadata.cuotaRem` se copiaba a
+ * `ExistingMovement.installmentRemaining` sin consultar `modified` — así que
+ * una Activity editada en Wealthfolio (glosa corregida a mano, por ejemplo)
+ * seguía aportando un `installmentRemaining` de un snapshot que ya no existe.
+ * `classifyDuplicate` usa ese campo para decidir "ciclo distinto, no
+ * comparar por similitud" (`core/dedupe/classify.ts`), así que un
+ * `cuotaRem` stale podía hacer que un duplicado real saliera `new` en vez de
+ * `probable`.
+ *
+ * El repro edita sólo `comment` (no fecha/monto): la receta de
+ * `weakFingerprint` (`weakFingerprintOf`) sólo depende de cuenta/fecha/monto,
+ * así que tocar sólo la glosa deja el bucket débil intacto y aísla el bug de
+ * `installmentRemaining` sin arrastrar ninguna staleness de `weakFingerprint`
+ * (fuera de alcance de este P1).
+ */
+describe('P1: cuotaRem stale no participa en dedupe tras una edición del host', () => {
+  function cuotaTransaction(installmentRemaining: number) {
+    return makeTransaction({
+      amount: -49990,
+      date: '2026-09-04',
+      description: 'FALABELLA RETAIL PLAZA VESPUCIO',
+      kind: TransactionKind.credit_card_purchase,
+      installmentRemaining,
+    });
+  }
+
+  it('cuotaRem fresca (Activity no editada) sobrevive el roundtrip al índice', async () => {
+    const original = cuotaTransaction(5);
+    const stored = writeAsAddonWould(original);
+
+    const { index } = await loadDuplicateIndexResult(fakeHost({ activities: [stored] }).ctx, {
+      accountId: ACCOUNT,
+    });
+
+    expect(index.byFingerprint.get(original.fingerprint)?.installmentRemaining).toBe(5);
+  });
+
+  it('cuotaRem=0 sobrevive el roundtrip sin perderse por truthiness', async () => {
+    const original = cuotaTransaction(0);
+    const stored = writeAsAddonWould(original);
+
+    const { index } = await loadDuplicateIndexResult(fakeHost({ activities: [stored] }).ctx, {
+      accountId: ACCOUNT,
+    });
+
+    expect(index.byFingerprint.get(original.fingerprint)?.installmentRemaining).toBe(0);
+  });
+
+  it('cuotaRem se descarta del índice cuando el host editó la Activity después del import', async () => {
+    const original = cuotaTransaction(5);
+    const stored = writeAsAddonWould(original);
+
+    // Edición económica en Wealthfolio: sólo la glosa cambia. Sigue siendo una
+    // edición real según `activityProjection` (el comment es parte de la
+    // proyección), y `metadata.cuotaRem` no se toca — queda stale.
+    const edited = { ...stored, comment: 'FALABELLA RETAIL PLAZA VESPUCIO (CORREGIDO)' };
+
+    const { index } = await loadDuplicateIndexResult(fakeHost({ activities: [edited] }).ctx, {
+      accountId: ACCOUNT,
+    });
+
+    expect(index.byFingerprint.get(original.fingerprint)?.installmentRemaining).toBeUndefined();
+  });
+
+  it('con cuotaRem stale, un candidate con remaining distinto ya no evita el match por similitud (probable, no new)', async () => {
+    const original = cuotaTransaction(5);
+    const stored = writeAsAddonWould(original);
+    const edited = { ...stored, comment: 'FALABELLA RETAIL PLAZA VESPUCIO (CORREGIDO)' };
+
+    const { index } = await loadDuplicateIndexResult(fakeHost({ activities: [edited] }).ctx, {
+      accountId: ACCOUNT,
+    });
+
+    const candidate = makeTransaction({
+      amount: -49990,
+      date: '2026-09-04',
+      description: 'FALABELLA RETAIL PLAZA VESPUCIO (CORREGIDO)',
+      installmentRemaining: 4,
+      sourceFileHash: 'otro-archivo',
+    });
+    const finding = classifyDuplicate(
+      { ...candidate, fingerprint: computeFingerprint(candidate, SCOPE) },
+      index,
+      SCOPE,
+      new Map(),
+    );
+
+    expect(finding.verdict).toBe('probable');
+    expect(finding.reason_code).toBe('similar');
+  });
+
+  it('sin edición, un candidate con remaining distinto sigue siendo new (no rompe 9164e91)', async () => {
+    const original = cuotaTransaction(5);
+    const stored = writeAsAddonWould(original);
+
+    const { index } = await loadDuplicateIndexResult(fakeHost({ activities: [stored] }).ctx, {
+      accountId: ACCOUNT,
+    });
+
+    const candidate = makeTransaction({
+      amount: -49990,
+      date: '2026-09-04',
+      description: 'FALABELLA RETAIL PLAZA VESPUCIO',
+      installmentRemaining: 4,
+      sourceFileHash: 'ciclo-siguiente',
+    });
+    const finding = classifyDuplicate(
+      { ...candidate, fingerprint: computeFingerprint(candidate, SCOPE) },
+      index,
+      SCOPE,
+      new Map(),
+    );
+
+    expect(finding.verdict).toBe('none');
+    expect(finding.reason_code).toBe('new');
+  });
+
+  it('exact-fingerprint sigue ganando aunque exista remaining metadata (no cambia la precedencia)', async () => {
+    const original = cuotaTransaction(5);
+    const stored = writeAsAddonWould(original);
+
+    const { index } = await loadDuplicateIndexResult(fakeHost({ activities: [stored] }).ctx, {
+      accountId: ACCOUNT,
+    });
+
+    const sameFile = { ...original, installmentRemaining: 4 };
+    const finding = classifyDuplicate(sameFile, index, SCOPE, new Map());
+
+    expect(finding.verdict).toBe('exact');
+    expect(finding.reason_code).toBe('exact-fingerprint');
+  });
+
+  it('múltiples existing: uno fresco con remaining distinto se ignora, uno stale/sin remaining sigue dando probable', () => {
+    const candidate = { ...cuotaTransaction(4), fingerprint: 'candidate-fp' };
+    const freshDiffering: ExistingMovement = {
+      activityId: 'fresh-differing',
+      date: candidate.date,
+      amount: candidate.amount,
+      description: candidate.description,
+      fingerprint: 'fresh-fp',
+      weakFingerprint: computeWeakFingerprint(candidate, SCOPE),
+      installmentRemaining: 9,
+    };
+    const staleUnknown: ExistingMovement = {
+      activityId: 'stale-unknown',
+      date: candidate.date,
+      amount: candidate.amount,
+      description: candidate.description,
+      fingerprint: 'stale-fp',
+      weakFingerprint: computeWeakFingerprint(candidate, SCOPE),
+      // Sin installmentRemaining: como quedaría tras el fix, para una
+      // Activity editada.
+    };
+    const index = buildDuplicateIndex([freshDiffering, staleUnknown]);
+
+    const finding = classifyDuplicate(candidate, index, SCOPE, new Map());
+
+    expect(finding.verdict).toBe('probable');
+    expect(finding.reason_code).toBe('similar');
+    expect(finding.existingActivityId).toBe('stale-unknown');
+  });
+});
+
 describe('compatibilidad con las huellas de 0.1.x', () => {
   /** La receta exacta de 0.1.x: `toDecimalString`, con la escala dentro. */
   function legacyFingerprints(transaction: NormalizedTransaction, accountId: string) {
