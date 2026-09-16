@@ -97,11 +97,15 @@ mantienen como fuente de verdad operativa y no se repiten aquí. Resumen:
   cuenta corriente (sin calibrar) — **calibración estructural real** para
   los primeros tres. Ningún perfil tiene `kind` confirmado exhaustivamente
   contra cartola real, pero Falabella/CMR **sí** tiene evidencia parcial real
-  de clasificación: de 130 filas reales calibradas, 13 confirmaron
-  `credit_card_payment` vía el marcador anclado `PAGO TARJETA` y 2
-  confirmaron `refund` con los marcadores de reversa existentes
-  (`docs/BANK_FORMATS.md`, D23). No es evidencia exhaustiva — es la única
-  evidencia de `kind` contra cartola real que existe hoy, y no se descarta.
+  de clasificación: de 130 filas reales calibradas, 13 tenían glosa que el
+  banco emite como línea propia de pago, ancladas al inicio con el marcador
+  `PAGO TARJETA` (agregado a `CARD_SIDE_PAYMENT_MARKERS` a partir de esas
+  mismas filas — no es una confirmación independiente, es la evidencia que
+  originó la regla), y 2 con los marcadores de reversa existentes coinciden
+  con `refund` (`docs/BANK_FORMATS.md`, D23). No es evidencia exhaustiva ni
+  independiente — es la única evidencia de `kind` contra cartola real que
+  existe hoy, y el gate §6.4 sigue dependiendo del workflow humano (§7) para
+  una confirmación real, no de esta cifra.
 - Import CSV/TXT/XLS/XLSX; PDF sólo evidencia de calibración, no importable.
 - Dedupe exact/probable/legacy; reconciliación implementada pero read-only
   (SDK no expone `link`/`unlink`/`transfer-pair`, ver ADR 0005).
@@ -129,13 +133,18 @@ cuando **todos** los siguientes son verdad, con verificación observada:
    arbitrario de `main`).
 2. Import inicial, reimport exacto, host edit, siguiente ciclo de cuota,
    pago de tarjeta, transferencias, fail-closed de Internacional,
-   **reimport cross-`parserVersion` de CMR contra Activities escritas por un
-   parser anterior** (debe bloquear con `legacy-source-conflict`, D23
-   addendum, no reproducido contra host real todavía) y **el gate de
-   "no se pudo comprobar duplicados" bloqueando la importación** (nunca
-   "no hay duplicados" por defecto) — comprobados contra el artefacto
-   publicado. Un dogfood que no ejercita estos dos últimos casos no puede
-   contar "0 P0/P1" como evidencia de que no los tiene.
+   **reimport de CMR que dispare `legacy-source-conflict`** (D23 addendum,
+   `core/dedupe/classify.ts`) — el guard exige las tres condiciones a la vez:
+   mismo `sourceFileHash`, `sourceParser === 'banco-falabella.cmr'`, y la
+   Activity existente con `parser === 'generico.tarjeta'` **o**
+   `parser === 'banco-falabella.cmr' && parserVersion === '0.1.0'` exacto (no
+   "cualquier versión anterior"). El plan de Fase 0 (Tarea 1) fija el setup
+   exacto antes de ejecutarlo — no reproducido contra host real todavía. Y
+   **el gate de "no se pudo comprobar duplicados" bloqueando la importación**
+   (nunca "no hay duplicados" por defecto) — comprobados contra el artefacto
+   publicado. Un dogfood que no ejercita estos dos últimos casos, con el
+   setup exacto que los dispara, no puede contar "0 P0/P1" como evidencia de
+   que no los tiene.
 3. Perfiles anunciados como soportados tienen evidencia estructural real
    (no sólo fixture sintético) donde ya existe (Banco de Chile, BancoEstado,
    Falabella/CMR).
@@ -178,19 +187,35 @@ workflow **human-in-the-loop** local:
    a un tercero (sí es gasto real) bajo una sola etiqueta `transfer`, la
    clase de error que más corrompe el patrimonio —contar de más o de menos
    una transferencia— queda invisible en el propio reporte que existe para
-   detectarla. El vocabulario final tiene que ser una función total y
-   verificada contra `TransactionKind` (cada etiqueta humana mapea a
-   exactamente un `TransactionKind`, y todo `TransactionKind` clasificable
-   es alcanzable por alguna etiqueta) — con test de esa propiedad. Esa
-   reconciliación es tarea de diseño de la Tarea 2 del plan de Fase 0, no
-   una decisión ya tomada aquí.
+   detectarla. Esta etiqueta es, además, **obligatoria, no opcional**: hoy
+   `builtin.traspaso-cuenta` (`core/rules/builtin.ts`) marca
+   `internal_transfer` cualquier glosa de cuenta corriente que contenga
+   `TRASPASO`, sin condición sobre la contraparte, así que una transferencia
+   a un tercero puede salir hoy del total de gasto por esa vía sin que nada
+   lo detecte — es el caso que este workflow existe para exponer.
+   **La función no puede ser ciega a la dirección**: dirección (`in`/`out`)
+   no es un monto, así que incluirla no toca la frontera de privacidad, y es
+   necesaria porque el mismo `TransactionKind` cambia de sentido económico
+   según la dirección (`fee`/`interest` son income o spending según entren o
+   salgan, `core/model/kinds.ts`; un `credit_card_payment` es `in` en la
+   tarjeta y `out` en la cuenta que paga) y porque "transferencia a un
+   tercero" no es un solo `TransactionKind` — es `expense` si sale e `income`
+   si entra. El vocabulario final tiene que ser una función total y
+   verificada contra el par (`TransactionKind`, dirección) — no contra
+   `TransactionKind` solo: cada (etiqueta humana, dirección) mapea a
+   exactamente un `TransactionKind`, y todo (`TransactionKind`, dirección)
+   clasificable es alcanzable por alguna etiqueta — con test de esa
+   propiedad **y** un test de que la misma etiqueta con dirección opuesta se
+   reporta como mismatch, nunca como match. Esa reconciliación es tarea de
+   diseño de la Tarea 2 del plan de Fase 0, no una decisión ya tomada aquí.
 2. El agente **nunca** ve: glosa, RUT, número de cuenta, tarjeta, titular,
    monto real, nombre de archivo privado.
 3. Reporte sanitizado exportable, similar en espíritu al de `pnpm calibrate`:
 
    ```
-   provider, parserVersion, expectedKind (etiqueta del usuario),
-   actualKind (lo que el parser decidió), matchedRuleId, match/mismatch
+   provider, parserVersion, direction (in/out — no es un monto),
+   expectedKind (etiqueta del usuario), actualKind (lo que el parser
+   decidió), matchedRuleId, match/mismatch
    ```
 
 4. El agregado de varios usuarios (si se comparte) sigue sin exponer nada
@@ -283,7 +308,7 @@ transacciones de plataforma. `StatementProduct` (`core/model/statement.ts`)
 ya tiene cinco valores (`checking`, `savings`, `credit_card`, `credit_line`,
 `unknown`), no dos — la pregunta real no es "¿hace falta un segundo valor?"
 sino si Mercado Pago encaja en `unknown`/`checking` o si merece un valor
-propio, dado que once módulos de `core/` ramifican sobre `StatementProduct`
+propio, dado que catorce módulos de `core/` ramifican sobre `StatementProduct`
 (convención de signo, clasificación por defecto, `classify/card-semantics.ts`,
 `reconcile/credit-card.ts`). Pregunta de diseño abierta, no resuelta aquí.
 
@@ -325,7 +350,9 @@ como si fueran hechos del estado de cuenta: esos totales ya existen como
 Activities individuales (una por movimiento), y convertirlos también en un
 "hecho declarado" agregado duplicaría el conteo del consumo del mes si
 alguna vez se suman ambas fuentes. Un hecho de `StatementFacts` nunca produce
-una `ActivityCreate` ni entra en `grossSpending`.
+una `ActivityCreate` ni entra en `grossSpending` — incluido un hecho con
+`FactSource: 'derived'` (el modelo lo permite, hoy sin usar; si esta fase
+lo estrena, un hecho derivado tampoco se suma con los totales de movimiento).
 **Por qué.** El modelo ya existe y está probado contra fixtures sintéticos
 construidos con la redacción del reglamento (NCG 537, Decreto 75/2026); falta
 la confirmación contra cartola real de esos diez campos, incluida la
@@ -354,11 +381,16 @@ explícita.
 ### Fase 4 — Costos financieros (profundización)
 
 **Objetivo.** Seguir separando consumo y costo financiero con más cobertura
-de casos reales, confirmando contra glosa real las familias que
-`FinancialCostKind` (`core/model/financial-cost.ts`) ya modela: mantención,
-administración, interés rotativo, interés de cuotas, interés de avance,
-mora, comisión de avance, comisión de compra internacional, impuesto de
-timbres, cobranza.
+de casos reales, confirmando contra glosa real las nueve familias nombradas
+que `FinancialCostKind` (`core/model/financial-cost.ts`) modela:
+`revolving_interest`, `late_interest`, `installment_interest`,
+`cash_advance_interest`, `maintenance` (cubre mantención **y**
+administración — es una sola familia, no dos), `international_purchase`,
+`cash_advance_fee`, `collection`, `credit_tax`. El enum tiene un décimo
+valor, `other` ("a charge the glosa names as a cost without saying which
+one") — existe justamente para la glosa que no permite identificar una
+familia, así que **no** se cuenta como familia a confirmar contra glosa
+real, igual que seguros y principal de avance.
 **Explícitamente fuera de esta fase, por decisión ya tomada en D20** —no se
 reintroducen como familia de costo financiero: **seguros** (una prima
 confirmada es consumo voluntario del producto, no costo de endeudarse ni de
@@ -372,9 +404,10 @@ regulatorio OFFICIAL; falta confirmar contra glosas reales de cada banco.
 **Dependencias.** Fase 1/2/3 aportando muestras reales.
 **Evidencia necesaria.** Frase completa en la glosa, nunca subcadena corta.
 **Gate de inicio.** Cualquier muestra real con un costo financiero visible.
-**Gate de cierre.** Al menos un costo financiero de cada familia de
-`FinancialCostKind` (listadas arriba) confirmado contra glosa real —
-explícitamente sin incluir seguros ni principal de avance en ese conteo.
+**Gate de cierre.** Al menos un costo financiero de cada una de las nueve
+familias nombradas de `FinancialCostKind` (listadas arriba) confirmado
+contra glosa real — explícitamente sin incluir seguros, principal de avance
+ni `other` en ese conteo de diez.
 **Riesgos.** Ninguno nuevo respecto de lo ya mitigado en D20/D21.
 **Qué no hacer.** Un avance en efectivo nunca es spending. Una prima de
 seguro nunca es `financialCostKind`. El principal de un avance nunca es
