@@ -87,6 +87,99 @@ que el usuario ve.
 `saveMany`, no con `activities.import()` — `ActivityImport` no tiene campo
 `metadata`.
 
+**Adenda (investigación post-rc6, 2026-09-17) — qué pasa cuando la
+provenance no se puede leer.** Dos informes de esta fase de planificación
+hicieron afirmaciones incompatibles sobre una Activity existente que podría
+representar la misma transacción, pero cuya metadata de procedencia no se
+puede leer (`readChileMetadata` devuelve `undefined` — falta `fp`, JSON
+corrupto, o la fila nunca fue nuestra). Investigado contra el código real
+(`core/dedupe/classify.ts`, `services/activity-index.ts`,
+`core/mapping/activities.ts`), no de memoria:
+
+- **A. Qué hace el código hoy.** `services/activity-index.ts` indexa la
+  Activity igual: sin `fingerprint` fuerte ni `parser`/`parserVersion`/
+  `fileHash` (esos campos sólo existen si la metadata se pudo leer), pero
+  **sí** con una huella débil derivada directamente de campos del host
+  (`accountId`+`date`+`amount`, vía `weakFingerprintOf`) y con la glosa real
+  (`activity.comment`). `classifyDuplicate` no puede alcanzarla por huella
+  fuerte (no está indexada) ni por el guard `legacy-source-conflict` — que
+  exige no sólo `parser`/`parserVersion` legibles en la Activity existente,
+  sino también `fileHash` en ambos lados (el índice `byFileHash` sólo indexa
+  por `movement.fileHash`) — pero **sí** puede alcanzarla por huella débil +
+  similitud de descripción, que no dependen de nuestra metadata. Esa última
+  vía exige dos cosas a la vez: mismo monto (`equals`, la huella débil ya lo
+  incluye) **y** `similarity(...) >= 0.72` contra `activity.comment`. Si el
+  monto difiere, ninguna de las tres vías la encuentra. Si el monto coincide
+  pero `activity.comment` está vacío o fue reescrito (fila editada a mano, o
+  escrita por el importador nativo de Wealthfolio con otro texto), la
+  similitud puede caer bajo el umbral igual. En ambos casos la fila sale
+  `new`.
+- **B. Por qué.** Por diseño (esta misma decisión, D6): sin `fp` legible no
+  hay fingerprint que confiar, e inventar uno desde el comentario "pondría
+  guesses en los reportes del usuario" (`activityToTransaction`). La huella
+  débil existe deliberadamente para cubrir movimientos que el addon nunca
+  escribió (fila manual, importador nativo de Wealthfolio) sin que queden
+  "estructuralmente inalcanzables" — el bug histórico que este mismo
+  mecanismo corrigió. `legacy-source-conflict` es, por diseño, un guard
+  estrecho para dos transiciones parser/versión conocidas
+  (`banco-chile.tarjeta@0.1.0`, `banco-falabella.cmr@0.1.0`,
+  `generico.tarjeta`) y sólo puede dispararse cuando esa procedencia —
+  incluido `fileHash` — es legible en ambos lados.
+- **C. Qué invariantes protege.** Nunca inventar clasificación ni fingerprint
+  desde una glosa. Que una fila ajena o pre-esquema-3 no quede invisible al
+  dedupe por huella débil. Que `legacy-source-conflict` se mantenga
+  deliberadamente estrecho (fail-closed sólo para transiciones conocidas) y
+  no bloquee reimportaciones sin relación.
+- **D. ¿Puede producir duplicación silenciosa?** **Sí, en dos casos reales y
+  reproducibles por lectura de código — no hipotéticos, y el segundo es más
+  amplio que el primero.** (1) La intersección para la que
+  `legacy-source-conflict` existe: una Activity legacy de una de las dos
+  transiciones conocidas, reimportada con el parser corregido, que ahora
+  calcula un monto distinto, **más** metadata de esa misma Activity legacy
+  ilegible. (2) **Más general, sin relación con las transiciones legacy
+  conocidas**: cualquier Activity con metadata ilegible, mismo monto en el
+  reimport, cuya `comment` almacenada no alcance el umbral de similitud
+  contra la glosa reimportada (vacía, editada a mano, o escrita por otra
+  vía con otro texto) — la huella débil encuentra el bucket, pero
+  `best.score >= 0.72` no se cumple, y el veredicto también sale `new`. En
+  ambos casos se escribe una segunda Activity para el mismo movimiento real.
+  El caso (2) es el que importa más para diseñar la corrección: acotar el
+  blocker de Fase 0 sólo a las dos transiciones parser conocidas del caso
+  (1) dejaría abierta esta segunda ruta de doble escritura. Ningún test
+  existente (`tests/dedupe-legacy-source-conflict.test.ts`,
+  `tests/dedupe-legacy-cmr-transition.test.ts`) ejercita metadata ilegible —
+  ambos siempre fijan `parser`/`parserVersion`/`fileHash` completos — así que
+  ninguna de las dos combinaciones está cubierta por regresión.
+- **E. ¿Puede bloquear falsamente una transacción genuina?** No. Metadata
+  ilegible sólo reduce lo que el clasificador puede detectar (pierde la vía
+  fuerte y el guard legacy); nunca agrega una señal que dispare un bloqueo
+  que no correspondía. El único modo de falla es subdetección (D), no
+  sobre-bloqueo.
+- **F. Política fail-safe para estable.** El principio ya vigente en
+  `AGENTS.md` ("si la comprobación de duplicados no puede hacerse, la
+  importación debe bloquearse — no asumir 'no hay duplicados'") no se cumple
+  hoy en los dos casos de D: la comprobación fuerte y `legacy-source-conflict`
+  quedan silenciosamente indisponibles cuando la metadata es ilegible, y la
+  vía débil por sí sola no es un sustituto confiable cuando además el monto
+  coincide pero la descripción no. **No se corrige en esta branch
+  documental** — es blocker/investigación de Fase 0 (ver
+  `.ai/plans/phase-0.2.0-stable-evidence.md`, Tarea 1): el mecanismo
+  concreto (por ejemplo, tratar toda Activity con metadata ilegible que
+  coincida en cuenta/fecha/monto, no sólo las dos transiciones legacy
+  conocidas, como "dedupe no disponible" para esa fila en vez de "nueva")
+  requiere diseño, no está decidido aquí.
+
+Una sola descripción canónica: la afirmación previa de que "sale `new`, es
+comportamiento esperado" es cierta sobre la mecánica del guard pero
+incompleta sobre el riesgo — sí puede producir duplicación real, y en un
+conjunto de casos más amplio que sólo las dos transiciones legacy conocidas
+(ver D). La afirmación de que "metadata ilegible no puede asumirse como
+movimiento nuevo" es la conclusión correcta cuando el monto coincide pero la
+descripción no alcanza el umbral de similitud, y también en la intersección
+legacy de arriba — pero sigue sin ser universal: cuando el monto coincide
+**y** la descripción es suficientemente similar, la vía débil sí encuentra la
+fila y el veredicto es `probable`, no `new`, sin necesidad de ningún cambio.
+
 ---
 
 ## D7 — Categorización propia, no la del core
@@ -242,6 +335,40 @@ cartolas reales y evaluar por separado cash y tarjeta. Con perfiles todavía
 `pending-real-sample` ese número no existe. La falta de evidencia real no cierra
 el gate del propietario: D14 sigue **OPEN** hasta su decisión explícita.
 
+**Adenda (reconciliación post-rc6, 2026-09-17) — principio fail-safe de
+tarjeta, decidido independientemente de marcado/desmarcado.** Lo de arriba
+sigue **OPEN** en un solo eje: si una fila `unknown` llega a la vista previa
+marcada o desmarcada por defecto. Eso no es lo mismo que decidir qué puede
+*escribirse*, y en ese segundo eje ya hay una decisión del propietario, válida
+para cash y tarjeta por igual:
+
+> Una fila de tarjeta cuyo significado económico siga siendo `unknown` nunca
+> se convierte silenciosamente en consumo o ingreso sólo para satisfacer el
+> `ActivityType` que el host acepta.
+
+En cuenta cash esto ya se cumple: `UNKNOWN` se escribe tal cual, con
+`needsReview`, y `event_kind` lo deja fuera de todo cálculo del host (ver
+"Cómo está hoy" arriba). **En tarjeta, hoy no se cumple.** La sustitución
+descrita arriba (`unknown` saliente → `WITHDRAWAL`) es exactamente la
+conversión silenciosa que este principio prohíbe: D19 confirma que
+`spending::classify_activity` cuenta ese `WITHDRAWAL` como `Expense` en el
+informe de gasto del host, aunque el propio addon lo excluya de sus totales
+(`NON_SPENDING_KINDS`) y conserve `metadata.kind: unknown`. La premisa "sale
+del host, no distorsiona nada" — el argumento original de D14 — es cierta
+para cash y **falsa** para tarjeta; la fila del cuadro de arriba ya lo dice
+explícitamente, esta adenda sólo lo eleva a principio de producto decidido,
+no a preferencia todavía en discusión.
+
+**Qué queda por diseñar, no decidido aquí.** El mecanismo concreto que hace
+cumplir el principio en tarjeta — revisión explícita antes de escribir, o
+bloqueo del lote/fila según el contrato que mejor preserve atomicidad
+(`saveMany` es todo-o-nada, ver `docs/UPSTREAM.md`) — es una decisión de
+diseño de Fase 0, no tomada en esta sesión documental. Hasta que exista esa
+implementación con test de regresión, el gate de estable §6.5 no cierra: no
+basta con decidir marcado/desmarcado, hace falta que ninguna fila de tarjeta
+`unknown` cruce a `Expense` sin que alguien la haya revisado o sin que la
+importación se haya bloqueado explícitamente.
+
 ---
 
 ## D15 — Flujo de caja y gasto se reportan por separado
@@ -354,6 +481,60 @@ pendiente es el caso de un avance abonado a una cuenta propia que el usuario
 también importa, donde el efectivo reaparece como entrada. Ese ingreso se deja
 sin resolver en vez de leerse como ingreso, y el par lo propone la pantalla de
 conciliación, no un clasificador. `BLOCKED: real-bank-sample`.
+
+**Adenda (investigación post-rc6, 2026-09-17) — el mismo riesgo existe hoy en
+cuenta corriente, con un tercero en vez de un refinanciamiento.** El arreglo
+de arriba resolvió `TRASPASO` en tarjeta (producto). No cubre `builtin.
+traspaso-cuenta` (`core/rules/builtin.ts`), la regla hermana para cuentas
+`cuenta corriente`/no-tarjeta: dispara con `match: 'all'` sobre
+`{ description contains 'TRASPASO', product != credit_card, product !=
+credit_line }`, **sin ninguna condición sobre la contraparte**. Confirmado
+leyendo la regla y `mark_transfer`
+(`core/rules/engine.ts`): cualquier glosa de cuenta corriente que contenga
+`TRASPASO` — incluida una a un tercero, no sólo `CUENTA PROPIA`/`ENTRE
+CUENTAS` — se marca `internal_transfer` y `stopProcessing` la blinda de
+cualquier regla posterior. Ninguno de los tests existentes
+(`card-classification.test.ts`, `rules-integration.test.ts`,
+`rules-service.test.ts`, `recurring.test.ts`) ejercita una glosa `TRASPASO`
+de cuenta corriente a un tercero — todos los casos cubiertos son
+`CUENTA PROPIA`/`ENTRE CUENTAS` (correctos) o `TRASPASO` en tarjeta (el caso
+que esta decisión ya corrigió).
+
+**Consecuencia financiera real (corregida tras revisión financiera,
+2026-09-17).** El `Ignored` para `TRANSFER_OUT` en
+`spending::classify_activity` (upstream) sólo existe en la rama de cuenta
+`CREDIT_CARD` — que es de lo que habla la corrección de tarjeta más arriba en
+esta misma decisión. En una cuenta `CASH` (el caso real aquí:
+`builtin.traspaso-cuenta` corre sobre cuenta corriente, no tarjeta) la rama
+sin `source_group_id` — que el addon no puede escribir, ver más arriba y
+ADR 0005 — clasifica `"WITHDRAWAL" | "TRANSFER_OUT" | "FEE" | "TAX" =>
+Expense`. Es decir: en el addon la fila sale de `SPENDING_KINDS`/
+`isSpending` (`internal_transfer` está en `NON_SPENDING_KINDS`) y desaparece
+de su propio informe de gasto, pero en el **host** un `TRANSFER_OUT` sin
+grupo en cuenta corriente **sí cuenta como `Expense`** — no desaparece ahí,
+lo que sí cambia en el host es `economic_events::event_kind`, que deja de
+ser `CashFlow` y pasa a depender de `TransferBoundary`, con saldo y
+`net_contribution` idénticos. El daño real no es que la transferencia
+desaparezca de todo reporte de gasto: es que el informe del addon y el del
+host **discrepan** sobre la misma fila (uno la cuenta como gasto, el otro
+no), sin que nada la marque para revisión — y el informe que el usuario mira
+primero es el del addon, donde sí desaparece. Es exactamente la clase de
+error que `docs/ROADMAP.md` §7 nombra como la que más corrompe el patrimonio
+(contar de más o de menos una transferencia), y ya está documentada ahí como
+motivo por el que la etiqueta "transferencia a un tercero" es obligatoria en
+el vocabulario de validación semántica.
+
+**Clasificación.** `P1/STABLE BLOCKER`. Es reproducible por lectura de código
+— no depende de una cartola real específica, cualquier glosa de cuenta
+corriente con `TRASPASO` sin ser `CUENTA PROPIA`/`ENTRE CUENTAS` dispara la
+regla — y contradice el principio 4 del roadmap. **No se corrige en esta
+branch documental** — no cambia código ni reglas aquí. Se añade como
+escenario explícito del gate de Fase 0
+(`docs/ROADMAP.md` §6.2, `.ai/plans/phase-0.2.0-stable-evidence.md` Tarea 1):
+antes de estable, una glosa `TRASPASO` de cuenta corriente a un tercero debe
+distinguirse de una transferencia propia o, fail-safe, quedar en revisión —
+nunca clasificarse silenciosamente como `internal_transfer`. El diseño de la
+corrección (qué condición sobre contraparte usar) no se decide aquí.
 
 ## D20 — Lo que cuesta el crédito se nombra; el emisor no es un comercio
 

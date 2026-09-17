@@ -120,6 +120,32 @@ mantienen como fuente de verdad operativa y no se repiten aquí. Resumen:
 - SDK build 3.8.0, `minWealthfolioVersion` 3.7.0 (deliberado — ninguna
   superficie 3.8-only se usa).
 
+### 4.1 Qué significa el claim de `0.2.0`
+
+`0.2.0` **no** significa "Chile completo". Significa: el conjunto de
+productos explícitamente anunciados como soportados tiene importación
+financieramente segura, evidencia estructural real suficiente, semántica
+validada para las clases observadas (§6.4, §7) y dogfooding del artefacto
+publicado (§6.1). Baseline esperado si la evidencia no cambia antes del
+cierre, verificado contra `docs/CURRENT_STATE.md` (tabla "Madurez por
+institución" y "Calibración estructural") al escribir esta sección:
+
+| Estado | Perfil |
+| --- | --- |
+| **STABLE** | BancoEstado CuentaRUT |
+| **STABLE** | Banco de Chile cuenta corriente |
+| **STABLE** | Banco de Chile tarjeta Nacional |
+| **STABLE** | Falabella/CMR Movimientos Facturados XLSX |
+| **EXPERIMENTAL** | Falabella cuenta corriente |
+| **UNSUPPORTED** | Banco de Chile tarjeta Internacional |
+| **UNSUPPORTED** | Import PDF (sólo calibrable, no importable) |
+
+"STABLE" aquí es estructural/de formato — los cuatro perfiles stable ya
+calibraron estructura contra cartola real (`docs/CURRENT_STATE.md`). Ninguno
+tiene todavía `kind` validado contra cartola real: eso es lo que cierra el
+gate semántico (§6.4, §7) antes de que este baseline pueda llamarse cerrado.
+No inventar `stable` donde la evidencia estructural no alcance.
+
 ## 5. Objetivo inmediato
 
 Convertir rc.6 en evidencia de estabilidad real y cerrar `0.2.0`. No hay
@@ -141,21 +167,49 @@ siguientes gates tienen observación escrita:
    la sobreescribe; siguiente ciclo de cuota, que sigue `new`; devolución distinta
    de pago de tarjeta; pago
    de tarjeta distinto de gasto o ingreso; transferencia propia distinta de
-   transferencia a tercero, o ésta queda fail-safe en revisión; principal de
+   transferencia a tercero — incluida explícitamente una glosa `TRASPASO` de
+   cuenta corriente a un tercero, que `builtin.traspaso-cuenta`
+   (`core/rules/builtin.ts`) marca hoy `internal_transfer` sin mirar la
+   contraparte (P1/stable blocker confirmado por lectura de código, ver D19) —
+   o ésta queda fail-safe en revisión; principal de
    avance fuera de consumo y costo financiero; interés, comisión e impuesto con
    signo y mapping correctos; CLP/USD nunca sumados; Internacional fail-closed;
-   fila ilegible con cero escrituras; conflicto CMR legacy; y dedupe
-   unavailable/truncated bloqueando importación.
+   fila ilegible con cero escrituras; conflicto CMR legacy; una fila de tarjeta
+   cuyo significado económico siga `unknown` nunca cruza a `Expense` sin
+   revisión explícita o bloqueo (ver D14, principio fail-safe de tarjeta); y
+   dedupe unavailable/truncated bloqueando importación — incluido el caso
+   estrecho de una Activity legacy con metadata de procedencia ilegible que
+   hoy puede escapar al guard `legacy-source-conflict` (ver D6, blocker de
+   investigación).
 3. **Claims por perfil.** Cada perfil publicado tiene matriz de
    `synthetic-tested`, `host-validated`, `real-structure-calibrated` y
    `real-semantics-validated`. Falabella cuenta corriente obtiene evidencia
    estructural o queda visible como experimental, fuera del claim estable.
-4. **Semántica.** Workflow de §7 con conteos, dirección y evidencia real. El
-   propietario debe decidir umbral numérico de muestra, cobertura de clases
-   críticas y política de cero falsos positivos antes de cerrar el gate. El
-   umbral queda **OPEN** hasta esa decisión; evidencia `BLOCKED` no lo cierra.
-5. **D14.** El propietario decide explícitamente la política de `unknown`.
-   Falta de evidencia real mantiene D14 **OPEN**; no cierra este gate.
+4. **Semántica.** Workflow de §7 con conteos, dirección y evidencia real. No
+   se usa un porcentaje global. El gate exige cero mismatches semánticos **no
+   explicados** en las filas etiquetadas por el propietario, con severidad
+   especial para `internal_transfer` vs. transferencia a tercero, `credit_card_
+   payment`, `credit_card_purchase`, `refund`, `cash_advance`, `fee`,
+   `interest`, `tax` y dirección. Una clase que no aparece en la muestra real
+   no se fabrica ni bloquea por su mera ausencia, pero tampoco se declara
+   validada — queda sin evidencia para esa clase. Todo mismatch observado
+   termina como corregido, limitación explícita documentada, o blocker. `k=5`
+   y la supresión complementaria son del reporte agregado compartible (§7.4),
+   no del gate local — la validación local trabaja sobre las filas propias del
+   propietario sin exportar su detalle. **Decisión explícita del propietario,
+   tomada en la sesión de reconciliación post-rc6 (2026-09-17)** — no una
+   inferencia de este documento; ya no queda **OPEN** la forma del gate. Sigue
+   **OPEN**, si el propietario quiere fijarlo, sólo un tamaño mínimo de
+   muestra total por perfil al ejecutar §7 — no bloquea la forma del gate ya
+   decidida arriba.
+5. **D14.** El principio fail-safe de tarjeta (una fila `unknown` nunca cruza
+   a `Expense`/`Income` sin revisión o bloqueo explícito) ya está decidido —
+   ver adenda D14 — y su implementación con test de regresión es blocker de
+   Fase 0 independiente del resto. Lo que el propietario decide explícitamente
+   es sólo si una fila `unknown` llega marcada o desmarcada por defecto en la
+   vista previa; falta de evidencia real mantiene ese eje **OPEN**, y no cierra
+   este gate hasta que el principio fail-safe esté implementado, con o sin esa
+   decisión de default.
 6. **Privacidad.** Sin datos reales en Git, `.ai/`, logs o reportes; sin relajar
    `pnpm calibrate`.
 7. **Distribución y licencia.** Licencia decidida, repositorio público, manifest
@@ -222,9 +276,14 @@ Sólo el reporte agregado con supresión sale de esa máquina. Workflow
    salen de una allowlist fija; cualquier otro valor es `other`. Compartir aplica
    supresión mínima `k=5` y supresión complementaria para que los marginales no
    revelen celdas ocultas.
-5. El gate usa conteos y denominadores, no porcentajes solos. El umbral de
-   muestra, cobertura de clases críticas y política de cero falsos positivos
-   requieren decisión **OPEN** del propietario.
+5. El gate usa conteos y denominadores, no porcentajes solos: cero mismatches
+   semánticos no explicados en las filas etiquetadas, con severidad especial
+   para `internal_transfer` vs. transferencia a tercero, pago de tarjeta,
+   compra, devolución, avance, comisión, interés, impuesto y dirección — ver
+   §6.4 para la forma exacta, decidida explícitamente por el propietario en
+   la sesión de reconciliación post-rc6 (2026-09-17). El único eje que puede
+   seguir **OPEN** es un tamaño mínimo de muestra total por perfil, a
+   criterio del propietario al ejecutar el workflow.
 
 Diseño detallado, decisión de dónde vive el etiquetador (¿UI del addon?
 ¿script local aparte?) y tareas concretas: `.ai/plans/phase-0.2.0-stable-
@@ -252,12 +311,26 @@ por el workflow de §7, que no depende de tener una cartola de cada banco.
 **Qué no hacer.** No bump de versión, no features nuevas, no relajar
 privacidad, no declarar `validated` sin evidencia.
 
+**Secuencia aproximada.** Dogfood del artefacto publicado rc.6; reproducir y
+validar el hallazgo `TRASPASO` en cuenta corriente (ver D19); resolver la
+política de metadata legacy ilegible si la investigación de esta fase la
+confirma insegura (ver D6); implementar la herramienta mínima de validación
+semántica privacy-safe (§7) y que el propietario la ejecute localmente sobre
+muestra real; implementar el principio fail-safe de `unknown` en tarjeta
+(D14); decidir el claim de soporte de Falabella cuenta corriente; decisión de
+licencia (D13, sigue OPEN); cerrar los gates de §6; si cualquier paso cambia
+código, un nuevo RC y dogfood de ESE artefacto, no del anterior.
+
 Trabajo concreto: `.ai/plans/phase-0.2.0-stable-evidence.md`.
 
 ### Fase 1 — `0.3.x`: plataforma de importación chilena
 
-**Objetivo.** Diagnóstico de formato, evidencia semántica, import batch y
-selector manual antes de ampliar parsers. **Gate.** `0.2.0` con evidencia
+**Objetivo.** Diagnóstico de formato, generalización de la evidencia semántica
+que Fase 0 ya implementó y ejecutó en su versión mínima, import batch y
+selector manual antes de ampliar parsers. La validación semántica **no** se
+implementa por primera vez aquí — eso es gate de cierre de `0.2.0` (§6.4,
+§7) — esta fase la extiende e integra con diagnóstico de formato, onboarding
+de bancos nuevos, batch y selector manual. **Gate.** `0.2.0` con evidencia
 cerrada. **Cierre.** Diagnóstico probado, flujo batch/manual y al menos un
 perfil nuevo con evidencia estructural real, o diferido explícitamente.
 **Qué no hacer.** No implementar un perfil sin muestra de consumidor o fuente
@@ -284,10 +357,21 @@ confianza/evidencia de cada candidato y dejar elegir explícitamente — el
 mecanismo de puntaje ya existe en `core/providers/profile-parser.ts`, falta
 la UI que lo exponga en el caso ambiguo.
 
+**D. Generalización del tooling de validación semántica.** La herramienta
+mínima de §7 ya existe desde Fase 0. Aquí se integra con el diagnóstico de
+formato desconocido (A), con el onboarding sample-first de bancos nuevos
+(§8.1) y con el flujo batch (B) — mismo comparador y mismo reporte agregado
+con supresión, aplicado a más proveedores y a más volumen, no una
+herramienta nueva.
+
 ### 8.1 Cola de perfiles, sample-first
 
-Falabella cuenta corriente es prioridad cero hasta obtener muestra o quedar
-experimental. Después, entra primero la muestra de consumidor disponible. Si
+Falabella cuenta corriente queda **EXPERIMENTAL/sin calibrar** hasta
+conseguir muestra real (§4.1): el parser se mantiene, no se retira, pero no
+forma parte del claim de soporte estable de `0.2.0`. Si aparece evidencia
+real antes del release, se evalúa promoción con los mismos nueve pasos de
+`docs/REAL_SAMPLE_WORKFLOW.md` que ya usan los otros perfiles. Después, entra
+primero la muestra de consumidor disponible. Si
 llegan varias, desempatar por demanda observada, coincidencia con producto de
 personas, formato reutilizable, calidad de evidencia y costo de mantenimiento.
 No hay ranking fijo por banco.
@@ -570,8 +654,10 @@ A menos que evidencia nueva demuestre lo contrario, no se construye:
 ## 21. Preguntas abiertas que requieren decisión humana
 
 1. **Licencia** (D13) — MIT/Apache-2.0, AGPL-3.0, o propietario/privado.
-2. **Política de `unknown`** (D14) — marcado por defecto vs. desmarcado por
-   defecto en la vista previa. Requiere datos de proporción real, que sólo
+2. **Política de `unknown`** (D14) — sólo el eje de marcado/desmarcado por
+   defecto en la vista previa sigue abierto; el principio fail-safe de
+   tarjeta (nunca cruza a gasto/ingreso sin revisión o bloqueo) ya está
+   decidido, ver adenda D14. Requiere datos de proporción real, que sólo
    llegan con cartolas reales o con el workflow de §7.
 3. **Ruta PSBI ante CMF** (Fase 10) — registro, autorización, alianza o no
    participar. Requiere NCG 514/569 consolidadas y revisión legal.
@@ -580,13 +666,19 @@ A menos que evidencia nueva demuestre lo contrario, no se construye:
 5. **Alcance de Mercado Pago** (§8.1) — si el modelo `StatementProduct`
    actual alcanza para representar una billetera/procesador, o si necesita
    un tercer valor de producto.
-6. **Umbral semántico** — mínimo de muestra, cobertura crítica y política de
-   cero falsos positivos para cerrar 0.2.0.
+6. **Tamaño mínimo de muestra semántica** — la forma del gate (cero
+   mismatches no explicados por clase, ver §6.4/§7) ya está decidida; sólo
+   sigue abierto, si el propietario quiere fijarlo, un mínimo de filas
+   etiquetadas por perfil.
 7. **Alcance 1.0** — breadth y banco-count, después de evidencia por perfil.
-8. **Falabella cuenta corriente** — visibilidad experimental, retiro del claim
-   estable o fuente de evidencia estructural.
-9. **Política source-dual** — identidad y precedencia XLSX/PDF CMR antes de
-   escrituras.
+8. **Falabella cuenta corriente** — decidido como EXPERIMENTAL/sin calibrar,
+   fuera del claim estable de `0.2.0` (§4.1, §8.1). El eje que sigue abierto
+   es sólo operativo: con qué evidencia mínima se reevalúa la promoción antes
+   del release si llega una muestra real a tiempo.
+9. **Política source-dual** (identidad y precedencia XLSX/PDF CMR antes de
+   escrituras) — gate de Fase 2/`0.4.x`, no bloquea `0.2.0`: PDF todavía no
+   es importable, así que la duplicación XLSX+PDF del mismo ciclo no puede
+   ocurrir hoy.
 10. **Destino de reglas merchant** — addon o `SpendingAPI`, sin dos motores de
     categorías personales.
 
