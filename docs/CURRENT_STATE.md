@@ -18,13 +18,12 @@ Cuatro niveles distintos, que esta documentación no mezcla:
 | **validado con banco real** | Se ejecutó contra una cartola real de ese banco |
 
 **El proyecto está en *validado en host* contra 3.7.0 y 3.8.0**, y además
-alcanza calibración estructural real (formato, signo, detección) para Banco
-de Chile, BancoEstado y Falabella/CMR — ver *Calibración estructural contra
-cartolas reales* más abajo. Falta el último nivel completo: ninguna cartola
-real fue importada a un Wealthfolio corriendo, y la clasificación (`kind`) de
-cada movimiento no está confirmada contra ningún banco real (el calibrador
-nunca expone glosas). Por eso la versión es un release candidate y no un
-`0.2.0`.
+alcanza calibración estructural real (formato, signo, detección) para Banco de
+Chile, BancoEstado y Falabella/CMR. Para CMR existen filas reales que originaron
+reglas de pago y reversa, pero no son validación semántica independiente de esas
+reglas. Ningún perfil tiene validación semántica independiente de `kind`: no se
+importó una cartola real a un Wealthfolio corriendo y el calibrador nunca expone
+glosas. Por eso la versión es un release candidate y no un `0.2.0`.
 
 ---
 
@@ -275,10 +274,11 @@ La tasa de ahorro es `(income − netSpending) / income`. Las categorías report
 bruto, devoluciones y neto, y una devolución sin categoría no se atribuye a
 ninguna.
 
-Con más de una moneda en el mes el panel muestra un bloque por moneda y dice por
-qué no las suma: `ExchangeRatesAPI` no publica tipos históricos, y convertir un
-movimiento de hace ocho meses al tipo de hoy sería un número inventado más
-difícil de detectar que el error que reemplaza.
+Con más de una moneda en el mes el panel muestra un bloque por moneda y no las
+suma. SDK 3.8 sí expone `ExchangeRatesAPI.getRatesForDates`; el addon lo difiere
+por decisión de producto sobre provenance de la tasa, conversión y redondeo, y
+por el costo de elevar el mínimo de host. Convertir antes de resolver esos puntos
+produciría una cifra no acreditable.
 
 ---
 
@@ -305,7 +305,7 @@ enlazar los dos tramos, y construir un ledger de pares propio es justo lo que
 | **Clasificación (`kind`) validada con banco real** | El calibrador nunca expone glosas reales; ningún perfil confirmó `kind` contra una cartola real todavía — los cinco siguen `pending-real-sample` en ese eje |
 | **Falabella / cuenta corriente — calibración estructural real** | Sin muestra real todavía; el resto de los perfiles (Banco de Chile, BancoEstado, Falabella/CMR) ya calibraron estructura contra cartolas reales |
 | **Aplicar una conciliación** | El SDK sigue sin exponer `link`/`transfer-pair`, tampoco en 3.8. Ver ADR 0005 |
-| **Conversión de moneda** | 3.8 publicó `ExchangeRatesAPI.getRatesForDates` (histórico real); evaluado y diferido a propósito — ver [UPSTREAM.md](UPSTREAM.md) § *veredicto de APIs nuevas* |
+| **Conversión de moneda** | 3.8 expone `ExchangeRatesAPI.getRatesForDates`; se difiere por provenance, redondeo y decisión de mínimo de host, no por ausencia de API. Ver [UPSTREAM.md](UPSTREAM.md) § *veredicto de APIs nuevas* |
 | **Servicio importador, IA/MCP propio, Fintoc** | Decisiones D10-D12; ver [DECISIONS.md](DECISIONS.md) |
 | **Licencia** | Decisión pendiente del propietario. Todo declara `UNLICENSED` |
 

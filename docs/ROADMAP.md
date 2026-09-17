@@ -8,6 +8,9 @@ Base de esta revisión: **v0.2.0-rc.6**, commit
 `1df6122aa9e4d80df449176adea0760c36f1e7c9` (== `main` publicado). Investigación
 detallada, fuentes y desviaciones respecto de la propuesta inicial:
 `.ai/research/post-rc6-product-research.md` (research de trabajo, no oficial).
+Revisión independiente y correcciones de evidencia:
+`.ai/research/post-rc6-independent-product-review.md` (research de trabajo,
+no oficial).
 
 ---
 
@@ -35,12 +38,11 @@ Su trabajo:
 - explicar merchants/procesadores/glosas chilenas;
 - aprovechar las capacidades nativas de Wealthfolio en vez de duplicarlas.
 
-División conceptual, reafirmada tras esta investigación (`.ai/research/
-post-rc6-product-research.md` §2, §4): no se encontró evidencia de que
-Wealthfolio genérico, ningún addon comunitario, ni ningún competidor chileno
-(Kuanto incluido) resuelva "¿qué significa económicamente este movimiento
-en Chile?" con la profundidad que ya tiene este proyecto. Es el hueco mejor
-evidenciado y menos disputado del mercado a 2026-09-16.
+La diferenciación defendible no es exclusividad frente a competidores. Es
+semántica chilena auditable, privacidad local y separación explícita entre
+compra, pago, devolución, avance en efectivo y costo financiero. Los claims
+publicados de Kuanto y Kane se solapan parcialmente; su calidad real no fue
+auditada.
 
 ```
 Wealthfolio Chile:  "¿qué significa económicamente este movimiento en Chile?"
@@ -49,7 +51,7 @@ Wealthfolio:        "¿cómo administra, presenta y agrega el ledger completo?"
 
 **No** queremos que el addon se convierta en otra aplicación financiera
 completa, otro motor de presupuestos genérico, otro ledger, otro sistema de
-inversiones, ni en un fork de Wealthfolio. Ver §19.
+inversiones, ni en un fork de Wealthfolio. Ver §20.
 
 ## 3. Principios
 
@@ -126,51 +128,51 @@ concreto: `.ai/plans/phase-0.2.0-stable-evidence.md`.
 
 ## 6. Gates de 0.2.0
 
-Gate por evidencia, no por "sensación de completitud". `0.2.0` se promueve
-cuando **todos** los siguientes son verdad, con verificación observada:
+`0.2.0` es evidencia y dogfood, no features. Se promueve sólo cuando todos los
+siguientes gates tienen observación escrita:
 
-1. **0 P0/P1** derivados del dogfood del ZIP publicado de rc.6 (no un build
-   arbitrario de `main`).
-2. Import inicial, reimport exacto, host edit, siguiente ciclo de cuota,
-   pago de tarjeta, transferencias, fail-closed de Internacional,
-   **reimport de CMR que dispare `legacy-source-conflict`** (D23 addendum,
-   `core/dedupe/classify.ts`) — el guard exige las tres condiciones a la vez:
-   mismo `sourceFileHash`, `sourceParser === 'banco-falabella.cmr'`, y la
-   Activity existente con `parser === 'generico.tarjeta'` **o**
-   `parser === 'banco-falabella.cmr' && parserVersion === '0.1.0'` exacto (no
-   "cualquier versión anterior"). El plan de Fase 0 (Tarea 1) fija el setup
-   exacto antes de ejecutarlo — no reproducido contra host real todavía. Y
-   **el gate de "no se pudo comprobar duplicados" bloqueando la importación**
-   (nunca "no hay duplicados" por defecto) — comprobados contra el artefacto
-   publicado. Un dogfood que no ejercita estos dos últimos casos, con el
-   setup exacto que los dispara, no puede contar "0 P0/P1" como evidencia de
-   que no los tiene.
-3. Perfiles anunciados como soportados tienen evidencia estructural real
-   (no sólo fixture sintético) donde ya existe (Banco de Chile, BancoEstado,
-   Falabella/CMR).
-4. Validación semántica suficiente obtenida vía el workflow human-in-the-loop
-   privacy-safe (§7) — no exhaustiva, pero con evidencia real de que `kind`
-   coincide con lo que el usuario etiquetó, para al menos un banco.
-5. Política de `unknown` (D14) decidida explícitamente por el propietario.
-6. Frontera de privacidad intacta — sin relajar `pnpm calibrate`.
-7. Docs coherentes (test count, SDK/host version, estado de Falabella cuenta
-   corriente, estado PDF, estado Internacional).
-8. Licencia decidida si el objetivo es distribución amplia (D13); si se
-   mantiene `UNLICENSED` a propósito, se documenta la decisión, no el
-   silencio.
-9. Falabella cuenta corriente: obtiene muestra real, **o** queda declarado
-   explícitamente experimental/fuera del claim de estable — nunca "soportado"
-   sin evidencia.
+1. **Provenance de artefacto final.** `pnpm verify` sobre commit final, luego
+   un ZIP construido una vez, SHA-256 y manifest registrados, instalación de
+   esos mismos bytes SHA-256 en mínimo 3.7 y baseline 3.8, y escenarios.
+   Cualquier fix reinicia commit, ZIP, hash, instalación y escenarios.
+2. **Calidad y host.** Cero P0/P1. La matriz completa corre sobre bytes exactos
+   del mismo ZIP SHA-256 en 3.7 y 3.8: import inicial y reimport exacto, que
+   crea cero Activities; edición del host, que deja la Activity probable y nunca
+   la sobreescribe; siguiente ciclo de cuota, que sigue `new`; devolución distinta
+   de pago de tarjeta; pago
+   de tarjeta distinto de gasto o ingreso; transferencia propia distinta de
+   transferencia a tercero, o ésta queda fail-safe en revisión; principal de
+   avance fuera de consumo y costo financiero; interés, comisión e impuesto con
+   signo y mapping correctos; CLP/USD nunca sumados; Internacional fail-closed;
+   fila ilegible con cero escrituras; conflicto CMR legacy; y dedupe
+   unavailable/truncated bloqueando importación.
+3. **Claims por perfil.** Cada perfil publicado tiene matriz de
+   `synthetic-tested`, `host-validated`, `real-structure-calibrated` y
+   `real-semantics-validated`. Falabella cuenta corriente obtiene evidencia
+   estructural o queda visible como experimental, fuera del claim estable.
+4. **Semántica.** Workflow de §7 con conteos, dirección y evidencia real. El
+   propietario debe decidir umbral numérico de muestra, cobertura de clases
+   críticas y política de cero falsos positivos antes de cerrar el gate. El
+   umbral queda **OPEN** hasta esa decisión; evidencia `BLOCKED` no lo cierra.
+5. **D14.** El propietario decide explícitamente la política de `unknown`.
+   Falta de evidencia real mantiene D14 **OPEN**; no cierra este gate.
+6. **Privacidad.** Sin datos reales en Git, `.ai/`, logs o reportes; sin relajar
+   `pnpm calibrate`.
+7. **Distribución y licencia.** Licencia decidida, repositorio público, manifest
+   raíz legible y SDK 3.6+ si se busca publicación comunitaria. Un listado es
+   descubrimiento, no auditoría, respaldo ni distribución por Wealthfolio.
 
-No inventar evidencia para cumplir el gate. Si algo no se puede probar, se
-declara pendiente.
+No inventar evidencia ni convertir un bloqueo de evidencia en cierre de gate.
 
 ## 7. Validación semántica privacy-safe (crítico)
 
 `pnpm calibrate` protege privacidad deliberadamente no exponiendo glosas —
 eso es correcto y no se relaja. Pero eso también impide comprobar `kind`
-contra la realidad. Se diseña (no se implementa aún; ver plan de fase 0) un
-workflow **human-in-the-loop** local:
+contra la realidad. Esta sesión documental no implementa el workflow. Fase 0
+debe implementarlo y el propietario debe ejecutarlo localmente contra una
+muestra privada real; tests sintéticos no cierran `real-semantics-validated`.
+Sólo el reporte agregado con supresión sale de esa máquina. Workflow
+**human-in-the-loop** local:
 
 1. El usuario, en su propia máquina, etiqueta filas reales de su propia
    cartola con un vocabulario cerrado. **No cerrado todavía en este
@@ -208,22 +210,26 @@ workflow **human-in-the-loop** local:
    propiedad **y** un test de que la misma etiqueta con dirección opuesta se
    reporta como mismatch, nunca como match. Esa reconciliación es tarea de
    diseño de la Tarea 2 del plan de Fase 0, no una decisión ya tomada aquí.
-2. El agente **nunca** ve: glosa, RUT, número de cuenta, tarjeta, titular,
-   monto real, nombre de archivo privado.
-3. Reporte sanitizado exportable, similar en espíritu al de `pnpm calibrate`:
-
-   ```
-   provider, parserVersion, direction (in/out — no es un monto),
-   expectedKind (etiqueta del usuario), actualKind (lo que el parser
-   decidió), matchedRuleId, match/mismatch
-   ```
-
-4. El agregado de varios usuarios (si se comparte) sigue sin exponer nada
-   identificable — sólo tasas de acierto por banco/regla.
+2. El usuario etiqueta local e independientemente `expectedKind` y
+   `expectedDirection`. El comparador enfrenta
+   (`expectedKind`, `expectedDirection`) contra (`actualKind`,
+   `actualDirection`).
+3. El agente nunca ve ni el reporte compartido contiene glosa, monto, RUT,
+   cuenta, tarjeta, titular, archivo, hash, fila, orden o id.
+4. La comparación detallada queda local. Exportar o compartir sólo permite
+   conteos agregados por `provider`, `parserVersion`, `expectedKind`,
+   `expectedDirection`, `actualKind`, `actualDirection` y regla. Los rule IDs
+   salen de una allowlist fija; cualquier otro valor es `other`. Compartir aplica
+   supresión mínima `k=5` y supresión complementaria para que los marginales no
+   revelen celdas ocultas.
+5. El gate usa conteos y denominadores, no porcentajes solos. El umbral de
+   muestra, cobertura de clases críticas y política de cero falsos positivos
+   requieren decisión **OPEN** del propietario.
 
 Diseño detallado, decisión de dónde vive el etiquetador (¿UI del addon?
 ¿script local aparte?) y tareas concretas: `.ai/plans/phase-0.2.0-stable-
-evidence.md`. No se implementa en esta fase — se especifica.
+evidence.md`. No se implementa en esta sesión documental. Fase 0 debe
+implementarlo y el propietario ejecutarlo localmente contra evidencia real.
 
 ## 8. Fases y releases
 
@@ -250,21 +256,12 @@ Trabajo concreto: `.ai/plans/phase-0.2.0-stable-evidence.md`.
 
 ### Fase 1 — `0.3.x`: plataforma de importación chilena
 
-**Objetivo.** Escalar la importación sin escalar sólo "más parsers sueltos".
-**Por qué.** Los tres perfiles que hoy existen se hicieron uno por uno; el
-siguiente lote de bancos necesita diagnóstico de formato desconocido, import
-batch y selector manual antes de que agregar un banco más sea barato.
-**Dependencias.** Cierre de Fase 0 (gate de estabilidad).
-**Evidencia necesaria.** Muestra real por banco nuevo, o el diagnóstico de
-formato desconocido documentado en su lugar.
-**Gate de inicio.** `0.2.0` publicado.
-**Gate de cierre.** Diagnóstico de formato desconocido implementado y
-probado; al menos un banco nuevo con evidencia estructural real (BCI,
-según §8.1) o explícitamente diferido por falta de muestra.
-**Riesgos.** Sin muestra real, cualquier parser nuevo repite el patrón
-`pending-real-sample` indefinidamente — aceptable si se declara así.
-**Qué no hacer.** No implementar un banco sin evidencia de formato (ni
-oficial ni de muestra real).
+**Objetivo.** Diagnóstico de formato, evidencia semántica, import batch y
+selector manual antes de ampliar parsers. **Gate.** `0.2.0` con evidencia
+cerrada. **Cierre.** Diagnóstico probado, flujo batch/manual y al menos un
+perfil nuevo con evidencia estructural real, o diferido explícitamente.
+**Qué no hacer.** No implementar un perfil sin muestra de consumidor o fuente
+del producto correcto que pruebe formato y convención de signo.
 
 Trabajo:
 
@@ -277,32 +274,30 @@ datos financieros reales. RESEARCH: ya cubierto por el diseño de
 "formato no reconocido" es DESIGN + IMPLEMENT.
 
 **B. Import batch/histórico.** Múltiples cartolas a la vez, detección por
-archivo, agrupación banco/cuenta, cuenta de destino sugerida, dedupe global,
-preview individual, confirmación explícita. Nunca auto-write.
+archivo, agrupación banco/cuenta, cuenta de destino sugerida, dedupe entre
+archivos siempre scoped por `accountId`, preview individual y confirmación
+explícita. Índice unavailable/truncated de cualquier cuenta destino bloquea esa
+cuenta/importación; nunca se asume que no hay duplicados. Nunca auto-write.
 
 **C. Selector de parser manual.** Cuando la detección es ambigua, mostrar
 confianza/evidencia de cada candidato y dejar elegir explícitamente — el
 mecanismo de puntaje ya existe en `core/providers/profile-parser.ts`, falta
 la UI que lo exponga en el caso ambiguo.
 
-### 8.1 Bancos priorizados (Fase 1 en adelante)
+### 8.1 Cola de perfiles, sample-first
 
-Orden por evidencia real disponible a 2026-09-16 (`.ai/research/
-post-rc6-product-research.md` §5), no por intuición de tamaño de mercado:
+Falabella cuenta corriente es prioridad cero hasta obtener muestra o quedar
+experimental. Después, entra primero la muestra de consumidor disponible. Si
+llegan varias, desempatar por demanda observada, coincidencia con producto de
+personas, formato reutilizable, calidad de evidencia y costo de mantenimiento.
+No hay ranking fijo por banco.
 
-| Prioridad | Banco / producto | Evidencia de formato | Nota |
-| --- | --- | --- | --- |
-| 0 | Falabella cuenta corriente | Sin muestra real | Ya implementado, cerrando en Fase 0 |
-| 1 | BCI cuenta corriente | Excel OFFICIAL confirmado (ayuda oficial), límite 2 meses/consulta | Banco grande, mejor evidencia disponible hoy |
-| 2 | Santander cuenta corriente | PDF OFFICIAL; CSV sólo PLAUSIBLE (fuentes de terceros) | Requiere muestra real antes de comprometerse a un parser tabular |
-| 2 | Mercado Pago | CSV/XLSX OFFICIAL (doc. developers, genérica) | Es procesador/billetera, no banco — decisión de alcance propia, ver abajo |
-| 3 | Scotiabank, Cencosud Scotiabank, Banco Ripley, Coopeuch, Tenpo | PDF OFFICIAL para todos; ningún tabular confirmado | Todos requieren muestra real antes de cualquier trabajo |
-| 4 | MACHBANK, Líder BCI, Banco Security, Banco Consorcio, Banco BICE | Evidencia insuficiente incluso para decidir si investigar más | Bajo ROI hasta que un usuario real aporte muestra |
+BCI 360Connect y Banco de Chile Banconexión aportan evidencia empresarial, no
+prueba de Mi BCI o Banco de Chile personas. Mercado Pago documenta conciliación
+de vendedores/plataforma, no prueba de export de cuenta personal. Ninguno entra
+como parser comprometido sin evidencia del producto objetivo.
 
-Disponibilidad de una muestra real puede reordenar esta lista en cualquier
-momento — es una prioridad de evidencia, no un compromiso.
-
-**Mercado Pago — decisión de alcance pendiente.** No es un banco con cuenta
+**Mercado Pago: decisión de alcance pendiente.** No es un banco con cuenta
 corriente ni tarjeta de crédito tradicional; su "cartola" es un reporte de
 transacciones de plataforma. `StatementProduct` (`core/model/statement.ts`)
 ya tiene cinco valores (`checking`, `savings`, `credit_card`, `credit_line`,
@@ -314,164 +309,68 @@ propio, dado que catorce módulos de `core/` ramifican sobre `StatementProduct`
 
 ### Fase 2 — `0.4.x`: PDF de primera clase
 
-**Objetivo.** PDF es el techo real de cobertura bancaria en Chile — casi
-ningún banco de banca de personas ofrece export tabular más allá de los tres
-ya calibrados.
-**Por qué.** Confirmado tanto por la investigación de dominio previa como
-por la actualización 2026-09-16: PDF es OFFICIAL para prácticamente todos
-los bancos investigados; tabular (CSV/Excel) es la excepción, no la regla.
-**Dependencias.** Ninguna externa. Depende de tener PDFs reales calibrados
-(ya hay 3 de CMR calibrados sólo como evidencia, no importables — ver
-`docs/BANK_FORMATS.md`).
-**Evidencia necesaria.** PDF con capa de texto (ya confirmado en los 3
-calibrados); layout suficientemente estructurado por banco.
-**Gate de inicio.** Fase 1 con al menos un flujo de diagnóstico de formato
-funcionando.
-**Gate de cierre.** Un banco con import PDF real, no sólo calibración.
-**Riesgos.** PDF sin capa de texto (imagen escaneada) requeriría OCR — fuera
-de alcance a propósito.
-**Qué no hacer.** Parser PDF universal heurístico, OCR, IA, red.
+**Objetivo.** Vertical slice PDF CMR con capa de texto. PDF es multiplicador
+plausible, no techo probado de cobertura chilena. **Prerequisito duro antes de
+escribir:** identidad de estado account-scoped con `accountId`, proveedor,
+producto y período de facturación declarado o evidencia de layout. XLSX→PDF y
+PDF→XLSX crean el ciclo una vez; reimports del mismo formato deduplican; cuentas
+distintas siguen aisladas; identidad ambigua bloquea. La identidad vive en
+metadata de Activities del host, nunca en ledger paralelo. Métricas por
+proveedor, producto y layout; ningún claim agregado de Chile sin denominador.
+Sin OCR, IA ni red.
 
 Arquitectura: `PDF bytes → text extraction → document blocks/tables →
 provider signature → StatementFacts → movement tables → NormalizedStatement`.
-Sin capa de texto o layout no reconocido → `unsupported-pdf-layout`, fail
-closed. CMR sigue siendo primer candidato (ya hay evidencia real de
-calibración); después, priorizar según qué muestra real llegue primero.
+PDF v1 fija límites de tamaño, páginas y tiempo; reconstruye con coordenadas y
+labels, no texto lineal solo; no registra texto derivado del PDF; y preview lista
+secciones excluidas o no parseadas. Sin capa de texto, orden ambiguo o layout no
+reconocido: fail-closed, cero escrituras. CMR sigue siendo primer candidato (ya
+hay evidencia real de calibración); después, priorizar según qué muestra real
+llegue primero.
 
-### Fase 3 — Estado de tarjeta chileno (profundidad)
+### Fase 3 — Estado de tarjeta chileno y `StatementFacts`
 
-**Objetivo.** Profundizar `StatementFacts` (ya modelado en D22, diez campos
-reales en `core/model/statement-facts.ts`: `statementDate`, `billingPeriod`,
-`dueDate`, `billedAmount`, `minimumPayment`, `totalDebt`, `domesticDebt`,
-`foreignDebt`, `creditLimit`, `availableCredit`) confirmando esos diez campos
-contra cartola real — **no** agregando nuevos campos de totales de
-movimiento (compras, cuotas, pagos, avances, interés, comisiones, impuestos)
-como si fueran hechos del estado de cuenta: esos totales ya existen como
-Activities individuales (una por movimiento), y convertirlos también en un
-"hecho declarado" agregado duplicaría el conteo del consumo del mes si
-alguna vez se suman ambas fuentes. Un hecho de `StatementFacts` nunca produce
-una `ActivityCreate` ni entra en `grossSpending` — incluido un hecho con
-`FactSource: 'derived'` (el modelo lo permite, hoy sin usar; si esta fase
-lo estrena, un hecho derivado tampoco se suma con los totales de movimiento).
-**Por qué.** El modelo ya existe y está probado contra fixtures sintéticos
-construidos con la redacción del reglamento (NCG 537, Decreto 75/2026); falta
-la confirmación contra cartola real de esos diez campos, incluida la
-distinción `domesticDebt`/`foreignDebt` — que **no** se pueden sumar en un
-solo `totalDebt` sin tasa de cambio explícita (mismo principio que prohíbe
-sumar CLP y USD en cualquier otra parte del modelo).
-**Dependencias.** Muestra real de al menos un estado de cuenta de tarjeta —
-ya existe evidencia parcial real en los XLSX de CMR calibrados (D23), así que
-esta fase no está bloqueada por Fase 2 (PDF); puede avanzar con lo que ya
-hay.
-**Evidencia necesaria.** Cada campo se lee sólo si el documento lo declaró
-— nunca se calcula. La NCG 537 ya está en su primera etapa de vigencia
-(2026-06-04), así que cualquier cartola real obtenida ahora refleja el
-régimen transicional vigente, no uno futuro.
-**Gate de inicio.** Cualquier muestra real de tarjeta disponible — no
-depende de que Fase 2 (PDF) cierre primero.
-**Gate de cierre.** Los diez campos reales de `StatementFacts` confirmados
-contra al menos una cartola real donde el documento los declaró.
-**Riesgos.** Ninguno nuevo — el modelo ya evita el riesgo principal
-(`ausente ≠ cero`, nunca calcular pago mínimo).
-**Qué no hacer.** Calcular CAE, CTC ni pago mínimo. Fabricar un hecho que el
-documento no declaró. Agregar campos de totales de movimiento a
-`StatementFacts`. Sumar `domesticDebt` y `foreignDebt` sin conversión
-explícita.
+`StatementFacts` acompaña trabajo PDF/tarjeta. Gate por
+`(provider, layoutVersion, field)`: `present-and-correct`, `absent`,
+`unsupported` o `unobserved`. No exige diez campos en un estado ni inventa
+evidencia para campos no observados. Un hecho declarado nunca crea Activities
+ni calcula campos faltantes. Resultado útil: vista local de obligaciones con
+monto facturado, vencimiento, mínimo, moneda y provenance declarados; sin
+promesa de alertas en background.
 
 ### Fase 4 — Costos financieros (profundización)
 
-**Objetivo.** Seguir separando consumo y costo financiero con más cobertura
-de casos reales, confirmando contra glosa real las nueve familias nombradas
-que `FinancialCostKind` (`core/model/financial-cost.ts`) modela:
-`revolving_interest`, `late_interest`, `installment_interest`,
-`cash_advance_interest`, `maintenance` (cubre mantención **y**
-administración — es una sola familia, no dos), `international_purchase`,
-`cash_advance_fee`, `collection`, `credit_tax`. El enum tiene un décimo
-valor, `other` ("a charge the glosa names as a cost without saying which
-one") — existe justamente para la glosa que no permite identificar una
-familia, así que **no** se cuenta como familia a confirmar contra glosa
-real, igual que seguros y principal de avance.
-**Explícitamente fuera de esta fase, por decisión ya tomada en D20** —no se
-reintroducen como familia de costo financiero: **seguros** (una prima
-confirmada es consumo voluntario del producto, no costo de endeudarse ni de
-tener el instrumento) y **el principal de un avance en efectivo** (es
-financiamiento — dinero prestado, no un costo; sólo su interés/comisión/
-impuesto son costos financieros y viajan como movimientos separados).
-Tratar cualquiera de los dos como `financialCostKind` falsea el gasto del
-mes en cualquier dirección.
-**Por qué.** El modelo (D20) ya está implementado y probado con vocabulario
-regulatorio OFFICIAL; falta confirmar contra glosas reales de cada banco.
-**Dependencias.** Fase 1/2/3 aportando muestras reales.
-**Evidencia necesaria.** Frase completa en la glosa, nunca subcadena corta.
-**Gate de inicio.** Cualquier muestra real con un costo financiero visible.
-**Gate de cierre.** Al menos un costo financiero de cada una de las nueve
-familias nombradas de `FinancialCostKind` (listadas arriba) confirmado
-contra glosa real — explícitamente sin incluir seguros, principal de avance
-ni `other` en ese conteo de diez.
-**Riesgos.** Ninguno nuevo respecto de lo ya mitigado en D20/D21.
-**Qué no hacer.** Un avance en efectivo nunca es spending. Una prima de
-seguro nunca es `financialCostKind`. El principal de un avance nunca es
-`financialCostKind`.
+Modelo económico en cuatro vistas: caja, consumo, costos financieros y
+deuda/financiamiento. Las nueve familias nombradas en D20 siguen modeladas. La
+madurez por proveedor distingue `modelled`, `synthetic-tested` y
+`real-semantics-validated`. No observar una familia significa que aún no tiene
+validación semántica real: queda `unobserved`. Cada familia afirmada requiere
+ejemplos positivos y near-negative. Un avance no es consumo; su principal no es
+costo financiero. Impuesto de timbres vigente: 0,066% mensual o fracción, tope
+0,8%. Se conserva `credit_tax`, sin cálculo ni tasa hardcodeada.
 
 ### Fase 5 — Merchant intelligence Chile
 
-**Objetivo.** Seguir resolviendo `processor != merchant` con más catálogo y
-mejor confianza/evidencia.
-**Por qué.** Es el dolor mejor evidenciado y peor servido del mercado
-chileno (`.ai/research/post-rc6-product-research.md` §4.2, confirmado por
-dos investigaciones independientes): ningún competidor local lo resuelve.
-**Dependencias.** Ninguna externa.
-**Evidencia necesaria.** Documentación oficial del procesador/banco, nunca
-sólo un post de foro.
-**Gate de inicio.** Cualquier momento — no depende de más bancos.
-**Gate de cierre.** Ampliación medible del catálogo con evidencia OFFICIAL o
-COMMUNITY OBSERVED para cada entrada nueva.
-**Riesgos.** Ninguno — es sólo catálogo, determinista y auditable.
-**Qué no hacer.** Convertir un procesador en comercio. Construir una
-gramática basada en el asterisco (confirmado no confiable — Falabella
-documenta el mismo cargo con y sin asterisco).
+`processor != merchant` se mantiene. Prioridad: provenance, candidato y
+corrección/alias local confirmado por usuario, no catálogo masivo. Nunca
+sobrescribir descriptor original. Destino de reglas queda **OPEN** entre addon
+y `SpendingAPI`; no crear dos motores de categorías. No se afirma que ningún
+competidor resuelva merchant UX.
 
 ### Fase 6 — Integración con Wealthfolio Spending
 
-**Objetivo.** Decidir con evidencia real (no supuesta) si conviene adoptar
-`SpendingAPI` (3.8.0, ya disponible — ver §9) para algún subconjunto de
-categorización.
-**Por qué.** `SpendingAPI` existe desde 3.8.0 (confirmado con código real,
-`.upstream/wealthfolio`), pero es genérica: no conoce Transbank, CMR,
-Redcompra ni avances en efectivo. Adoptarla hoy no elimina el motor propio,
-sólo lo movería de sitio.
-**Dependencias.** Decisión de subir `minWealthfolioVersion` a 3.8.0 (pierde
-compatibilidad con hosts 3.7.x).
-**Evidencia necesaria.** Caso de uso concreto donde `SpendingAPI` aporte algo
-que el motor propio no pueda, o señal de que upstream publicó taxonomías
-específicas de LatAm/Chile (no ocurrió a la fecha de esta investigación).
-**Gate de inicio.** Cierre de Fase 5.
-**Gate de cierre.** Decisión documentada en un ADR, con evidencia concreta
-en cualquier sentido.
-**Riesgos.** Migrar sin necesidad real duplicaría trabajo sin beneficio.
-**Qué no hacer.** Mantener dos motores completos de categoría personal para
-siempre "por si acaso" — la decisión se toma con evidencia, no se pospone
-indefinidamente sin revisarla.
+`SpendingAPI` no absorbe semántica de clase transaccional chilena. Puede poseer
+categorías y reglas personales nativas cuando se adopte una feature 3.8-only.
+Elevar mínimo a 3.8 depende de esa feature y costo de soporte observado, no de
+preferencia por número de release. No mantener dos motores de categoría
+personal.
 
-### Fase 7 — Gastos compartidos / reembolsos
+### Diferido, no-goal — gastos compartidos y reembolsos
 
-**Objetivo.** Modelar atribución (own share / third-party share / expected
-reimbursement / matched reimbursement) sin convertir una transferencia en
-refund ni alterar la compra original.
-**Por qué.** Dolor real (SERNAC: 38,8% de reclamos de tarjeta son cobros
-indebidos, aunque no específicamente de gastos compartidos), pero de menor
-evidencia de demanda chilena específica que costos financieros o atribución
-de comercio; soluciones globales maduras (Splitwise, Tricount) ya existen.
-**Dependencias.** Ninguna externa técnica.
-**Evidencia necesaria.** Ninguna regulatoria — es modelo de dominio propio.
-**Gate de inicio.** Después de Fase 5 (atribución de comercio), porque
-comparte vocabulario de "quién pagó qué".
-**Gate de cierre.** Modelo probado sin alterar la Activity original.
-**Riesgos.** Riesgo de convertirse en "otra app de split bill" sin
-diferenciación real frente a Splitwise/Tricount — evaluar si pertenece al
-addon o si integrar con una herramienta externa es mejor.
-**Qué no hacer.** No priorizar sobre costos financieros/atribución — evidencia
-de dolor específico chileno es más débil aquí que en esas dos fases.
+Fuera de fases versionadas y fuera de gate 1.0. Kuanto se solapa en esta
+capacidad. Sólo reconsiderar con demanda específica del addon y resolución de
+propiedad entre host y upstream; no convertir una transferencia en refund ni
+crear modelo financiero profundo sin revisión separada.
 
 ### Fase 8 — Conciliación nativa
 
@@ -488,17 +387,16 @@ ahora.
 **Gate de cierre.** API nativa disponible y usada; motor propio retirado.
 **Riesgos.** Si nunca se publica, la pantalla sigue read-only
 indefinidamente — aceptable, documentado.
-**Qué no hacer.** Construir un ledger de pares propio para tapar el hueco
-(ADR 0005 lo descarta explícitamente). No usar `network` para llamar a la
-API HTTP del propio host sin evaluar el costo de convertirse en cliente HTTP
-de su anfitrión.
+**Qué no hacer.** Construir ledger de pares propio, HTTP interno del host o
+conciliación aplicada paralela. Sigue sólo lectura hasta API nativa del SDK.
 
 ### Fase 9 — Multimoneda / FX
 
-**Objetivo.** Si se justifica el costo de subir `minWealthfolioVersion` a
-3.8.0, diseñar conversión usando `ExchangeRatesAPI.getRatesForDates` (ya
-disponible, confirmado con código real) — manteniendo montos originales,
-convirtiendo sólo para métricas, sin reescribir Activities históricas.
+**Objetivo.** Sólo vía `ExchangeRatesAPI.getRatesForDates`, manteniendo monto
+original y sin reescribir Activities históricas. La tasa `number` del SDK se
+convierte en frontera explícita decimal/racional; aritmética monetaria sigue
+entera, con un redondeo documentado. `null` o tasa sin provenance producen total
+parcial/aproximado o ninguna conversión.
 **Advertencia de diseño, no resuelta por la API.** `getRatesForDates`
 **no** distingue en su respuesta una tasa exacta de la fecha pedida de un
 fallback a "última cotización disponible" — `ExchangeRateDateResult` sólo
@@ -523,9 +421,8 @@ a la fecha solicitada; ningún total mixto se presenta como cerrado si algún
 par quedó sin resolver.
 **Riesgos.** Perder compatibilidad con hosts 3.7.x. Presentar una tasa
 obsoleta como si fuera la del día del movimiento.
-**Qué no hacer.** Motor FX privado. Tratar UTM/CLF como moneda sin
-fundamento — investigar primero si el host las soporta correctamente.
-Rotular una tasa de fallback como si fuera la tasa exacta de la fecha.
+**Qué no hacer.** Motor FX privado, float para dinero, UTM/CLF sin fundamento
+ni presentar fallback como tasa exacta de fecha.
 
 Banco de Chile Internacional sigue fail-closed hasta evidencia real
 suficiente — sin cambio.
@@ -535,18 +432,18 @@ suficiente — sin cambio.
 **Objetivo.** No construir nada todavía; mantener la posibilidad
 arquitectónica (`file → NormalizedStatement`, `SFA → NormalizedStatement`,
 mismo pipeline financiero) sin implementarla.
-**Por qué.** SFA confirmado (tres fuentes independientes) pospuesto a julio
-de 2027, con calendario por fases de 5-30 meses adicionales. Además —
-hallazgo nuevo de esta investigación — es un modelo B2B/B2B2C bajo
-consentimiento que exige que un consumidor de la API se **registre ante la
-CMF como proveedor de servicios de información de cuentas**. No es "el
-usuario descarga su CSV estandarizado".
-**Dependencias.** Publicación efectiva del SFA (julio 2027 en adelante,
-por fases) y decisión humana explícita de registrarse como entidad regulada.
+**Por qué.** CMF comunica entrada gradual desde julio de 2027, no disponibilidad
+de mercado. Rol canónico: **PSBI**, Proveedor de Servicios Basados en
+Información. Ruta exacta de registro/autorización queda **OPEN** hasta revisar
+NCG 514/569 consolidadas y obtener revisión legal. Monitorear trimestralmente
+desde 2027-07; no implementar ahora.
+**Dependencias.** Producción gradual del SFA y decisión humana explícita sobre
+PSBI, alianza o no participar.
 **Evidencia necesaria.** Calendario de fases efectivamente cumplido, no sólo
 anunciado.
-**Gate de inicio.** No antes de 2027-2028, y sólo con decisión explícita del
-propietario de asumir el costo regulatorio de registrarse.
+**Gate de inicio.** No antes de 2027-2028. Primero, revisión legal de NCG
+514/569 consolidadas. Después el propietario elige PSBI propio, alianza con
+PSBI autorizado o no participar.
 **Gate de cierre.** N/A en este horizonte de roadmap.
 **Riesgos.** Convertirse en entidad regulada es una decisión de gran alcance,
 no una tarea de ingeniería — no se estima esfuerzo aquí a propósito.
@@ -560,36 +457,33 @@ Ver §8.1.
 
 ## 10. Estrategia PDF
 
-Ver Fase 2. Resumen: PDF es el techo real de cobertura bancaria en Chile;
-sin OCR, sin IA, sin red; fail-closed ante layout no estructurado; CMR
-primer candidato por evidencia real ya calibrada.
+Ver Fase 2. PDF es multiplicador plausible, no techo medido de cobertura
+chilena. CMR es vertical slice inicial con source-dual resuelto antes de
+escribir; sin OCR, IA ni red y fail-closed ante layout no estructurado.
 
 ## 11. Estrategia de StatementFacts / tarjeta
 
-Ver Fase 3. Resumen: modelo ya implementado (D22 — diez campos de
-`StatementFacts`; D23 cubre cuotas facturadas y fingerprint, no
-`StatementFacts`), evidencia regulatoria OFFICIAL suficiente para el
-vocabulario, falta confirmación real exhaustiva (hay evidencia parcial de
-`kind` en CMR, ver §4). `minimumPayment` y demás hechos financieros se leen,
-nunca se calculan.
+Ver Fase 3. El gate es por `(provider, layoutVersion, field)`, no diez campos
+en un documento. `minimumPayment` y hechos financieros declarados se leen,
+nunca se calculan ni crean Activities.
 
 ## 12. Estrategia de costo financiero
 
-Ver Fase 4. Resumen: modelo ya implementado (D20), separación estricta entre
-consumo / costo de endeudarse / costo de tener el instrumento / principal de
-avance, con gramática de reconocimiento conservadora (frase completa, nunca
-subcadena).
+Ver Fase 4. Cuatro vistas: caja, consumo, costos financieros y deuda o
+financiamiento. Cada familia afirmada requiere positivo y near-negative;
+familias no observadas quedan `unobserved`, sin validación semántica real
+independiente.
 
 ## 13. Atribución de merchant
 
-Ver Fase 5. Resumen: catálogo de procesadores con propiedad `hidden` /
-`self` / `passthrough`, nunca gramática de asterisco, procesador nombrado
-cuando el comercio no se puede determinar.
+Ver Fase 5. Procesador y comercio mantienen provenance separada; corrección o
+alias local del usuario es candidata. Descriptor original se conserva.
 
 ## 14. Spending / integración upstream
 
-Ver Fase 6. `SpendingAPI` (3.8.0) confirmada disponible pero genérica —
-DEFER hasta evidencia de necesidad real o taxonomía específica de LatAm.
+Ver Fase 6. `SpendingAPI` puede poseer categorías y reglas personales del host,
+no semántica chilena de clase transaccional. Su adopción y mínimo 3.8 dependen
+de una feature real y costo de soporte observado.
 
 ## 15. Reconciliación / upstream
 
@@ -598,23 +492,40 @@ diseño (ADR 0005), no por pereza.
 
 ## 16. FX
 
-Ver Fase 9. `ExchangeRatesAPI.getRatesForDates` (3.8.0) confirmada
-disponible; bloqueo técnico resuelto, queda decisión de diseño y de costo de
-compatibilidad — incluida la de marcar cuando la tasa devuelta no es
-acreditable a la fecha exacta pedida (la API no lo distingue por sí sola).
+Ver Fase 9. `ExchangeRatesAPI.getRatesForDates` está disponible. La conversión
+usa frontera decimal/racional, dinero entero, un redondeo documentado y total
+parcial/aproximado o sin conversión cuando falta tasa o provenance.
 
 ## 17. SFA / Open Finance
 
-Ver Fase 10. No ahora; postergado a julio 2027 por normativa, con calendario
-de fases adicional; registro ante CMF es requisito, no sólo "esperar".
+Ver Fase 10. No ahora. Julio 2027 inicia gradualidad; PSBI es nomenclatura
+canónica y ruta de registro/autorización sigue OPEN pendiente de NCG 514/569
+consolidadas y revisión legal.
 
 ## 18. Distribución
 
-Sin cambios respecto de `docs/DECISIONS.md` D13: licencia pendiente y
-decisión del propietario, no automatizable. No se encontró proceso de
-submission de addons comunitarios documentado en upstream — nada que
-adoptar todavía. Publicación amplia sigue bloqueada mientras la licencia no
-se decida.
+Existe proceso oficial de directorio comunitario. El listing es un enlace de
+descubrimiento. Autor mantiene y empaqueta addon comunitario; usuarios lo
+descargan desde repositorio e instalan desde archivo. Wealthfolio no construye,
+hostea, audita, respalda ni da soporte al addon comunitario. Para listing activo
+se requieren licencia detectable, repositorio público, manifest raíz legible y
+SDK 3.6+. Licencia sigue siendo decisión del propietario.
+
+## 18.1 Gates objetivos de 1.0
+
+**Estable** exige: cero P0/P1, artefacto exacto validado en mínimo declarado y
+host actual, y por cada perfil estable matriz completa de
+`synthetic-tested`/`host-validated`/`real-structure-calibrated`/
+`real-semantics-validated`, convención de signo real y umbral semántico crítico.
+Un flujo cash/cuenta y uno de tarjeta requieren evidencia semántica real e
+independiente. Riesgo source-dual, privacidad, distribución/licencia y ausencia
+de ledger paralelo también cierran.
+
+**Experimental** queda excluido de cobertura estable, exige preview obligatoria
+y se identifica visiblemente como experimental.
+
+El número de bancos y amplitud exacta de 1.0 queda **OPEN** para decisión del
+propietario; no se inventa una meta de breadth.
 
 ## 19. Calidad / seguridad / privacidad — stream continuo
 
@@ -646,6 +557,8 @@ A menos que evidencia nueva demuestre lo contrario, no se construye:
 - fork de Wealthfolio;
 - shadow ledger o registro paralelo de identidad (D6, ADR 0002, ADR 0005);
 - motor FX propio (D-implícita, siempre sobre `ExchangeRatesAPI`);
+- gastos compartidos y reembolsos hasta resolver demanda propia y propiedad
+  host/upstream;
 - ningún cálculo del pago mínimo, CAE o CTC — ni siquiera referencial o
   estimado. Se leen declarados o quedan ausentes; nunca se aproximan;
 - web scraping bancario con credenciales;
@@ -660,18 +573,22 @@ A menos que evidencia nueva demuestre lo contrario, no se construye:
 2. **Política de `unknown`** (D14) — marcado por defecto vs. desmarcado por
    defecto en la vista previa. Requiere datos de proporción real, que sólo
    llegan con cartolas reales o con el workflow de §7.
-3. **Registro ante la CMF para consumir el SFA directamente** (Fase 10) — es
-   una decisión de convertirse en entidad regulada, no una tarea técnica.
-4. **Subir `minWealthfolioVersion` a 3.8.0** — decisión de costo de
-   compatibilidad compartida entre Fase 6 (Spending) y Fase 9 (FX): pierde
-   soporte de hosts 3.7.x a cambio de dos APIs que hoy están en DEFER por
-   falta de necesidad probada, no por falta de disponibilidad técnica.
+3. **Ruta PSBI ante CMF** (Fase 10) — registro, autorización, alianza o no
+   participar. Requiere NCG 514/569 consolidadas y revisión legal.
+4. **Subir `minWealthfolioVersion` a 3.8.0** — sólo ante feature 3.8-only
+   adoptada y costo de soporte observado.
 5. **Alcance de Mercado Pago** (§8.1) — si el modelo `StatementProduct`
    actual alcanza para representar una billetera/procesador, o si necesita
    un tercer valor de producto.
-6. **Si Wealthfolio Chile pertenece a la fase de gastos compartidos** (Fase
-   7) o si conviene integrar con una herramienta externa madura en vez de
-   construir dentro del addon.
+6. **Umbral semántico** — mínimo de muestra, cobertura crítica y política de
+   cero falsos positivos para cerrar 0.2.0.
+7. **Alcance 1.0** — breadth y banco-count, después de evidencia por perfil.
+8. **Falabella cuenta corriente** — visibilidad experimental, retiro del claim
+   estable o fuente de evidencia estructural.
+9. **Política source-dual** — identidad y precedencia XLSX/PDF CMR antes de
+   escrituras.
+10. **Destino de reglas merchant** — addon o `SpendingAPI`, sin dos motores de
+    categorías personales.
 
 ## 22. Dependency map
 
@@ -679,42 +596,41 @@ A menos que evidencia nueva demuestre lo contrario, no se construye:
 Fase 0 (0.2.0 estable)
   └── sin dependencias externas
 Fase 1 (0.3.x import platform)
-  └── depende de: cierre de Fase 0
-      Bancos nuevos dependen de: muestra real por banco (§8.1)
+   └── depende de: cierre de Fase 0
+       Bancos nuevos dependen de: muestra de consumidor o formato del producto correcto
 Fase 2 (0.4.x PDF)
-  └── depende de: Fase 1 (diagnóstico de formato)
+   └── depende de: Fase 1 y source identity/precedencia XLSX/PDF CMR
 Fase 3 (StatementFacts profundidad)
-  └── depende de: Fase 2 (PDF real) — o cualquier muestra real de tarjeta
+   └── depende de: trabajo PDF/tarjeta y evidencia por (provider, layout, field)
 Fase 4 (costos financieros profundidad)
-  └── depende de: cualquier muestra real con costo financiero visible
+   └── depende de: muestras observadas; familias no observadas quedan unobserved
 Fase 5 (merchant intelligence)
-  └── sin dependencia de más bancos — puede avanzar en paralelo a 1-4
+   └── depende de: decisión OPEN sobre destino de reglas
 Fase 6 (Spending upstream)
-  └── depende de: decisión de minWealthfolioVersion (compartida con Fase 9)
-Fase 7 (gastos compartidos)
-  └── depende de: Fase 5 (vocabulario de atribución)
+   └── depende de: caso de uso 3.8-only y costo de soporte observado
 Fase 8 (conciliación nativa)
-  └── depende de: upstream publique link/unlink/transfer-pair (fuera de
-      nuestro control; sin fecha)
+   └── depende de: upstream publique link/unlink/transfer-pair (fuera de
+       nuestro control; sin fecha)
 Fase 9 (FX)
-  └── depende de: decisión de minWealthfolioVersion (compartida con Fase 6)
+   └── depende de: decisión 3.8, provenance y frontera decimal/racional
 Fase 10 (SFA)
-  └── depende de: calendario regulatorio (julio 2027+) y decisión de
-      registro ante CMF
+   └── depende de: gradualidad regulatoria desde julio 2027 y decisión PSBI
 ```
 
 ## 23. Version map (no son compromisos)
 
 ```
-0.2.0   estabilidad + evidencia semántica real + dogfood del rc.6 publicado
-0.3.x   plataforma de importación + batch + diagnóstico + primeros bancos nuevos
-0.4.x   PDF v1 + profundidad de StatementFacts/tarjeta
-0.5.x   integración Spending 3.8 (si se justifica) + UX de merchant
-0.6.x   gastos compartidos/reembolsos + conciliación si upstream lo permite
-0.7.x   FX de host + multimoneda/internacional
-0.8.x   preparación/integración SFA (si el calendario regulatorio avanza)
-1.0     release madura para usuario externo
+0.2.0   evidencia, dogfood y provenance de artefacto
+0.3.x   plataforma, diagnóstico, batch, selector manual y cola sample-first
+0.4.x   PDF CMR v1, source-dual y obligaciones/StatementFacts
+futuro  profundidad económica, merchant, simplificación host, FX y SFA
+1.0     gates objetivos cumplidos; breadth exacto OPEN
 ```
+
+Orden recomendado: 0.2 evidencia; 0.3 plataforma/batch; 0.4 CMR PDF y
+source-dual; obligaciones/StatementFacts; profundidad económica y bancos
+sample-first; correcciones merchant; simplificación host; FX; SFA. Números de
+versión más allá del corto plazo no son vinculantes.
 
 ## 24. Requisitos de evidencia, transversales
 

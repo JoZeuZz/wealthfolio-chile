@@ -7,7 +7,8 @@ justificación larga tienen su propio ADR en [`adr/`](adr/).
 
 ## D1 — Addon, no fork
 
-**Decisión.** Construir sobre el Addon SDK (3.6.2 al decidirlo, 3.7.0 hoy). No tocar el core.
+**Decisión.** Construir sobre el Addon SDK. Al decidirlo se usaba 3.6.2; el
+build actual usa SDK 3.8.0 y el mínimo de host sigue en 3.7.0. No tocar el core.
 
 **Por qué.** Todo lo que necesita el MVP es alcanzable: crear actividades
 (`activities.saveMany`), leerlas (`activities.search`), persistir estado propio
@@ -92,12 +93,22 @@ que el usuario ve.
 
 **Decisión.** Motor de reglas y árbol de categorías propios, en el addon.
 
-**Por qué.** El core **sí** tiene un subsistema `spending` con reglas de
-categorización, presupuestos y merchants (`crates/storage-sqlite/src/spending/`),
-pero **no está expuesto al SDK de addons**. No hay `ctx.api.spending`.
+**Por qué histórico, SDK <=3.7.** El core tenía un subsistema `spending` con
+reglas de categorización, presupuestos y merchants
+(`crates/storage-sqlite/src/spending/`), pero no estaba expuesto al SDK de
+addons. No había `ctx.api.spending`.
 
 Ver [ADR 0003](adr/0003-categorizacion-propia.md), que también registra qué
 API upstream pediríamos para poder eliminar esta duplicación.
+
+**Addendum independiente (2026-09-16).** La premisa “no hay
+`ctx.api.spending`” fue cierta para SDK 3.7. SDK 3.8 expone `SpendingAPI` para
+categorías personales y reglas del host. Esta decisión sigue aplicando a la
+clasificación semántica chilena: compra, pago, devolución, avance y costo
+financiero no caben en una categoría personal genérica. No se deben duplicar
+indefinidamente categorías y reglas personales del host. Adoptar esa API exige
+decisión del propietario, mínimo de host 3.8 y actualizar o sustituir esta
+decisión y ADR 0003 si cambia el comportamiento.
 
 ---
 
@@ -191,8 +202,10 @@ decisión del propietario del proyecto.
 | AGPL-3.0 | Alineado con el core de Wealthfolio; obliga a compartir modificaciones |
 | Propietario / privado | Se queda como está: `UNLICENSED`, sin publicación |
 
-Hasta que se decida, el repositorio no debe publicarse: sin licencia, nadie
-—incluido el autor a futuro— tiene permisos claros sobre el código.
+Hasta que se decida, el titular del copyright conserva sus derechos, pero
+terceros no tienen permiso explícito para usar, copiar, modificar o distribuir
+el código. El directorio comunitario de Wealthfolio exige una licencia detectable
+para un listing activo; `UNLICENSED` impide esa publicación.
 
 ---
 
@@ -202,8 +215,12 @@ Hasta que se decida, el repositorio no debe publicarse: sin licencia, nadie
 
 **Cómo está hoy.** Una fila que el clasificador no supo leer
 (`TransactionKind.unknown`) llega a la vista previa **marcada para importar**,
-igual que cualquier otra. El usuario la ve, la cuenta «Requieren revisión» la
-suma, y si no la desmarca se escribe como `UNKNOWN` en Wealthfolio.
+igual que cualquier otra. El usuario la ve y «Requieren revisión» la suma.
+En una cuenta cash, donde el host lo permite, se escribe `UNKNOWN`. En tarjeta,
+una salida `unknown` se sustituye por `WITHDRAWAL` y una entrada por `CREDIT`.
+Toda fila `unknown` usa `status: DRAFT` y lleva `needsReview`. Las sustituciones
+de tarjeta además conservan `metadata.kind: unknown` y registran `subst`; no se
+presentan como clasificación semántica resuelta.
 
 **Por qué se mantuvo así en la estabilización de 0.1.1.** El defecto que se
 corrigió fue que el mapping de `UNKNOWN` no era reversible —ver
@@ -217,13 +234,13 @@ re-marcable con un clic.
 
 | | A favor | En contra |
 | --- | --- | --- |
-| Desmarcado por defecto | El usuario sólo escribe lo que entendió; `UNKNOWN` en Wealthfolio queda fuera de todo cálculo, así que omitirlo no distorsiona nada | Un banco mal calibrado puede producir muchas filas `unknown`: el usuario importaría una fracción de su cartola sin notarlo |
+| Desmarcado por defecto | En cuenta cash, `UNKNOWN` queda fuera de los cálculos del host; omitirlo evita escribir una fila no entendida | Un banco mal calibrado puede producir muchas filas `unknown`: el usuario importaría una fracción de su cartola sin notarlo. En tarjeta, salida `unknown` es `WITHDRAWAL` y entrada `unknown` es `CREDIT`, ambas sustituidas y en revisión. Spending puede leer la salida como gasto y la entrada como refund que reduce gasto, pese a no existir clasificación semántica |
 | Marcado (hoy) | La cartola entra completa; nada se pierde en silencio | Se escriben filas que nadie clasificó, y el costo de sacarlas después es manual |
 
 **Qué falta para decidir.** Saber qué proporción de filas queda `unknown` con
-cartolas reales. Con perfiles bancarios todavía `pending-real-sample` ese número
-no existe, y sin él la comparación de arriba es especulación. Revisar después de
-[HOST_VALIDATION.md](HOST_VALIDATION.md) y de la calibración con cartolas reales.
+cartolas reales y evaluar por separado cash y tarjeta. Con perfiles todavía
+`pending-real-sample` ese número no existe. La falta de evidencia real no cierra
+el gate del propietario: D14 sigue **OPEN** hasta su decisión explícita.
 
 ---
 
@@ -320,8 +337,8 @@ corrida evitando.
 **Conclusión.** La degradación no toca el saldo ni el patrimonio; hace que el
 informe de gasto del host cuente como gasto de tarjeta algo que no lo es. Y
 aunque `TRANSFER_OUT` estuviera permitido, sin `source_group_id` —que el SDK no
-deja escribir, ver [ADR 0005](adr/0005-transfer-matching-propio.md)— tampoco
-obtendría el tratamiento de transferencia interna.
+deja escribir, ver [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md)—
+tampoco obtendría el tratamiento de transferencia interna.
 
 **Lo que sí se corrigió.** El origen real de esas filas no era el clasificador
 —`defaultKindForRow` da `credit_card_purchase` a toda salida de tarjeta— sino
