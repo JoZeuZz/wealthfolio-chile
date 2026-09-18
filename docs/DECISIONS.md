@@ -130,9 +130,11 @@ corrupto, o la fila nunca fue nuestra). Investigado contra el código real
   dedupe por huella débil. Que `legacy-source-conflict` se mantenga
   deliberadamente estrecho (fail-closed sólo para transiciones conocidas) y
   no bloquee reimportaciones sin relación.
-- **D. ¿Puede producir duplicación silenciosa?** **Sí, en dos casos reales y
-  reproducibles por lectura de código — no hipotéticos, y el segundo es más
-  amplio que el primero.** (1) La intersección para la que
+- **D. ¿Puede producir duplicación silenciosa?** **Sí, en tres casos reales y
+  reproducibles por lectura de código — no hipotéticos, y cada uno es más
+  amplio que el anterior (el tercero, confirmado en revisión técnica post-rc6,
+  2026-09-18, ni siquiera requiere metadata ilegible).** (1) La intersección
+  para la que
   `legacy-source-conflict` existe: una Activity legacy de una de las dos
   transiciones conocidas, reimportada con el parser corregido, que ahora
   calcula un monto distinto, **más** metadata de esa misma Activity legacy
@@ -141,15 +143,26 @@ corrupto, o la fila nunca fue nuestra). Investigado contra el código real
   reimport, cuya `comment` almacenada no alcance el umbral de similitud
   contra la glosa reimportada (vacía, editada a mano, o escrita por otra
   vía con otro texto) — la huella débil encuentra el bucket, pero
-  `best.score >= 0.72` no se cumple, y el veredicto también sale `new`. En
-  ambos casos se escribe una segunda Activity para el mismo movimiento real.
-  El caso (2) es el que importa más para diseñar la corrección: acotar el
-  blocker de Fase 0 sólo a las dos transiciones parser conocidas del caso
-  (1) dejaría abierta esta segunda ruta de doble escritura. Ningún test
+  `best.score >= 0.72` no se cumple, y el veredicto también sale `new`. (3)
+  **Ni siquiera exige metadata ilegible**: `legacy-source-conflict` está
+  scoped por `sourceFileHash` (`index.byFileHash`, `classify.ts`), así que
+  una Activity legacy con `parser`/`parserVersion`/`fileHash` **completamente
+  legibles** deja igual de indisponible el guard si el archivo se
+  re-descarga y sus bytes cambian: `sourceFileHash` del candidato ya no
+  coincide con el `fileHash` almacenado, `sameFile` sale vacío y
+  `LEGACY_SOURCE_TRANSITIONS` nunca se evalúa — el mismo efecto de
+  indisponibilidad que (1) y (2), sin que la metadata sea ilegible en
+  absoluto. En los tres casos se escribe una segunda Activity para el mismo
+  movimiento real. **El disparador correcto no es "metadata ilegible"**: es
+  que, para un candidato dado, ni la huella fuerte ni
+  `legacy-source-conflict` puedan pronunciarse — la ilegibilidad de metadata
+  es la causa más común, no la única, y acotar el diseño de Fase 0 a
+  detectar sólo metadata ilegible dejaría (3) sin cubrir. Ningún test
   existente (`tests/dedupe-legacy-source-conflict.test.ts`,
-  `tests/dedupe-legacy-cmr-transition.test.ts`) ejercita metadata ilegible —
-  ambos siempre fijan `parser`/`parserVersion`/`fileHash` completos — así que
-  ninguna de las dos combinaciones está cubierta por regresión.
+  `tests/dedupe-legacy-cmr-transition.test.ts`) ejercita ninguno de los tres
+  casos — todos siempre fijan `parser`/`parserVersion`/`fileHash` completos
+  **y** `sourceFileHash` coincidente — así que ninguna combinación está
+  cubierta por regresión.
 - **E. ¿Puede bloquear falsamente una transacción genuina?** No. Metadata
   ilegible sólo reduce lo que el clasificador puede detectar (pierde la vía
   fuerte y el guard legacy); nunca agrega una señal que dispare un bloqueo
@@ -158,16 +171,18 @@ corrupto, o la fila nunca fue nuestra). Investigado contra el código real
 - **F. Política fail-safe para estable.** El principio ya vigente en
   `AGENTS.md` ("si la comprobación de duplicados no puede hacerse, la
   importación debe bloquearse — no asumir 'no hay duplicados'") no se cumple
-  hoy en los dos casos de D: la comprobación fuerte y `legacy-source-conflict`
-  quedan silenciosamente indisponibles cuando la metadata es ilegible, y la
-  vía débil por sí sola no es un sustituto confiable cuando además el monto
-  coincide pero la descripción no. **No se corrige en esta branch
-  documental** — es blocker/investigación de Fase 0 (ver
-  `.ai/plans/phase-0.2.0-stable-evidence.md`, Tarea 1): el mecanismo
-  concreto (por ejemplo, tratar toda Activity con metadata ilegible que
-  coincida en cuenta/fecha/monto, no sólo las dos transiciones legacy
-  conocidas, como "dedupe no disponible" para esa fila en vez de "nueva")
-  requiere diseño, no está decidido aquí.
+  hoy en los tres casos de D: la comprobación fuerte y
+  `legacy-source-conflict` quedan silenciosamente indisponibles (por
+  metadata ilegible en (1)/(2), o por `sourceFileHash` no coincidente en
+  (3), con metadata legible), y la vía débil por sí sola no es un sustituto
+  confiable cuando además el monto coincide pero la descripción no. **No se
+  corrige en esta branch documental** — es blocker/investigación de Fase 0
+  (ver `.ai/plans/phase-0.2.0-stable-evidence.md`, Tarea 1): el mecanismo
+  concreto (tratar como "dedupe no disponible" para esa fila, en vez de
+  "nueva", toda Activity que coincida en cuenta/fecha/monto cuando ni la
+  huella fuerte ni `legacy-source-conflict` pudieron pronunciarse — sea la
+  causa metadata ilegible o `sourceFileHash` no coincidente — no sólo las
+  dos transiciones legacy conocidas) requiere diseño, no está decidido aquí.
 
 Una sola descripción canónica: la afirmación previa de que "sale `new`, es
 comportamiento esperado" es cierta sobre la mecánica del guard pero
@@ -463,9 +478,16 @@ corrida evitando.
 
 **Conclusión.** La degradación no toca el saldo ni el patrimonio; hace que el
 informe de gasto del host cuente como gasto de tarjeta algo que no lo es. Y
-aunque `TRANSFER_OUT` estuviera permitido, sin `source_group_id` —que el SDK no
-deja escribir, ver [ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md)—
-tampoco obtendría el tratamiento de transferencia interna.
+aunque `TRANSFER_OUT` estuviera permitido, escribir `sourceGroupId` —que el
+SDK sí permite transportar en `ActivityCreate` desde al menos 3.7.0, corregido
+tras verificación post-rc6, ver
+[ADR 0005](adr/0005-transferencias-y-tarjeta-en-el-host.md)— tampoco le daría
+el tratamiento de transferencia interna: el host decide `External`/`Internal`
+para un `TRANSFER_*` a nivel de portafolio por la metadata privada
+`flow.is_external` (`flow_classifier.rs::explicit_external_boundary`), no por
+`sourceGroupId`, y sin esa metadata el default es `Internal`/no-externo —
+`sourceGroupId` sólo alimenta inferencia de cuenta contraparte en algunos
+consumidores internos (`transfer_pairs.rs`, `infer_paired_transfer_account_id`).
 
 **Lo que sí se corrigió.** El origen real de esas filas no era el clasificador
 —`defaultKindForRow` da `credit_card_purchase` a toda salida de tarjeta— sino
@@ -501,13 +523,22 @@ de cuenta corriente a un tercero — todos los casos cubiertos son
 que esta decisión ya corrigió).
 
 **Consecuencia financiera real (corregida tras revisión financiera,
-2026-09-17).** El `Ignored` para `TRANSFER_OUT` en
-`spending::classify_activity` (upstream) sólo existe en la rama de cuenta
-`CREDIT_CARD` — que es de lo que habla la corrección de tarjeta más arriba en
-esta misma decisión. En una cuenta `CASH` (el caso real aquí:
+2026-09-17; mecanismo corregido de nuevo en revisión técnica post-rc6,
+2026-09-18).** `spending::classify_activity`
+(`crates/spending/src/activity_classification.rs`, idéntico en 3.7.0 y
+3.8.0) mira primero, para cualquier `account_type`, si el `TRANSFER_IN`/
+`TRANSFER_OUT` tiene `source_group_id.is_some()` — sin exigir que el grupo
+esté correctamente enlazado a una contraparte, y sin mirar `flow.
+is_external` en absoluto — y sólo entonces devuelve `InternalTransfer`. Ese
+chequeo es independiente del que usa `flow_classifier.rs` para atribución de
+*performance* de portafolio (gobernado por `flow.is_external`, ver ADR 0005
+addendum): son dos consumidores distintos de campos distintos. Hoy el addon
+no escribe `source_group_id` en ningún tramo (ver arriba), así que ese
+chequeo falla y cae a la rama por `account_type`. En `CREDIT_CARD` esa rama
+da `Ignored` para `TRANSFER_OUT` — de lo que habla la corrección de tarjeta
+más arriba en esta misma decisión. En una cuenta `CASH` (el caso real aquí:
 `builtin.traspaso-cuenta` corre sobre cuenta corriente, no tarjeta) la rama
-sin `source_group_id` — que el addon no puede escribir, ver más arriba y
-ADR 0005 — clasifica `"WITHDRAWAL" | "TRANSFER_OUT" | "FEE" | "TAX" =>
+clasifica `"WITHDRAWAL" | "TRANSFER_OUT" | "FEE" | "TAX" =>
 Expense`. Es decir: en el addon la fila sale de `SPENDING_KINDS`/
 `isSpending` (`internal_transfer` está en `NON_SPENDING_KINDS`) y desaparece
 de su propio informe de gasto, pero en el **host** un `TRANSFER_OUT` sin

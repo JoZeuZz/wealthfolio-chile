@@ -132,19 +132,24 @@ institución" y "Calibración estructural") al escribir esta sección:
 
 | Estado | Perfil |
 | --- | --- |
-| **STABLE** | BancoEstado CuentaRUT |
-| **STABLE** | Banco de Chile cuenta corriente |
-| **STABLE** | Banco de Chile tarjeta Nacional |
-| **STABLE** | Falabella/CMR Movimientos Facturados XLSX |
+| **CANDIDATO A SOPORTE ESTABLE EN 0.2.0** | BancoEstado CuentaRUT |
+| **CANDIDATO A SOPORTE ESTABLE EN 0.2.0** | Banco de Chile cuenta corriente |
+| **CANDIDATO A SOPORTE ESTABLE EN 0.2.0** | Banco de Chile tarjeta Nacional |
+| **CANDIDATO A SOPORTE ESTABLE EN 0.2.0** | Falabella/CMR Movimientos Facturados XLSX |
 | **EXPERIMENTAL** | Falabella cuenta corriente |
 | **UNSUPPORTED** | Banco de Chile tarjeta Internacional |
 | **UNSUPPORTED** | Import PDF (sólo calibrable, no importable) |
 
-"STABLE" aquí es estructural/de formato — los cuatro perfiles stable ya
-calibraron estructura contra cartola real (`docs/CURRENT_STATE.md`). Ninguno
-tiene todavía `kind` validado contra cartola real: eso es lo que cierra el
-gate semántico (§6.4, §7) antes de que este baseline pueda llamarse cerrado.
-No inventar `stable` donde la evidencia estructural no alcance.
+"Candidato a soporte estable" es estructural/de formato — los cuatro
+candidatos ya calibraron estructura contra cartola real
+(`docs/CURRENT_STATE.md`). Ninguno tiene todavía `kind` validado contra
+cartola real, ninguno tiene todos los P1/stable blockers de §6.2 cerrados
+(`builtin.traspaso-cuenta`, dedupe/provenance uncertainty, tarjeta `unknown`),
+y `0.2.0` mismo no existe todavía como release estable. Ninguno de los cuatro
+se llama `STABLE` hasta cerrar **todos** los gates de §6 — la calibración
+estructural real es necesaria pero no suficiente. No inventar `stable` donde
+la evidencia estructural, la semántica o los blockers funcionales no
+alcancen.
 
 ## 5. Objetivo inmediato
 
@@ -177,10 +182,29 @@ siguientes gates tienen observación escrita:
    fila ilegible con cero escrituras; conflicto CMR legacy; una fila de tarjeta
    cuyo significado económico siga `unknown` nunca cruza a `Expense` sin
    revisión explícita o bloqueo (ver D14, principio fail-safe de tarjeta); y
-   dedupe unavailable/truncated bloqueando importación — incluido el caso
-   estrecho de una Activity legacy con metadata de procedencia ilegible que
-   hoy puede escapar al guard `legacy-source-conflict` (ver D6, blocker de
-   investigación).
+   dedupe unavailable/truncated bloqueando importación. Esto último es más
+   amplio que las dos transiciones legacy conocidas: el riesgo real es
+   **dedupe uncertainty** — el disparador no es "la metadata de procedencia
+   propia no se puede leer" (metadata legible no implica procedencia
+   utilizable: `parser`/`parserVersion`/`fileHash` pueden faltar en una
+   Activity con `fp` legible, y el guard `legacy-source-conflict` está
+   scoped por `sourceFileHash`, así que una misma cartola re-descargada con
+   bytes distintos lo deja sin evaluar aunque la metadata existente sea
+   perfectamente legible) — el disparador real es que, para un candidato
+   dado, **ni la huella fuerte ni el guard de procedencia
+   (`legacy-source-conflict`) puedan pronunciarse**, y las señales
+   observables que quedan (huella débil por cuenta/fecha/monto + similitud
+   de descripción) tampoco alcancen para probar que el movimiento es nuevo.
+   Cuando eso ocurre, la fila puede salir `new` y duplicarse en silencio si
+   `willImport` queda true (ver D6, adenda 2026-09-17, casos (1) y (2) —
+   `legacy-source-conflict` es el caso concreto (1), acotado a dos
+   transiciones parser conocidas; el caso (2), sin relación con ellas ni con
+   legibilidad de metadata, es más general). La política/algoritmo exacto de
+   bloqueo sigue **abierto** para diseño + TDD en Fase 0
+   (`.ai/plans/phase-0.2.0-stable-evidence.md`, Tarea 1): tiene que evitar
+   duplicación silenciosa sin bloquear masivamente Activities manuales,
+   imports nativos del host, Activities de otros addons ni movimientos
+   genuinamente distintos.
 3. **Claims por perfil.** Cada perfil publicado tiene matriz de
    `synthetic-tested`, `host-validated`, `real-structure-calibrated` y
    `real-semantics-validated`. Falabella cuenta corriente obtiene evidencia
@@ -300,8 +324,15 @@ VALIDATION · REAL SAMPLE VALIDATION · RELEASE. Ningún banco se declara
 
 **Objetivo.** Convertir rc.6 en un release estable con evidencia, no una
 promesa de features nuevas.
-**Por qué.** El código ya es correcto según 1627 tests y validación de host;
-lo que falta es la única clase de evidencia que ningún test puede sustituir.
+**Por qué.** rc.6 es el baseline publicado que se dogfoodea primero; Fase 0 ya
+contiene blockers concretos que deben reproducirse, diseñarse y corregirse
+antes de stable — `builtin.traspaso-cuenta` marcando `internal_transfer` una
+transferencia a tercero (D19), dedupe/provenance uncertainty que puede dejar
+pasar duplicados en escenarios concretos (D6, §6.2), y una fila de tarjeta
+`unknown` que puede acabar sustituida por un `ActivityType` que el host cuenta
+como gasto (D14/D18/D19). 1627 tests y la validación de host existente
+respaldan lo que ya se probó; no cubren estos tres blockers, que son
+correctitud pendiente, no evidencia pendiente.
 **Dependencias.** Ninguna externa — todo el trabajo es interno al proyecto.
 **Evidencia necesaria.** Ver gate §6.
 **Gate de inicio.** rc.6 publicado y dogfood-eable (cumplido).
@@ -311,15 +342,36 @@ por el workflow de §7, que no depende de tener una cartola de cada banco.
 **Qué no hacer.** No bump de versión, no features nuevas, no relajar
 privacidad, no declarar `validated` sin evidencia.
 
-**Secuencia aproximada.** Dogfood del artefacto publicado rc.6; reproducir y
-validar el hallazgo `TRASPASO` en cuenta corriente (ver D19); resolver la
-política de metadata legacy ilegible si la investigación de esta fase la
-confirma insegura (ver D6); implementar la herramienta mínima de validación
-semántica privacy-safe (§7) y que el propietario la ejecute localmente sobre
-muestra real; implementar el principio fail-safe de `unknown` en tarjeta
-(D14); decidir el claim de soporte de Falabella cuenta corriente; decisión de
-licencia (D13, sigue OPEN); cerrar los gates de §6; si cualquier paso cambia
-código, un nuevo RC y dogfood de ESE artefacto, no del anterior.
+**Secuencia aproximada.**
+
+1. Dogfood del artefacto publicado rc.6 — establece evidencia sobre el
+   artefacto actual.
+2. Reproducir los blockers conocidos: `TRASPASO` de cuenta corriente a
+   tercero (D19), dedupe uncertainty (D6, §6.2, no sólo las dos transiciones
+   legacy), tarjeta `unknown` sustituida (D14/D18/D19).
+3. Diseñar e implementar los fixes vía TDD.
+4. `pnpm verify` / validación de host sobre el commit con los fixes.
+5. Si hubo **cualquier** cambio funcional: crear un nuevo release candidate
+   (previsiblemente rc.7; el número exacto se decide al publicar).
+6. Construir una vez el artifact de ese RC; registrar SHA-256 y manifest
+   — obligatorio, no condicional (ver §6.1: bloquea release).
+7. Instalar y dogfood-ear exactamente esos bytes.
+8. Implementar la herramienta mínima de validación semántica privacy-safe
+   (§7) y que el propietario la ejecute localmente sobre muestra real. Si
+   esta implementación toca código embarcado en el addon (bundle, `src/
+   addon.tsx`), el ZIP de los pasos 6-7 deja de ser el artefacto final:
+   volver al paso 4.
+9. Decidir el claim de soporte de Falabella cuenta corriente; decisión de
+   licencia (D13, sigue OPEN). Ninguna de las dos cambia código embarcado.
+10. Cerrar los gates de estable de §6 **sobre ese RC** — nunca antes de
+    haberlo construido y dogfood-eado si hubo cambio funcional.
+11. Sólo entonces evaluar/promover `0.2.0`.
+
+No debe leerse como "fix → cerrar gates de estable → publicar RC": el RC
+corregido se prueba **antes** de cerrar la evaluación estable, nunca después.
+Como ya existen blockers que previsiblemente requieren código, rc.6 no puede
+promoverse directamente a `0.2.0` si esos blockers se confirman y corrigen
+mediante cambios funcionales.
 
 Trabajo concreto: `.ai/plans/phase-0.2.0-stable-evidence.md`.
 

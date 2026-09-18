@@ -121,3 +121,61 @@ confirmación en el host. Las opciones, en orden de preferencia:
 
 `docs/HOST_VALIDATION.md` §§ 12 y 13, ejecutado el 2026-08-07 contra
 `wealthfolio/wealthfolio:3.6.2` (digest del commit `633d3a1`, tag `v3.6.2`).
+
+---
+
+## Addendum (revisión independiente post-rc6, 2026-09-18) — `sourceGroupId`
+
+Una revisión anterior de esta fase afirmó, de forma absoluta, que "el SDK no
+permite escribir `sourceGroupId`". Verificado contra el checkout real de
+`.upstream/wealthfolio` (tags `v3.7.0` y `v3.8.0`, sin alterar el estado del
+checkout — sólo `git show`), esa afirmación es falsa:
+
+- `packages/addon-sdk/src/data-types.ts` expone `sourceGroupId?: string` en
+  `ActivityCreate` (y en los otros tipos de actividad) **desde 3.7.0**,
+  idéntico en 3.8.0 — no es una novedad de 3.8.
+- `apps/frontend/src/adapters/shared/activities.ts#saveActivities` reenvía el
+  objeto completo (`serializeActivityMetadata` sólo transforma `metadata`) al
+  comando `save_activities`, y `crates/core/src/activities/activities_model.rs`
+  acepta `source_group_id` como campo del modelo — también idéntico en 3.7.0
+  y 3.8.0. Un addon puede escribir `sourceGroupId` hoy, incluso en el mínimo
+  declarado (3.7.0).
+
+Eso **no** equivale a disponer de las operaciones de alto nivel
+`link`/`unlink`/`transfer-pair`. Verificado en el mismo checkout:
+
+- `ActivitiesAPI` en `packages/addon-sdk/src/host-api.ts` sigue exponiendo
+  exactamente los mismos ocho métodos en 3.7.0 y 3.8.0 (`getAll`, `search`,
+  `create`, `update`, `saveMany`, `import`, `checkImport`,
+  `getImportMapping`/`saveImportMapping`) — ningún método de enlace, sin
+  cambios respecto de lo que este ADR ya documentó.
+- `crates/core/src/activities/transfer_pairs.rs` (presente en 3.7.0 y 3.8.0)
+  agrupa `TRANSFER_IN`/`TRANSFER_OUT` por `source_group_id` coincidente para
+  fines internos (contraparte, holdings, economic events) — es una
+  consecuencia estructural de escribir el campo, no una API pensada para
+  addons.
+- Crucialmente, `crates/core/src/portfolio/performance/flow_classifier.rs`
+  decide si un `TRANSFER_*` es `External`/`Internal` a nivel de portafolio
+  leyendo la metadata privada `flow.is_external`
+  (`explicit_external_boundary`), **no** `sourceGroupId`; sin esa metadata el
+  default es `Internal`/no-externo. `sourceGroupId` sólo alimenta inferencia
+  de cuenta contraparte en algunos consumidores (`infer_paired_transfer_
+  account_id`) y, en 3.8.0, una verificación adicional de metadata `flow`+`fx`
+  para el caso de conversión de moneda en la misma cuenta
+  (`is_contribution_neutral_same_account_cash_fx_conversion`) — el propio
+  comentario de upstream dice explícitamente que el agrupamiento estructural
+  por sí solo "is deliberately insufficient" para ese caso.
+
+**Conclusión, sin cambiar la decisión de este ADR.** Escribir `sourceGroupId`
+manualmente en dos Activities no reproduce las invariantes de `link`/`unlink`/
+`transfer-pair`, ni el efecto que el endpoint HTTP `/activities/link` logra
+escribiendo `metadata.flow.is_external` (evidencia de la sección de arriba,
+sobre 3.6.2). Es exactamente el mismo tipo de riesgo que el punto 3 de la
+Decisión ya advertía sobre `metadata.flow`: depender de un comportamiento
+interno no documentado para terceros, que puede cambiar sin aviso. La
+reconciliación de Wealthfolio Chile permanece **read-only** hasta que exista
+una API soportada y documentada, o hasta diseñar y demostrar una integración
+concreta — no se implementa aquí. `minWealthfolioVersion` sigue en 3.7.0; no
+se sube a 3.8 sólo por este hallazgo. Si algún diseño futuro necesitara
+depender de comportamiento 3.8-only real (no es el caso de `sourceGroupId`,
+que ya existía en 3.7), esa sería una decisión de mínimo de host aparte.
