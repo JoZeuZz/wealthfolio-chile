@@ -145,7 +145,7 @@ Eso **no** equivale a disponer de las operaciones de alto nivel
 `link`/`unlink`/`transfer-pair`. Verificado en el mismo checkout:
 
 - `ActivitiesAPI` en `packages/addon-sdk/src/host-api.ts` sigue exponiendo
-  exactamente los mismos ocho métodos en 3.7.0 y 3.8.0 (`getAll`, `search`,
+  exactamente los mismos nueve métodos en 3.7.0 y 3.8.0 (`getAll`, `search`,
   `create`, `update`, `saveMany`, `import`, `checkImport`,
   `getImportMapping`/`saveImportMapping`) — ningún método de enlace, sin
   cambios respecto de lo que este ADR ya documentó.
